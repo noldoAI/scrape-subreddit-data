@@ -116,6 +116,7 @@ REDDIT POST
 Title: {post.get('title', 'No title')}
 Author: u/{post.get('author', '[deleted]')}
 Subreddit: r/{post.get('subreddit', 'unknown')}
+Url: {post.get('url', 'No URL')}
 Score: {post.get('score', 0)} points
 Comments: {post.get('num_comments', 0)}
 Created: {created_time}
