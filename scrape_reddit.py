@@ -63,6 +63,7 @@ def scrape_hot_posts(subreddit_name, limit=1000):
             post_data = {
                 "title": post.title,
                 "url": post.url,
+                "reddit_url": f"https://reddit.com{post.permalink}",  # Full Reddit post URL
                 "score": post.score,
                 "num_comments": post.num_comments,
                 "created_utc": post.created_utc,
