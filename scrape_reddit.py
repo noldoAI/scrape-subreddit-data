@@ -93,7 +93,7 @@ def scrape_hot_posts(subreddit_name, limit=1000):
 
 def save_posts_to_db(posts_list):
     """
-    Save posts to MongoDB with duplicate handling.
+    Save posts to MongoDB with bulk operations for better performance.
     
     Args:
         posts_list (list): List of post dictionaries
@@ -108,29 +108,46 @@ def save_posts_to_db(posts_list):
         # Create index on post_id for efficient duplicate checking
         posts_collection.create_index("post_id", unique=True)
         
-        new_posts = 0
+        # Get existing posts to preserve comments_scraped status
+        post_ids = [post["post_id"] for post in posts_list]
+        existing_posts = {
+            doc["post_id"]: doc 
+            for doc in posts_collection.find(
+                {"post_id": {"$in": post_ids}}, 
+                {"post_id": 1, "comments_scraped": 1, "comments_scraped_at": 1}
+            )
+        }
+        
+        # Prepare bulk operations
+        bulk_operations = []
+        
         for post in posts_list:
-            try:
-                # Use upsert to avoid duplicates, but don't overwrite comments_scraped if it's True
-                existing_post = posts_collection.find_one({"post_id": post["post_id"]})
-                if existing_post and existing_post.get("comments_scraped"):
-                    # Keep the existing comments_scraped status
-                    post["comments_scraped"] = existing_post["comments_scraped"]
-                    post["comments_scraped_at"] = existing_post.get("comments_scraped_at")
-                
-                result = posts_collection.update_one(
-                    {"post_id": post["post_id"]},
+            post_id = post["post_id"]
+            
+            # Preserve existing comments_scraped status if it exists and is True
+            if post_id in existing_posts and existing_posts[post_id].get("comments_scraped"):
+                post["comments_scraped"] = existing_posts[post_id]["comments_scraped"]
+                post["comments_scraped_at"] = existing_posts[post_id].get("comments_scraped_at")
+            
+            # Add upsert operation to bulk
+            bulk_operations.append(
+                pymongo.UpdateOne(
+                    {"post_id": post_id},
                     {"$set": post},
                     upsert=True
                 )
-                if result.upserted_id:
-                    new_posts += 1
-            except pymongo.errors.DuplicateKeyError:
-                # Post already exists, skip
-                continue
+            )
         
-        print(f"Saved {new_posts} new posts to database")
-        return new_posts
+        # Execute bulk operation
+        if bulk_operations:
+            result = posts_collection.bulk_write(bulk_operations, ordered=False)
+            new_posts = result.upserted_count
+            modified_posts = result.modified_count
+            
+            print(f"Bulk operation completed: {new_posts} new posts, {modified_posts} updated posts")
+            return new_posts
+        else:
+            return 0
         
     except Exception as e:
         print(f"Error saving posts to database: {e}")
@@ -240,7 +257,7 @@ def scrape_post_comments(post_id):
 
 def save_comments_to_db(comments_list):
     """
-    Save comments to MongoDB with duplicate handling.
+    Save comments to MongoDB with bulk operations for better performance.
     
     Args:
         comments_list (list): List of comment dictionaries
@@ -257,23 +274,28 @@ def save_comments_to_db(comments_list):
         comments_collection.create_index("post_id")
         comments_collection.create_index("parent_id")
         
-        new_comments = 0
+        # Prepare bulk operations
+        bulk_operations = []
+        
         for comment in comments_list:
-            try:
-                # Use upsert to avoid duplicates
-                result = comments_collection.update_one(
+            bulk_operations.append(
+                pymongo.UpdateOne(
                     {"comment_id": comment["comment_id"]},
                     {"$set": comment},
                     upsert=True
                 )
-                if result.upserted_id:
-                    new_comments += 1
-            except pymongo.errors.DuplicateKeyError:
-                # Comment already exists, skip
-                continue
+            )
         
-        print(f"Saved {new_comments} new comments to database")
-        return new_comments
+        # Execute bulk operation
+        if bulk_operations:
+            result = comments_collection.bulk_write(bulk_operations, ordered=False)
+            new_comments = result.upserted_count
+            modified_comments = result.modified_count
+            
+            print(f"Bulk operation completed: {new_comments} new comments, {modified_comments} updated comments")
+            return new_comments
+        else:
+            return 0
         
     except Exception as e:
         print(f"Error saving comments to database: {e}")
@@ -299,6 +321,41 @@ def mark_post_comments_scraped(post_id):
         print(f"Error marking post {post_id} as scraped: {e}")
 
 
+def mark_posts_comments_scraped_bulk(post_ids):
+    """
+    Mark multiple posts as having their comments scraped using bulk operation.
+    
+    Args:
+        post_ids (list): List of Reddit post IDs
+    """
+    if not post_ids:
+        return
+    
+    try:
+        # Prepare bulk operations
+        bulk_operations = []
+        scraped_time = datetime.utcnow()
+        
+        for post_id in post_ids:
+            bulk_operations.append(
+                pymongo.UpdateOne(
+                    {"post_id": post_id},
+                    {"$set": {
+                        "comments_scraped": True,
+                        "comments_scraped_at": scraped_time
+                    }}
+                )
+            )
+        
+        # Execute bulk operation
+        if bulk_operations:
+            result = posts_collection.bulk_write(bulk_operations, ordered=False)
+            print(f"Marked {result.modified_count} posts as comments scraped")
+        
+    except Exception as e:
+        print(f"Error marking posts as scraped: {e}")
+
+
 def scrape_comments_for_posts():
     """
     Scrape comments for posts that haven't been processed yet.
@@ -319,7 +376,10 @@ def scrape_comments_for_posts():
     
     total_comments = 0
     posts_processed = 0
+    processed_post_ids = []
+    all_comments = []
     
+    # Process all posts and collect comments
     for post in posts:
         try:
             post_id = post["post_id"]
@@ -328,13 +388,10 @@ def scrape_comments_for_posts():
             # Scrape comments for this post
             comments = scrape_post_comments(post_id)
             
-            # Save comments to database
-            new_comments = save_comments_to_db(comments)
-            total_comments += new_comments
-            
-            # Mark post as processed
-            mark_post_comments_scraped(post_id)
-            posts_processed += 1
+            if comments:
+                all_comments.extend(comments)
+                processed_post_ids.append(post_id)
+                posts_processed += 1
             
             # Small delay between posts to be respectful
             time.sleep(2)
@@ -342,6 +399,15 @@ def scrape_comments_for_posts():
         except Exception as e:
             print(f"Error processing post {post.get('post_id', 'unknown')}: {e}")
             continue
+    
+    # Bulk save all comments at once
+    if all_comments:
+        new_comments = save_comments_to_db(all_comments)
+        total_comments = new_comments
+    
+    # Bulk mark all processed posts as scraped
+    if processed_post_ids:
+        mark_posts_comments_scraped_bulk(processed_post_ids)
     
     print(f"\nComment scraping completed: {posts_processed} posts, {total_comments} new comments")
     return posts_processed, total_comments
