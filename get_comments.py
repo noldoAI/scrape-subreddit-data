@@ -29,7 +29,6 @@ print(f"Authenticated as: {reddit.user.me()}")
 
 
 SCRAPE_INTERVAL = 600  # 10 minutes between comment scrapes
-COMMENTS_LIMIT = 500  # Max comments per post to avoid hitting limits too hard
 
 
 def get_posts_without_comments():
@@ -198,7 +197,6 @@ def continuous_comment_scrape():
     """
     print("Starting continuous comment scraping")
     print(f"Scrape interval: {SCRAPE_INTERVAL} seconds")
-    print(f"Max comments per post: {COMMENTS_LIMIT}")
     print("Press Ctrl+C to stop\n")
     
     scrape_count = 0
