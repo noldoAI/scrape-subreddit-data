@@ -3,3 +3,5 @@
 python reconstruct_posts.py POST_ID
 
 python reconstruct_posts.py POST_ID --json
+
+python reconstruct_posts.py POST_ID --llm
