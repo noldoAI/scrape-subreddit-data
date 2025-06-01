@@ -385,9 +385,10 @@ def interactive_mode():
         print("2. Reconstruct post by ID")
         print("3. Save post to text file")
         print("4. Export post as JSON")
-        print("5. Exit")
+        print("5. Export post for LLM analysis")
+        print("6. Exit")
         
-        choice = input("\nEnter your choice (1-5): ").strip()
+        choice = input("\nEnter your choice (1-6): ").strip()
         
         if choice == "1":
             print("\nRecent posts:")
@@ -418,11 +419,150 @@ def interactive_mode():
                     print(f"Post exported successfully!")
         
         elif choice == "5":
+            post_id = input("Enter post ID: ").strip()
+            if post_id:
+                filepath = export_post_for_llm(post_id)
+                if filepath:
+                    print(f"Post exported for LLM analysis successfully!")
+        
+        elif choice == "6":
             print("Goodbye!")
             break
         
         else:
             print("Invalid choice. Please try again.")
+
+
+def format_post_for_llm(post: Dict) -> str:
+    """
+    Format post information as structured text optimized for LLM analysis.
+    
+    Args:
+        post (dict): Post data
+    
+    Returns:
+        str: Structured post text for LLM
+    """
+    if not post:
+        return "POST: Not found"
+    
+    # Build minimal post text
+    post_text = f"""POST
+Title: {post.get('title', 'No title')}
+Author: {post.get('author', '[deleted]')}
+Score: {post.get('score', 0)}
+"""
+    
+    # Add post content if it's a text post
+    if post.get('selftext'):
+        post_text += f"Content: {post['selftext']}\n"
+    
+    return post_text
+
+
+def format_comment_tree_for_llm(comments: List[Dict], depth: int = 0) -> str:
+    """
+    Format comment tree as structured text optimized for LLM analysis.
+    
+    Args:
+        comments (list): List of comment dictionaries
+        depth (int): Current depth level
+    
+    Returns:
+        str: Structured comment tree text for LLM
+    """
+    if not comments:
+        return ""
+    
+    comment_text = ""
+    indent = "  " * depth  # 2 spaces per depth level
+    
+    for comment in comments:
+        # Simple comment format with just essential info
+        author = comment.get('author', '[deleted]')
+        score = comment.get('score', 0)
+        body = comment.get('body', '[deleted]')
+        
+        comment_text += f"\n{indent}--- {author} ({score} pts) ---\n"
+        comment_text += f"{indent}{body}\n"
+        
+        # Process replies recursively
+        if comment.get('replies'):
+            comment_text += format_comment_tree_for_llm(comment['replies'], depth + 1)
+    
+    return comment_text
+
+
+def export_post_for_llm(post_id: str, output_dir: str = "reconstructed_posts") -> str:
+    """
+    Export post and comments as structured text optimized for LLM analysis.
+    
+    Args:
+        post_id (str): Reddit post ID
+        output_dir (str): Directory to save files
+    
+    Returns:
+        str: Path to saved LLM-formatted file
+    """
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print(f"Exporting post for LLM analysis: {post_id}")
+    
+    # Get post and comments
+    post = get_post_by_id(post_id)
+    comments = get_comment_tree(post_id)
+    
+    if not post:
+        print(f"Post {post_id} not found")
+        return ""
+    
+    # Add structure explanation for LLM
+    structure_explanation = """REDDIT DISCUSSION ANALYSIS
+=========================
+
+FORMAT EXPLANATION:
+- POST section contains the original post with title, author, score, and content
+- COMMENTS section contains all discussion replies
+- Comment format: --- Author (Score pts) ---
+- Indentation shows reply hierarchy (2 spaces per level)
+- Higher scores indicate more popular/upvoted content
+- Deleted users show as [deleted]
+
+HIERARCHY:
+- No indentation = top-level comment (direct reply to post)
+- 2 spaces = reply to top-level comment  
+- 4 spaces = reply to reply, etc.
+
+=========================
+
+"""
+    
+    # Format post for LLM with minimal structure
+    llm_text = structure_explanation
+    llm_text += format_post_for_llm(post)
+    
+    # Add comments section
+    if comments:
+        llm_text += f"\nCOMMENTS:\n"
+        llm_text += format_comment_tree_for_llm(comments)
+    else:
+        llm_text += f"\nCOMMENTS: None\n"
+    
+    # Create filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{post_id}_llm_{timestamp}.txt"
+    filepath = os.path.join(output_dir, filename)
+    
+    # Save to file
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(llm_text)
+        print(f"Post exported for LLM analysis to: {filepath}")
+        return filepath
+    except Exception as e:
+        print(f"Error exporting post for LLM: {e}")
+        return ""
 
 
 if __name__ == "__main__":
@@ -438,6 +578,9 @@ if __name__ == "__main__":
         elif len(sys.argv) > 2 and sys.argv[2] == "--save":
             # Save to file
             save_post_to_file(post_id)
+        elif len(sys.argv) > 2 and sys.argv[2] == "--llm":
+            # Export for LLM analysis
+            export_post_for_llm(post_id)
         else:
             # Print to console
             content = reconstruct_full_post(post_id)
