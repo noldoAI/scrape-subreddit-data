@@ -481,9 +481,10 @@ def format_comment_tree_for_llm(comments: List[Dict], depth: int = 0) -> str:
         # Simple comment format with just essential info
         author = comment.get('author', '[deleted]')
         score = comment.get('score', 0)
+        comment_id = comment.get('comment_id', 'unknown')
         body = comment.get('body', '[deleted]')
         
-        comment_text += f"\n{indent}--- {author} ({score} pts) ---\n"
+        comment_text += f"\n{indent}--- {author} ({score} pts) [ID: {comment_id}] ---\n"
         comment_text += f"{indent}{body}\n"
         
         # Process replies recursively
@@ -524,10 +525,11 @@ def export_post_for_llm(post_id: str, output_dir: str = "reconstructed_posts") -
 FORMAT EXPLANATION:
 - POST section contains the original post with title, author, score, and content
 - COMMENTS section contains all discussion replies
-- Comment format: --- Author (Score pts) ---
+- Comment format: --- Author (Score pts) [ID: comment_id] ---
 - Indentation shows reply hierarchy (2 spaces per level)
 - Higher scores indicate more popular/upvoted content
 - Deleted users show as [deleted]
+- Comment IDs allow referencing specific comments
 
 HIERARCHY:
 - No indentation = top-level comment (direct reply to post)
