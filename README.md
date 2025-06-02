@@ -90,7 +90,7 @@ new_posts = save_posts_to_db(posts)         # Saves to database
 posts_processed, total_comments = scrape_comments_for_posts()
 ```
 
-**Revolutionary approach - instead of scraping comments once, it continuously updates them:**
+**instead of scraping comments once, it continuously updates them:**
 
 **Smart Prioritization Logic:**
 
