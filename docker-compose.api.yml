@@ -25,5 +25,18 @@ services:
     volumes:
       # Mount the current directory so the API can access reddit_scraper.py
       - .:/app
+      # Mount Docker socket to allow API to manage other containers
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PYTHONPATH=/app
+    depends_on:
+      - reddit-scraper-builder
+
+  # Build the reddit-scraper image that the API will use to create scraper containers
+  reddit-scraper-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: reddit-scraper
+    command: echo "Image built successfully"
+    restart: "no"
