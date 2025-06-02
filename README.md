@@ -1,470 +1,219 @@
-# Reddit Scraper
+# Reddit Scraper API
 
-A comprehensive Reddit scraping system that continuously collects posts, comments, and subreddit metadata for any specified subreddit using one set of Reddit API credentials.
+A comprehensive Reddit scraping system with a web-based management API that orchestrates multiple containerized scrapers. Each scraper can use unique Reddit API credentials and target different subreddits simultaneously, with automatic monitoring, restart capabilities, and persistent storage.
 
-## Features
+## 🚀 Quick Start
 
-- **Unified System**: One script handles posts, comments, and subreddit metadata
-- **Configurable**: Target any subreddit by name
-- **Continuous Updates**: Live comment tracking with smart deduplication
-- **Bulk Operations**: High-performance MongoDB operations
-- **Rate Limiting**: Automatic Reddit API rate limit handling
-- **Comment Trees**: Preserves hierarchical comment structure
-- **Smart Scheduling**: Prioritized updates based on post age and activity
-- **Docker Ready**: Easy deployment with customizable parameters
-
-## Quick Reference
-
-**Most Common Usage Patterns:**
+### 1. Start the API Server
 
 ```bash
-# Default settings (good for most subreddits)
-python reddit_scraper.py SUBREDDIT_NAME
+# Build the API container
+docker-compose -f docker-compose.api.yml up --build -d
 
-# High-activity subreddit (wallstreetbets, stocks)
-python reddit_scraper.py wallstreetbets --posts-limit 2000 --interval 180 --comment-batch 30
-
-# Medium subreddit (investing, cryptocurrency)
-python reddit_scraper.py investing --posts-limit 1000 --interval 300 --comment-batch 20
-
-# Small/niche subreddit (pennystocks, specific trading)
-python reddit_scraper.py pennystocks --posts-limit 500 --interval 600 --comment-batch 10
-
-# Just check current statistics
-python reddit_scraper.py SUBREDDIT_NAME --stats
-
-# Docker with environment variables
-TARGET_SUBREDDIT=wallstreetbets POSTS_LIMIT=2000 SCRAPE_INTERVAL=180 docker-compose up
+# Access the web dashboard
+open http://localhost:8000
 ```
 
-**Required Variables:**
+### 2. Use the Web Dashboard
 
-- `SUBREDDIT_NAME`: The target subreddit (without r/)
-- Plus optional configuration: `--posts-limit`, `--interval`, `--comment-batch`
+1. **Open** `http://localhost:8000` in your browser
+2. **Configure** your Reddit API credentials
+3. **Select** target subreddit and scraping parameters
+4. **Start** the scraper and monitor via dashboard
+5. **View** real-time statistics and logs
 
-## Predefined Configurations
+## 🏗️ Architecture Overview
 
-**Copy-paste ready commands for popular subreddit types:**
+The system consists of three main components:
 
-### High-Volume Financial Subreddits
+### **🎯 Management API (Primary Interface)**
 
-```bash
-# WallStreetBets (very active, needs high throughput)
-python reddit_scraper.py wallstreetbets --posts-limit 2000 --interval 180 --comment-batch 30
+- **Web Dashboard**: User-friendly interface for managing scrapers
+- **REST API**: Programmatic control of all scraping operations
+- **Docker Management**: Automatic container orchestration
+- **Database Storage**: Persistent scraper configurations and credentials
+- **Monitoring**: Health checks, auto-restart, and failure detection
 
-# Stocks (high activity)
-python reddit_scraper.py stocks --posts-limit 1500 --interval 240 --comment-batch 25
+### **📦 Containerized Scrapers**
 
-# Cryptocurrency (high activity, fast-moving)
-python reddit_scraper.py cryptocurrency --posts-limit 1500 --interval 200 --comment-batch 25
-```
+- **Isolated Execution**: Each subreddit runs in its own Docker container
+- **Unique Credentials**: Separate Reddit API credentials per scraper
+- **Unified Scraping**: Posts, comments, and metadata in one process
+- **Smart Scheduling**: Intelligent comment update prioritization
 
-### Medium-Volume Investment Subreddits
+### **🗄️ MongoDB Database**
 
-```bash
-# Investing (steady activity)
-python reddit_scraper.py investing --posts-limit 1000 --interval 300 --comment-batch 20
+- **Scraped Data**: Posts, comments, subreddit metadata
+- **Configuration**: Scraper settings and encrypted credentials
+- **Monitoring**: Performance metrics and status tracking
 
-# SecurityAnalysis (moderate activity)
-python reddit_scraper.py securityanalysis --posts-limit 800 --interval 400 --comment-batch 15
+## 📊 How Scraping Works
 
-# ValueInvesting (moderate activity)
-python reddit_scraper.py valueinvesting --posts-limit 600 --interval 450 --comment-batch 12
-```
-
-### Specialized/Smaller Trading Subreddits
-
-```bash
-# PennyStocks (smaller, less frequent)
-python reddit_scraper.py pennystocks --posts-limit 500 --interval 600 --comment-batch 10
-
-# Options trading (focused discussions)
-python reddit_scraper.py options --posts-limit 400 --interval 500 --comment-batch 8
-
-# DayTrading (time-sensitive but smaller volume)
-python reddit_scraper.py daytrading --posts-limit 600 --interval 300 --comment-batch 12
-```
-
-### Docker Environment Files
-
-**Create `.env.wallstreetbets`:**
-
-```bash
-TARGET_SUBREDDIT=wallstreetbets
-POSTS_LIMIT=2000
-SCRAPE_INTERVAL=180
-COMMENT_BATCH=30
-# Add your Reddit API credentials here
-R_CLIENT_ID=your_client_id
-R_CLIENT_SECRET=your_secret
-R_USERNAME=your_username
-R_PASSWORD=your_password
-R_USER_AGENT=RedditScraper/1.0 by YourUsername
-MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/dbname
-```
-
-**Create `.env.investing`:**
-
-```bash
-TARGET_SUBREDDIT=investing
-POSTS_LIMIT=1000
-SCRAPE_INTERVAL=300
-COMMENT_BATCH=20
-# Add your Reddit API credentials here
-R_CLIENT_ID=your_client_id
-R_CLIENT_SECRET=your_secret
-R_USERNAME=your_username
-R_PASSWORD=your_password
-R_USER_AGENT=RedditScraper/1.0 by YourUsername
-MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/dbname
-```
-
-Then run with:
-
-```bash
-docker-compose -f docker-compose.yml --env-file .env.wallstreetbets up -d
-# or
-docker-compose -f docker-compose.yml --env-file .env.investing up -d
-```
-
-## Quick Start
-
-### 1. Set up environment variables
-
-Create a `.env` file with your Reddit API credentials and MongoDB Atlas connection:
-
-```bash
-# Reddit API Credentials (get from https://www.reddit.com/prefs/apps)
-R_CLIENT_ID=your_reddit_client_id
-R_CLIENT_SECRET=your_reddit_client_secret
-R_USERNAME=your_reddit_username
-R_PASSWORD=your_reddit_password
-R_USER_AGENT=RedditScraper/1.0 by YourUsername
-
-# MongoDB Atlas Connection
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/dbname?retryWrites=true&w=majority
-```
-
-### 2. Run the scraper with configuration
-
-```bash
-# Basic usage - scrape any subreddit with default settings
-python reddit_scraper.py wallstreetbets
-python reddit_scraper.py stocks
-python reddit_scraper.py investing
-
-# Configure scraping parameters for specific needs
-python reddit_scraper.py wallstreetbets --posts-limit 500 --interval 600 --comment-batch 10
-python reddit_scraper.py cryptocurrency --posts-limit 2000 --interval 180 --comment-batch 30
-python reddit_scraper.py pennystocks --posts-limit 300 --interval 900 --comment-batch 5
-
-# Show statistics only
-python reddit_scraper.py wallstreetbets --stats
-
-# Run specific components only
-python reddit_scraper.py wallstreetbets --comments-only
-python reddit_scraper.py wallstreetbets --metadata-only
-```
-
-### 3. Configuration Parameters
-
-When running the scraper, you can customize these parameters:
-
-| Parameter         | Default  | Description                             | Example              |
-| ----------------- | -------- | --------------------------------------- | -------------------- |
-| `subreddit`       | required | Target subreddit name (without r/)      | `wallstreetbets`     |
-| `--posts-limit`   | 1000     | Hot posts to fetch per cycle            | `--posts-limit 500`  |
-| `--interval`      | 300      | Seconds between scrape cycles           | `--interval 600`     |
-| `--comment-batch` | 20       | Posts to process for comments per cycle | `--comment-batch 10` |
-
-**Examples for different subreddit sizes:**
-
-```bash
-# Large active subreddit (high volume)
-python reddit_scraper.py wallstreetbets --posts-limit 2000 --interval 180 --comment-batch 30
-
-# Medium subreddit (moderate activity)
-python reddit_scraper.py investing --posts-limit 1000 --interval 300 --comment-batch 20
-
-# Small subreddit (low activity)
-python reddit_scraper.py pennystocks --posts-limit 500 --interval 600 --comment-batch 10
-```
-
-## Docker Usage (Recommended)
-
-### Quick Start with Docker
-
-```bash
-# Build the image
-docker build -f Dockerfile -t reddit-scraper .
-
-# Run with default settings
-docker run --env-file .env reddit-scraper
-
-# Run different subreddit with custom configuration
-docker run --env-file .env reddit-scraper python reddit_scraper.py stocks --posts-limit 500 --interval 600
-
-# Run high-volume configuration
-docker run --env-file .env reddit-scraper python reddit_scraper.py wallstreetbets --posts-limit 2000 --interval 180 --comment-batch 30
-```
-
-### Docker Compose (Configurable)
-
-Create a `.env.docker` file with your subreddit and configuration:
-
-```bash
-# Target Configuration
-TARGET_SUBREDDIT=wallstreetbets
-POSTS_LIMIT=1000
-SCRAPE_INTERVAL=300
-COMMENT_BATCH=20
-
-# Reddit API credentials
-R_CLIENT_ID=your_client_id
-R_CLIENT_SECRET=your_secret
-R_USERNAME=your_username
-R_PASSWORD=your_password
-R_USER_AGENT=RedditScraper/1.0 by YourUsername
-MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/dbname
-```
-
-**Example configurations for different subreddits:**
-
-**High-volume subreddit (.env.wallstreetbets):**
-
-```bash
-TARGET_SUBREDDIT=wallstreetbets
-POSTS_LIMIT=2000
-SCRAPE_INTERVAL=180
-COMMENT_BATCH=30
-```
-
-**Medium subreddit (.env.investing):**
-
-```bash
-TARGET_SUBREDDIT=investing
-POSTS_LIMIT=1000
-SCRAPE_INTERVAL=300
-COMMENT_BATCH=20
-```
-
-**Low-activity subreddit (.env.pennystocks):**
-
-```bash
-TARGET_SUBREDDIT=pennystocks
-POSTS_LIMIT=500
-SCRAPE_INTERVAL=600
-COMMENT_BATCH=10
-```
-
-Run with your chosen configuration:
-
-```bash
-# Start scraper with specific configuration
-docker-compose -f docker-compose.yml --env-file .env.wallstreetbets up -d
-
-# Switch to different subreddit
-docker-compose -f docker-compose.yml --env-file .env.investing up -d
-
-# View logs
-docker-compose -f docker-compose.yml logs -f
-
-# Stop scraper
-docker-compose -f docker-compose.yml down
-```
-
-## Local Development
-
-### Prerequisites
-
-- Python 3.11+
-- MongoDB Atlas account (cloud database)
-- Reddit API credentials
-
-### Installation
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run scraper
-python reddit_scraper.py wallstreetbets
-```
-
-## Command Line Options
-
-```bash
-# Basic usage - specify subreddit as first argument
-python reddit_scraper.py SUBREDDIT_NAME [OPTIONS]
-
-# Configuration options
---posts-limit 1000          # Posts to scrape per cycle (default: 1000)
---interval 300              # Seconds between cycles (default: 300)
---comment-batch 20          # Posts to process for comments per cycle (default: 20)
-
-# Operational modes
---stats                     # Show statistics only
---comments-only             # Run comment scraping only
---metadata-only             # Update subreddit metadata only
-```
-
-**Complete Examples:**
-
-```bash
-# Show statistics for any subreddit
-python reddit_scraper.py wallstreetbets --stats
-python reddit_scraper.py stocks --stats
-
-# Run with custom configuration for high-activity subreddit
-python reddit_scraper.py wallstreetbets --posts-limit 2000 --interval 180 --comment-batch 30
-
-# Run with conservative settings for smaller subreddit
-python reddit_scraper.py pennystocks --posts-limit 500 --interval 600 --comment-batch 10
-
-# Focus on specific tasks
-python reddit_scraper.py investing --comments-only
-python reddit_scraper.py cryptocurrency --metadata-only
-
-# Different timing strategies
-python reddit_scraper.py daytrading --interval 120    # Very frequent updates (2 min)
-python reddit_scraper.py investing --interval 900     # Less frequent updates (15 min)
-```
-
-**Parameter Guidelines by Subreddit Size:**
-
-| Subreddit Type            | Posts Limit | Interval  | Comment Batch | Example                           |
-| ------------------------- | ----------- | --------- | ------------- | --------------------------------- |
-| Very Active (>1M users)   | 2000-5000   | 120-300s  | 30-50         | `wallstreetbets`, `stocks`        |
-| Active (100K-1M users)    | 1000-2000   | 300-600s  | 20-30         | `investing`, `cryptocurrency`     |
-| Moderate (10K-100K users) | 500-1000    | 600-900s  | 10-20         | `pennystocks`, `SecurityAnalysis` |
-| Small (<10K users)        | 100-500     | 900-1800s | 5-10          | Niche trading subreddits          |
-
-## Configuration
-
-All configuration is done via command line arguments or environment variables:
-
-**Subreddit Selection:**
-
-- Specify any subreddit name as the first argument
-- No need to include "r/" prefix
-
-**Timing Configuration:**
-
-- `--interval`: Seconds between full scrape cycles (default: 300 = 5 minutes)
-- Comment updates are automatic based on post age
-- Subreddit metadata updates every 24 hours
-
-**Volume Configuration:**
-
-- `--posts-limit`: Hot posts to fetch per cycle (default: 1000)
-- `--comment-batch`: Posts to process for comments per cycle (default: 20)
-
-## Output Examples
-
-```bash
-$ python reddit_scraper.py wallstreetbets
-
-🔗 Authenticated as: your_username
-🎯 Target subreddit: r/wallstreetbets
-⚙️  Configuration: {'scrape_interval': 300, 'posts_limit': 1000, 'posts_per_comment_batch': 20, 'subreddit_update_interval': 86400}
-
-============================================================
-SCRAPING STATISTICS FOR r/wallstreetbets
-============================================================
-Total posts: 5,432
-Posts with initial comments: 4,891
-Posts without initial comments: 541
-Posts with recent updates: 1,203
-Total comments: 45,672
-Initial completion rate: 90.0%
-Subreddit metadata: ✓
-Metadata last updated: 2.3 hours ago
-============================================================
-
-🚀 Starting Reddit scraping for r/wallstreetbets
-⏰ Scrape interval: 300 seconds
-📊 Posts per scrape: 1000
-💬 Comments batch size: 20 posts
-🏢 Subreddit metadata interval: 24.0 hours
-
-================================================================================
-SCRAPE CYCLE #1 at 2024-01-20 15:30:00
-================================================================================
-
-============================================================
-POST SCRAPING PHASE
-============================================================
---- Scraping 1000 hot posts from r/wallstreetbets ---
-Successfully scraped 1000 posts
-Bulk operation: 23 new posts, 977 updated posts
-
-============================================================
-COMMENT SCRAPING PHASE
-============================================================
-Found 20 posts needing comment updates
-
-Initial scrape for: TSLA to the moon! DD inside...
-Found 0 existing comments
-Found 45 new comments
-
-Update for: Market crash incoming, here's why...
-Found 150 existing comments
-Found 23 new comments
-
-Comment scraping completed: 20 posts (5 initial, 15 updates), 340 new comments
-
-============================================================
-SUBREDDIT METADATA PHASE
-============================================================
-Subreddit metadata updated 2.3 hours ago - next update in 21.7 hours
-
-============================================================
-CYCLE SUMMARY
-============================================================
-Posts scraped: 1000 (23 new)
-Comments processed: 20 posts, 340 new comments
-Subreddit metadata: No update needed
-Cycle completed in 45.2 seconds
-
-Waiting 300 seconds before next cycle...
-```
-
-## How It Works
-
-The scraper runs **three integrated phases** in continuous cycles:
+Each scraper runs a continuous 3-phase cycle:
 
 ### **Phase 1: Posts Scraping** (Every 5 minutes)
 
-- Fetches hot posts from your target subreddit
-- Updates existing posts with new scores, comment counts
-- Adds new posts that entered the hot list
-- Preserves comment tracking status
+```
+1. Fetch hot posts from target subreddit using Reddit API
+2. Extract post metadata (title, score, author, timestamps, etc.)
+3. Update existing posts with new scores/comment counts
+4. Store new posts that entered the hot list
+5. Preserve comment tracking status for existing posts
+```
 
 ### **Phase 2: Smart Comment Updates** (Continuous)
 
-- **Never scraped posts**: Complete initial scrape (highest priority)
-- **Recent posts (< 24h)**: Update every 6 hours
-- **Older posts**: Update every 24 hours
-- **Deduplication**: Only collects new comments, skips existing ones
+```
+Priority Queue System:
+1. HIGHEST: Posts never scraped for comments (initial scrape)
+2. HIGH: Recent posts (<24h) - update every 6 hours
+3. MEDIUM: Older posts - update every 24 hours
+4. Deduplication: Only collect new comments, skip existing ones
+5. Hierarchical: Preserve parent-child comment relationships
+```
 
 ### **Phase 3: Subreddit Metadata** (Every 24 hours)
 
-- Tracks subscriber count, active users
-- Community settings and rules
-- Visual elements and descriptions
-
-## Setup
-
-### 1. Clone the repository
-
-```bash
-git clone <repository-url>
-cd scrape-subreddit-data
+```
+1. Scrape subreddit information (subscribers, rules, settings)
+2. Track community growth and changes over time
+3. Store visual elements and descriptions
+4. Update only when 24+ hours have passed
 ```
 
-## Database Schema
+## 🎮 Using the Web Dashboard
 
-### Posts Collection (reddit_posts)
+### **Starting a New Scraper**
+
+1. **Subreddit Configuration**:
+
+   - Target subreddit name (without r/)
+   - Preset configurations (High/Medium/Low activity)
+   - Custom parameters (posts limit, interval, comment batch size)
+
+2. **Reddit API Credentials** (Required):
+
+   ```
+   Client ID:     Your Reddit app client ID
+   Client Secret: Your Reddit app client secret
+   Username:      Your Reddit username
+   Password:      Your Reddit password
+   User Agent:    RedditScraper/1.0 by YourUsername
+   ```
+
+3. **Advanced Options**:
+   - Auto-restart on failure (enabled by default)
+   - Custom MongoDB URI (optional)
+
+### **Managing Scrapers**
+
+- **📊 View Statistics**: Posts, comments, completion rates
+- **📋 Check Logs**: Real-time container logs
+- **🔄 Restart**: Manual restart failed scrapers
+- **⏹️ Stop/Start**: Control individual scrapers
+- **🗑️ Delete**: Remove scraper and configuration
+- **⚙️ Auto-restart**: Toggle automatic failure recovery
+
+### **Monitoring Dashboard**
+
+```
+System Health:
+✅ Database: Connected
+✅ Docker: Available
+📊 Total Scrapers: 3
+🏃 Running: 2
+❌ Failed: 1
+```
+
+## 🔧 REST API Endpoints
+
+### **Scraper Management**
+
+```bash
+# Start new scraper
+POST /scrapers/start
+{
+  "subreddit": "wallstreetbets",
+  "posts_limit": 2000,
+  "interval": 180,
+  "comment_batch": 30,
+  "credentials": { ... },
+  "auto_restart": true
+}
+
+# List all scrapers
+GET /scrapers
+
+# Get scraper status
+GET /scrapers/{subreddit}/status
+
+# Stop scraper
+POST /scrapers/{subreddit}/stop
+
+# Restart scraper
+POST /scrapers/{subreddit}/restart
+
+# Delete scraper
+DELETE /scrapers/{subreddit}
+
+# Get scraper statistics
+GET /scrapers/{subreddit}/stats
+
+# Get scraper logs
+GET /scrapers/{subreddit}/logs?lines=100
+```
+
+### **System Monitoring**
+
+```bash
+# System health check
+GET /health
+
+# Configuration presets
+GET /presets
+
+# Restart all failed scrapers
+POST /scrapers/restart-all-failed
+
+# Status summary
+GET /scrapers/status-summary
+```
+
+## ⚙️ Configuration Presets
+
+### **High Activity Subreddits** (wallstreetbets, stocks)
+
+```json
+{
+  "posts_limit": 2000,
+  "interval": 180,
+  "comment_batch": 30
+}
+```
+
+### **Medium Activity Subreddits** (investing, cryptocurrency)
+
+```json
+{
+  "posts_limit": 1000,
+  "interval": 300,
+  "comment_batch": 20
+}
+```
+
+### **Low Activity Subreddits** (pennystocks, niche topics)
+
+```json
+{
+  "posts_limit": 500,
+  "interval": 600,
+  "comment_batch": 10
+}
+```
+
+## 🗃️ Database Schema
+
+### **Posts Collection** (`reddit_posts`)
 
 ```json
 {
@@ -480,11 +229,13 @@ cd scrape-subreddit-data
   "subreddit": "wallstreetbets",
   "selftext": "Post content...",
   "comments_scraped": true,
-  "comments_scraped_at": "2022-01-20T12:30:00"
+  "initial_comments_scraped": true,
+  "last_comment_fetch_time": "2022-01-20T12:30:00",
+  "scraped_at": "2022-01-20T12:00:00"
 }
 ```
 
-### Comments Collection (reddit_comments)
+### **Comments Collection** (`reddit_comments`)
 
 ```json
 {
@@ -497,11 +248,13 @@ cd scrape-subreddit-data
   "score": 50,
   "depth": 0,
   "created_utc": 1642694500,
-  "created_datetime": "2022-01-20T12:01:40"
+  "created_datetime": "2022-01-20T12:01:40",
+  "subreddit": "wallstreetbets",
+  "scraped_at": "2022-01-20T12:01:40"
 }
 ```
 
-### Subreddit Metadata Collection (subreddit_metadata)
+### **Subreddit Metadata Collection** (`subreddit_metadata`)
 
 ```json
 {
@@ -514,78 +267,316 @@ cd scrape-subreddit-data
   "over_18": false,
   "lang": "en",
   "created_utc": 1234567890,
-  "created_datetime": "2009-02-13T23:31:30",
-  "quarantine": false,
   "allow_images": true,
   "allow_videos": true,
-  "allow_polls": true,
   "scraped_at": "2022-01-20T12:00:00",
   "last_updated": "2022-01-20T12:00:00"
 }
 ```
 
-## Monitoring
+### **Scrapers Collection** (`reddit_scrapers`)
 
-### Check Docker containers
+```json
+{
+  "subreddit": "wallstreetbets",
+  "status": "running",
+  "container_id": "container123",
+  "container_name": "reddit-scraper-wallstreetbets",
+  "config": {
+    "posts_limit": 2000,
+    "interval": 180,
+    "comment_batch": 30
+  },
+  "credentials": {
+    "client_id": "encrypted_value",
+    "client_secret": "encrypted_value",
+    "username": "reddit_user",
+    "password": "encrypted_value",
+    "user_agent": "RedditScraper/1.0"
+  },
+  "auto_restart": true,
+  "created_at": "2022-01-20T12:00:00",
+  "last_updated": "2022-01-20T12:00:00",
+  "restart_count": 0
+}
+```
+
+## 🔐 Security Features
+
+### **Credential Encryption**
+
+- All sensitive credentials encrypted before database storage
+- Automatic encryption key generation and management
+- Credentials never stored in plain text or logs
+- Masked values in API responses and dashboard
+
+### **Container Isolation**
+
+- Each scraper runs in isolated Docker container
+- No credential sharing between scrapers
+- Individual failure containment
+- Resource isolation and management
+
+## 📈 Monitoring & Alerting
+
+### **Automatic Health Checks**
+
+```
+✅ Container Status: Monitor Docker containers every 30 seconds
+✅ Database Connectivity: Verify MongoDB connection
+✅ API Responsiveness: Health check endpoint
+✅ Failure Detection: Automatic restart on container failure
+✅ Rate Limit Monitoring: Track Reddit API usage
+```
+
+### **Real-time Logs**
 
 ```bash
-# See running containers
+# View live logs
+2024-01-20 15:30:45 - reddit-scraper - INFO - 🔗 Authenticated as: user123
+2024-01-20 15:30:45 - reddit-scraper - INFO - 🎯 Target subreddit: r/wallstreetbets
+2024-01-20 15:30:46 - rate-limits - INFO - Rate limit - Remaining: 598, Used: 2
+2024-01-20 15:30:47 - reddit-scraper - INFO - Successfully scraped 1000 posts
+2024-01-20 15:30:50 - reddit-scraper - INFO - Found 25 new comments
+```
+
+## 🛠️ Installation & Setup
+
+### **Prerequisites**
+
+- Docker & Docker Compose
+- MongoDB Atlas account (or local MongoDB)
+- Reddit API credentials
+
+### **Environment Setup**
+
+1. **Clone Repository**:
+
+```bash
+git clone <repository-url>
+cd scrape-subreddit-data
+```
+
+2. **Create Environment File** (`.env`):
+
+```bash
+# MongoDB Connection
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/dbname
+
+# Reddit API Credentials (for API server - optional)
+R_CLIENT_ID=your_client_id
+R_CLIENT_SECRET=your_client_secret
+R_USERNAME=your_username
+R_PASSWORD=your_password
+R_USER_AGENT=RedditScraper/1.0 by YourUsername
+```
+
+3. **Get Reddit API Credentials**:
+
+   - Visit https://www.reddit.com/prefs/apps
+   - Create a new "script" application
+   - Note the client ID and secret
+
+4. **Start the System**:
+
+```bash
+# Build and start API server
+docker-compose -f docker-compose.api.yml up --build -d
+
+# Access dashboard
+open http://localhost:8000
+```
+
+## 🚀 Usage Examples
+
+### **Scraping Multiple Subreddits**
+
+```bash
+# Start high-volume financial subreddit
+curl -X POST http://localhost:8000/scrapers/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subreddit": "wallstreetbets",
+    "posts_limit": 2000,
+    "interval": 180,
+    "comment_batch": 30,
+    "credentials": {
+      "client_id": "your_client_id",
+      "client_secret": "your_client_secret",
+      "username": "your_username",
+      "password": "your_password",
+      "user_agent": "RedditScraper/1.0"
+    }
+  }'
+
+# Start medium-volume investment subreddit
+curl -X POST http://localhost:8000/scrapers/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subreddit": "investing",
+    "posts_limit": 1000,
+    "interval": 300,
+    "comment_batch": 20,
+    "credentials": { ... }
+  }'
+```
+
+### **Monitoring Operations**
+
+```bash
+# Check system health
+curl http://localhost:8000/health
+
+# Get scraper statistics
+curl http://localhost:8000/scrapers/wallstreetbets/stats
+
+# View recent logs
+curl http://localhost:8000/scrapers/wallstreetbets/logs?lines=50
+
+# List all scrapers
+curl http://localhost:8000/scrapers
+```
+
+## 🎯 Performance Optimization
+
+### **Scraping Efficiency**
+
+- **Bulk Database Operations**: High-performance MongoDB writes
+- **Intelligent Deduplication**: Skip existing posts/comments
+- **Rate Limit Management**: Automatic Reddit API throttling
+- **Memory Efficiency**: Stream processing for large datasets
+- **Comment Prioritization**: Focus on active posts first
+
+### **Resource Management**
+
+- **Container Limits**: CPU/memory constraints per scraper
+- **Connection Pooling**: Efficient database connections
+- **Batch Processing**: Group operations for better throughput
+- **Selective Updates**: Only update changed data
+
+## 🔧 Troubleshooting
+
+### **Common Issues**
+
+**❌ Scraper Container Fails Immediately**
+
+```bash
+# Check container logs
+docker logs reddit-scraper-wallstreetbets
+
+# Common causes:
+- Invalid Reddit API credentials
+- Missing environment variables
+- Network connectivity issues
+- Rate limit exceeded
+```
+
+**❌ Database Connection Failed**
+
+```bash
+# Verify MongoDB URI
+# Check IP whitelist in MongoDB Atlas
+# Verify database user permissions
+```
+
+**❌ Reddit Authentication Error**
+
+```bash
+# Verify Reddit app configuration
+# Check username/password combination
+# Ensure user agent is descriptive and unique
+```
+
+### **Debugging Commands**
+
+```bash
+# View API logs
+docker-compose -f docker-compose.api.yml logs -f
+
+# Check running containers
 docker ps
 
-# View logs
-docker logs reddit-scraper
+# Inspect container
+docker inspect reddit-scraper-wallstreetbets
 
-# Follow logs in real-time
-docker logs -f reddit-scraper
+# Enter container for debugging
+docker exec -it reddit-scraper-wallstreetbets bash
+
+# Monitor system resources
+docker stats
 ```
 
-### Get statistics
+## 📊 Example Output
 
-```bash
-# From running container
-docker exec reddit-scraper python reddit_scraper.py wallstreetbets --stats
+### **Dashboard Statistics**
+
+```
+r/wallstreetbets Statistics:
+━━━━━━━━━━━━━━━━━━━━━━
+📊 Posts: 15,432
+💬 Comments: 2,847,293
+✅ Initial Completion: 94.2%
+🏢 Metadata: ✓
+⏰ Last Updated: 2.3 hours ago
 ```
 
-## Troubleshooting
+### **Scraping Cycle Log**
 
-### Common Issues
-
-**Reddit API Rate Limits**
-
-- The scrapers handle rate limits automatically
-- If you hit limits often, reduce POSTS_LIMIT in the main scraper
-
-**MongoDB Connection**
-
-- Make sure your MONGODB_URI is correct
-- Check that your IP is whitelisted in MongoDB Atlas
-- Verify your database user has proper permissions
-
-**Reddit Authentication**
-
-- Double-check credentials in .env file
-- Make sure your Reddit app has the right permissions
-- User agent should be descriptive and unique
-
-### Logs
-
-```bash
-# For Docker containers
-docker logs reddit-scraper
-
-# Check if containers are healthy
-docker ps
+```
+2024-01-20 15:30:45 - reddit-scraper - INFO - SCRAPE CYCLE #127 at 2024-01-20 15:30:45
+2024-01-20 15:30:45 - reddit-scraper - INFO - POST SCRAPING PHASE
+2024-01-20 15:30:47 - reddit-scraper - INFO - Successfully scraped 2000 posts
+2024-01-20 15:30:47 - reddit-scraper - INFO - Bulk operation: 23 new posts, 1977 updated posts
+2024-01-20 15:30:47 - reddit-scraper - INFO - COMMENT SCRAPING PHASE
+2024-01-20 15:30:48 - reddit-scraper - INFO - Found 30 posts needing comment updates
+2024-01-20 15:31:15 - reddit-scraper - INFO - Comment scraping completed: 30 posts (5 initial, 25 updates), 847 new comments
+2024-01-20 15:31:15 - reddit-scraper - INFO - CYCLE SUMMARY
+2024-01-20 15:31:15 - reddit-scraper - INFO - Posts scraped: 2000 (23 new)
+2024-01-20 15:31:15 - reddit-scraper - INFO - Comments processed: 30 posts, 847 new comments
+2024-01-20 15:31:15 - reddit-scraper - INFO - Cycle completed in 30.2 seconds
 ```
 
-## Performance
+## 🏆 Features Summary
 
-- Bulk operations: Much faster database writes
-- Rate limiting: Automatic API throttling to avoid bans
-- Efficient indexing: Fast MongoDB queries
-- Memory efficient: Processes data in streams
+### **✨ API Management**
 
-The scrapers are designed to be respectful to Reddit's API and run reliably for long periods.
+- Web dashboard for all operations
+- REST API for programmatic control
+- Real-time monitoring and alerts
+- Persistent configuration storage
 
-## License
+### **🚀 Scalable Scraping**
+
+- Multiple subreddits simultaneously
+- Unique credentials per scraper
+- Automatic container orchestration
+- Smart resource allocation
+
+### **🧠 Intelligent Processing**
+
+- Priority-based comment updates
+- Efficient deduplication
+- Rate limit management
+- Hierarchical comment threading
+
+### **🔒 Enterprise Security**
+
+- Encrypted credential storage
+- Container isolation
+- Audit logging
+- Secure API endpoints
+
+### **📈 Production Ready**
+
+- Automatic failure recovery
+- Health monitoring
+- Performance optimization
+- Comprehensive logging
+
+## 📝 License
 
 MIT License - see LICENSE file for details.
+
+---
+
+**🎯 Ready to start scraping Reddit data at scale? Launch the dashboard at `http://localhost:8000` and begin collecting insights from any subreddit!**
