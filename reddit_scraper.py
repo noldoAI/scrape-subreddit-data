@@ -16,12 +16,22 @@ import sys
 import argparse
 from rate_limits import check_rate_limit
 from praw.models import MoreComments
+import logging
 
 # Import centralized configuration
-from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG
+from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging with timestamps
+logging.basicConfig(
+    format=LOGGING_CONFIG["format"],
+    datefmt=LOGGING_CONFIG["date_format"],
+    level=getattr(logging, LOGGING_CONFIG["level"]),
+    force=True  # Override any existing logging configuration
+)
+logger = logging.getLogger("reddit-scraper")
 
 # MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
@@ -46,15 +56,15 @@ class UnifiedRedditScraper:
         self.config = {**DEFAULT_SCRAPER_CONFIG, **(config or {})}
         self.cycle_count = 0
         
-        print(f"🔗 Authenticated as: {reddit.user.me()}")
-        print(f"🎯 Target subreddit: r/{self.subreddit_name}")
-        print(f"⚙️  Configuration: {self.config}")
+        logger.info(f"🔗 Authenticated as: {reddit.user.me()}")
+        logger.info(f"🎯 Target subreddit: r/{self.subreddit_name}")
+        logger.info(f"⚙️  Configuration: {self.config}")
     
     # ======================= POSTS SCRAPING =======================
     
     def scrape_hot_posts(self, limit=1000):
         """Scrape hot posts from the target subreddit."""
-        print(f"\n--- Scraping {limit} hot posts from r/{self.subreddit_name} ---")
+        logger.info(f"\n--- Scraping {limit} hot posts from r/{self.subreddit_name} ---")
         
         check_rate_limit(reddit)
         
@@ -92,11 +102,11 @@ class UnifiedRedditScraper:
                 }
                 posts_list.append(post_data)
             
-            print(f"Successfully scraped {len(posts_list)} posts")
+            logger.info(f"Successfully scraped {len(posts_list)} posts")
             return posts_list
             
         except Exception as e:
-            print(f"Error scraping posts: {e}")
+            logger.error(f"Error scraping posts: {e}")
             return []
     
     def save_posts_to_db(self, posts_list):
@@ -140,13 +150,13 @@ class UnifiedRedditScraper:
             
             if bulk_operations:
                 result = posts_collection.bulk_write(bulk_operations, ordered=False)
-                print(f"Bulk operation: {result.upserted_count} new posts, {result.modified_count} updated posts")
+                logger.info(f"Bulk operation: {result.upserted_count} new posts, {result.modified_count} updated posts")
                 return result.upserted_count
             
             return 0
             
         except Exception as e:
-            print(f"Error saving posts: {e}")
+            logger.error(f"Error saving posts: {e}")
             return 0
     
     # ======================= COMMENTS SCRAPING =======================
@@ -189,11 +199,11 @@ class UnifiedRedditScraper:
                 ("created_utc", -1)
             ]).limit(limit))
             
-            print(f"Found {len(posts)} posts needing comment updates")
+            logger.info(f"Found {len(posts)} posts needing comment updates")
             return posts
             
         except Exception as e:
-            print(f"Error fetching posts needing updates: {e}")
+            logger.error(f"Error fetching posts needing updates: {e}")
             return []
     
     def get_existing_comment_ids(self, post_id):
@@ -205,18 +215,18 @@ class UnifiedRedditScraper:
             )
             return {doc["comment_id"] for doc in existing_comments}
         except Exception as e:
-            print(f"Error getting existing comment IDs: {e}")
+            logger.error(f"Error getting existing comment IDs: {e}")
             return set()
     
     def scrape_post_comments(self, post_id):
         """Scrape comments for a post, only collecting new ones."""
-        print(f"\n--- Scraping comments for post {post_id} ---")
+        logger.info(f"\n--- Scraping comments for post {post_id} ---")
         
         check_rate_limit(reddit)
         
         try:
             existing_comment_ids = self.get_existing_comment_ids(post_id)
-            print(f"Found {len(existing_comment_ids)} existing comments")
+            logger.info(f"Found {len(existing_comment_ids)} existing comments")
             
             submission = reddit.submission(id=post_id)
             submission.comments.replace_more(limit=10)
@@ -267,16 +277,16 @@ class UnifiedRedditScraper:
                             process_comment(reply, parent_id=comment.id, depth=depth + 1)
                             
                 except Exception as e:
-                    print(f"Error processing comment: {e}")
+                    logger.error(f"Error processing comment: {e}")
             
             for comment in submission.comments:
                 process_comment(comment, parent_id=None, depth=0)
             
-            print(f"Found {new_comments_count} new comments")
+            logger.info(f"Found {new_comments_count} new comments")
             return comments_data
             
         except Exception as e:
-            print(f"Error scraping comments: {e}")
+            logger.error(f"Error scraping comments: {e}")
             return []
     
     def save_comments_to_db(self, comments_list):
@@ -301,13 +311,13 @@ class UnifiedRedditScraper:
             
             if bulk_operations:
                 result = comments_collection.bulk_write(bulk_operations, ordered=False)
-                print(f"Saved {result.upserted_count} new comments, updated {result.modified_count}")
+                logger.info(f"Saved {result.upserted_count} new comments, updated {result.modified_count}")
                 return result.upserted_count
             
             return 0
             
         except Exception as e:
-            print(f"Error saving comments: {e}")
+            logger.error(f"Error saving comments: {e}")
             return 0
     
     def mark_posts_comments_updated(self, post_ids, is_initial_scrape=False):
@@ -339,21 +349,21 @@ class UnifiedRedditScraper:
             if bulk_operations:
                 result = posts_collection.bulk_write(bulk_operations, ordered=False)
                 action = "initially scraped" if is_initial_scrape else "updated"
-                print(f"Marked {result.modified_count} posts as {action}")
+                logger.info(f"Marked {result.modified_count} posts as {action}")
                 
         except Exception as e:
-            print(f"Error marking posts as updated: {e}")
+            logger.error(f"Error marking posts as updated: {e}")
     
     def scrape_comments_for_posts(self):
         """Main comment scraping function."""
-        print(f"\n{'='*60}")
-        print("COMMENT SCRAPING PHASE")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info("COMMENT SCRAPING PHASE")
+        logger.info(f"{'='*60}")
         
         posts = self.get_posts_needing_comment_updates(self.config["posts_per_comment_batch"])
         
         if not posts:
-            print("No posts need comment updates.")
+            logger.info("No posts need comment updates.")
             return 0, 0
         
         total_comments = 0
@@ -368,7 +378,7 @@ class UnifiedRedditScraper:
                 is_initial = not post.get("initial_comments_scraped", False)
                 action = "Initial scrape" if is_initial else "Update"
                 
-                print(f"\n{action} for: {post['title'][:50]}...")
+                logger.info(f"\n{action} for: {post['title'][:50]}...")
                 
                 comments = self.scrape_post_comments(post_id)
                 
@@ -383,7 +393,7 @@ class UnifiedRedditScraper:
                 time.sleep(2)  # Be respectful
                 
             except Exception as e:
-                print(f"Error processing post: {e}")
+                logger.error(f"Error processing post: {e}")
                 continue
         
         if all_comments:
@@ -394,7 +404,7 @@ class UnifiedRedditScraper:
         if update_posts:
             self.mark_posts_comments_updated(update_posts, is_initial_scrape=False)
         
-        print(f"\nComment scraping completed: {posts_processed} posts ({len(initial_scrape_posts)} initial, {len(update_posts)} updates), {total_comments} new comments")
+        logger.info(f"\nComment scraping completed: {posts_processed} posts ({len(initial_scrape_posts)} initial, {len(update_posts)} updates), {total_comments} new comments")
         return posts_processed, total_comments
     
     # ======================= SUBREDDIT METADATA =======================
@@ -408,7 +418,7 @@ class UnifiedRedditScraper:
             )
             
             if not latest_metadata:
-                print(f"No existing metadata for r/{self.subreddit_name}")
+                logger.info(f"No existing metadata for r/{self.subreddit_name}")
                 return True
             
             last_updated = latest_metadata.get("last_updated")
@@ -425,20 +435,20 @@ class UnifiedRedditScraper:
             should_update = time_since_update >= self.config["subreddit_update_interval"]
             
             if should_update:
-                print(f"Subreddit metadata last updated {time_since_update/3600:.1f} hours ago - updating")
+                logger.info(f"Subreddit metadata last updated {time_since_update/3600:.1f} hours ago - updating")
             else:
                 time_until_update = (self.config["subreddit_update_interval"] - time_since_update) / 3600
-                print(f"Subreddit metadata updated {time_since_update/3600:.1f} hours ago - next update in {time_until_update:.1f} hours")
+                logger.info(f"Subreddit metadata updated {time_since_update/3600:.1f} hours ago - next update in {time_until_update:.1f} hours")
             
             return should_update
             
         except Exception as e:
-            print(f"Error checking subreddit update status: {e}")
+            logger.error(f"Error checking subreddit update status: {e}")
             return True
     
     def scrape_subreddit_metadata(self):
         """Scrape subreddit metadata."""
-        print(f"\n--- Scraping metadata for r/{self.subreddit_name} ---")
+        logger.info(f"\n--- Scraping metadata for r/{self.subreddit_name} ---")
         
         check_rate_limit(reddit)
         
@@ -485,11 +495,11 @@ class UnifiedRedditScraper:
                 "last_updated": datetime.now(UTC)
             }
             
-            print(f"Subscribers: {metadata['subscribers']:,}, Active: {metadata['active_user_count']:,}")
+            logger.info(f"Subscribers: {metadata['subscribers']:,}, Active: {metadata['active_user_count']:,}")
             return metadata
             
         except Exception as e:
-            print(f"Error scraping subreddit metadata: {e}")
+            logger.error(f"Error scraping subreddit metadata: {e}")
             return None
     
     def save_subreddit_metadata(self, metadata):
@@ -507,14 +517,14 @@ class UnifiedRedditScraper:
             )
             
             if result.upserted_id:
-                print(f"Inserted new subreddit metadata")
+                logger.info(f"Inserted new subreddit metadata")
             else:
-                print(f"Updated existing subreddit metadata")
+                logger.info(f"Updated existing subreddit metadata")
             
             return True
             
         except Exception as e:
-            print(f"Error saving subreddit metadata: {e}")
+            logger.error(f"Error saving subreddit metadata: {e}")
             return False
     
     def update_subreddit_metadata_if_needed(self):
@@ -563,23 +573,23 @@ class UnifiedRedditScraper:
                 "subreddit_last_updated": subreddit_metadata.get("last_updated") if subreddit_metadata else None
             }
         except Exception as e:
-            print(f"Error getting stats: {e}")
+            logger.error(f"Error getting stats: {e}")
             return {}
     
     def print_stats(self):
         """Print current scraping statistics."""
         stats = self.get_scraping_stats()
         if stats:
-            print(f"\n{'='*60}")
-            print(f"SCRAPING STATISTICS FOR r/{stats['subreddit']}")
-            print(f"{'='*60}")
-            print(f"Total posts: {stats['total_posts']}")
-            print(f"Posts with initial comments: {stats['posts_with_initial_comments']}")
-            print(f"Posts without initial comments: {stats['posts_without_initial_comments']}")
-            print(f"Posts with recent updates: {stats['posts_with_recent_updates']}")
-            print(f"Total comments: {stats['total_comments']}")
-            print(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
-            print(f"Subreddit metadata: {'✓' if stats['subreddit_metadata_exists'] else '✗'}")
+            logger.info(f"\n{'='*60}")
+            logger.info(f"SCRAPING STATISTICS FOR r/{stats['subreddit']}")
+            logger.info(f"{'='*60}")
+            logger.info(f"Total posts: {stats['total_posts']}")
+            logger.info(f"Posts with initial comments: {stats['posts_with_initial_comments']}")
+            logger.info(f"Posts without initial comments: {stats['posts_without_initial_comments']}")
+            logger.info(f"Posts with recent updates: {stats['posts_with_recent_updates']}")
+            logger.info(f"Total comments: {stats['total_comments']}")
+            logger.info(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
+            logger.info(f"Subreddit metadata: {'✓' if stats['subreddit_metadata_exists'] else '✗'}")
             if stats['subreddit_last_updated']:
                 # Handle both timezone-aware and timezone-naive datetimes
                 current_time = datetime.now(UTC)
@@ -588,66 +598,64 @@ class UnifiedRedditScraper:
                     # Database has timezone-naive datetime, convert it to UTC
                     last_updated = last_updated.replace(tzinfo=UTC)
                 hours_ago = (current_time - last_updated).total_seconds() / 3600
-                print(f"Metadata last updated: {hours_ago:.1f} hours ago")
-            print(f"{'='*60}")
+                logger.info(f"Metadata last updated: {hours_ago:.1f} hours ago")
+            logger.info(f"{'='*60}")
     
     def run_continuous_scraping(self):
         """Main continuous scraping loop."""
-        print(f"\n🚀 Starting unified Reddit scraping for r/{self.subreddit_name}")
-        print(f"⏰ Scrape interval: {self.config['scrape_interval']} seconds")
-        print(f"📊 Posts per scrape: {self.config['posts_limit']}")
-        print(f"💬 Comments batch size: {self.config['posts_per_comment_batch']} posts")
-        print(f"🏢 Subreddit metadata interval: {self.config['subreddit_update_interval']/3600:.1f} hours")
-        print("Press Ctrl+C to stop\n")
+        logger.info(f"\n🚀 Starting unified Reddit scraping for r/{self.subreddit_name}")
+        logger.info(f"⏰ Scrape interval: {self.config['scrape_interval']} seconds")
+        logger.info(f"📊 Posts per scrape: {self.config['posts_limit']}")
+        logger.info(f"💬 Comments batch size: {self.config['posts_per_comment_batch']} posts")
+        logger.info(f"🏢 Subreddit metadata interval: {self.config['subreddit_update_interval']/3600:.1f} hours")
+        logger.info("Press Ctrl+C to stop\n")
         
         try:
             while True:
                 self.cycle_count += 1
                 start_time = time.time()
                 
-                print(f"\n{'='*80}")
-                print(f"SCRAPE CYCLE #{self.cycle_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"{'='*80}")
+                logger.info(f"\n{'='*80}")
+                logger.info(f"SCRAPE CYCLE #{self.cycle_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.info(f"{'='*80}")
                 
                 # PHASE 1: Scrape Posts
-                print(f"\n{'='*60}")
-                print("POST SCRAPING PHASE")
-                print(f"{'='*60}")
+                logger.info(f"\n{'='*60}")
+                logger.info("POST SCRAPING PHASE")
+                logger.info(f"{'='*60}")
                 
                 posts = self.scrape_hot_posts(self.config["posts_limit"])
                 new_posts = self.save_posts_to_db(posts)
                 
-                # PHASE 2: Scrape Comments
+                # PHASE 2: Scrape Comments for existing posts
                 posts_processed, total_comments = self.scrape_comments_for_posts()
                 
-                # PHASE 3: Update Subreddit Metadata (if needed)
-                print(f"\n{'='*60}")
-                print("SUBREDDIT METADATA PHASE")
-                print(f"{'='*60}")
-                
+                # PHASE 3: Update subreddit metadata (every 24 hours)
                 subreddit_updated = self.update_subreddit_metadata_if_needed()
                 
-                # Summary
+                # Calculate time taken
                 elapsed_time = time.time() - start_time
-                print(f"\n{'='*60}")
-                print("CYCLE SUMMARY")
-                print(f"{'='*60}")
-                print(f"Posts scraped: {len(posts)} ({new_posts} new)")
-                print(f"Comments processed: {posts_processed} posts, {total_comments} new comments")
-                print(f"Subreddit metadata: {'Updated' if subreddit_updated else 'No update needed'}")
-                print(f"Cycle completed in {elapsed_time:.2f} seconds")
+                
+                # Summary
+                logger.info(f"\n{'='*60}")
+                logger.info("CYCLE SUMMARY")
+                logger.info(f"{'='*60}")
+                logger.info(f"Posts scraped: {len(posts)} ({new_posts} new)")
+                logger.info(f"Comments processed: {posts_processed} posts, {total_comments} new comments")
+                logger.info(f"Subreddit metadata: {'Updated' if subreddit_updated else 'No update needed'}")
+                logger.info(f"Cycle completed in {elapsed_time:.2f} seconds")
                 
                 # Wait before next cycle
-                print(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
-                time.sleep(self.config["scrape_interval"])
+                logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
+                time.sleep(self.config['scrape_interval'])
                 
         except KeyboardInterrupt:
-            print(f"\n\nScraping stopped by user after {self.cycle_count} cycles")
+            logger.info(f"\n\nScraping stopped by user after {self.cycle_count} cycles")
         except Exception as e:
-            print(f"Unexpected error: {e}")
-            print("Restarting in 60 seconds...")
+            logger.error(f"Unexpected error: {e}")
+            logger.info("Restarting in 60 seconds...")
             time.sleep(60)
-            self.run_continuous_scraping()
+            self.run_continuous_scraping()  # Restart on error
 
 
 def main():
@@ -675,13 +683,13 @@ def main():
     if args.stats:
         scraper.print_stats()
     elif args.comments_only:
-        print(f"Running comment scraping only for r/{args.subreddit}...")
+        logger.info(f"Running comment scraping only for r/{args.subreddit}...")
         posts_processed, total_comments = scraper.scrape_comments_for_posts()
-        print(f"Completed: {posts_processed} posts, {total_comments} comments")
+        logger.info(f"Completed: {posts_processed} posts, {total_comments} comments")
     elif args.metadata_only:
-        print(f"Updating subreddit metadata for r/{args.subreddit}...")
+        logger.info(f"Updating subreddit metadata for r/{args.subreddit}...")
         updated = scraper.update_subreddit_metadata_if_needed()
-        print(f"Metadata: {'Updated' if updated else 'No update needed'}")
+        logger.info(f"Metadata: {'Updated' if updated else 'No update needed'}")
     else:
         # Show initial stats then run continuous scraping
         scraper.print_stats()

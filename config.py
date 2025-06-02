@@ -49,6 +49,13 @@ DOCKER_CONFIG = {
 
 # Security Configuration
 SECURITY_CONFIG = {
-    "encryption_key_file": "/tmp/.scraper_key",
+    "encryption_key_file": "/tmp/.scraper_key",  # Use /tmp for writable location
     "masked_credential_value": "***"
+}
+
+# Logging Configuration
+LOGGING_CONFIG = {
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "date_format": "%Y-%m-%d %H:%M:%S",
+    "level": "INFO"
 } 

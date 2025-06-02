@@ -25,15 +25,25 @@ import base64
 import hashlib
 from cryptography.fernet import Fernet
 import asyncio
+import logging
 
 # Import centralized configuration
 from config import (
     DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, 
-    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG
+    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG
 )
 
 # Load environment variables (fallback defaults)
 load_dotenv()
+
+# Configure logging with timestamps
+logging.basicConfig(
+    format=LOGGING_CONFIG["format"],
+    datefmt=LOGGING_CONFIG["date_format"],
+    level=getattr(logging, LOGGING_CONFIG["level"]),
+    force=True  # Override any existing logging configuration
+)
+logger = logging.getLogger("reddit-scraper-api")
 
 app = FastAPI(
     title=API_CONFIG["title"],
@@ -145,11 +155,11 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             upsert=True
         )
         
-        print(f"Saved scraper configuration for r/{subreddit} to database")
+        logger.info(f"Saved scraper configuration for r/{subreddit} to database")
         return True
         
     except Exception as e:
-        print(f"Error saving scraper to database: {e}")
+        logger.error(f"Error saving scraper to database: {e}")
         return False
 
 def load_scraper_from_db(subreddit: str) -> Optional[dict]:
@@ -191,7 +201,7 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
         }
         
     except Exception as e:
-        print(f"Error loading scraper from database: {e}")
+        logger.error(f"Error loading scraper from database: {e}")
         return None
 
 def update_scraper_status(subreddit: str, status: str, container_id: str = None, 
@@ -230,7 +240,7 @@ def update_scraper_status(subreddit: str, status: str, container_id: str = None,
         return result.modified_count > 0
         
     except Exception as e:
-        print(f"Error updating scraper status: {e}")
+        logger.error(f"Error updating scraper status: {e}")
         return False
 
 def load_all_scrapers_from_db():
@@ -260,10 +270,10 @@ def load_all_scrapers_from_db():
                     "last_error": scraper_data["last_error"]
                 }
         
-        print(f"Loaded {len(active_scrapers)} scrapers from database")
+        logger.info(f"Loaded {len(active_scrapers)} scrapers from database")
         
     except Exception as e:
-        print(f"Error loading scrapers from database: {e}")
+        logger.error(f"Error loading scrapers from database: {e}")
 
 def check_for_failed_scrapers():
     """Background task to check for failed containers and restart if needed"""
@@ -281,7 +291,7 @@ def check_for_failed_scrapers():
                     container_status = check_container_status(container_name)
                     
                     if container_status != "running":
-                        print(f"Detected failed container for r/{subreddit}, attempting restart...")
+                        logger.info(f"Detected failed container for r/{subreddit}, attempting restart...")
                         
                         # Load full config from database
                         scraper_data = load_scraper_from_db(subreddit)
@@ -316,7 +326,7 @@ def check_for_failed_scrapers():
                     
                     time_since_update = (current_time - last_updated_utc).total_seconds()
                     if time_since_update > MONITORING_CONFIG["restart_cooldown"]:
-                        print(f"Auto-restarting stopped scraper for r/{subreddit}...")
+                        logger.info(f"Auto-restarting stopped scraper for r/{subreddit}...")
                         
                         scraper_data = load_scraper_from_db(subreddit)
                         if scraper_data and scraper_data["config"]:
@@ -326,13 +336,13 @@ def check_for_failed_scrapers():
             time.sleep(MONITORING_CONFIG["check_interval"])
             
         except Exception as e:
-            print(f"Error in failed scraper check: {e}")
+            logger.error(f"Error in failed scraper check: {e}")
             time.sleep(60)
 
 def restart_scraper(config: ScraperConfig, subreddit: str):
     """Restart a failed scraper"""
     try:
-        print(f"Restarting scraper for r/{subreddit}")
+        logger.info(f"Restarting scraper for r/{subreddit}")
         
         # Stop any existing container first using centralized naming
         container_name = f"{DOCKER_CONFIG['container_prefix']}{subreddit}"
@@ -345,7 +355,7 @@ def restart_scraper(config: ScraperConfig, subreddit: str):
         run_scraper(config)
         
     except Exception as e:
-        print(f"Error restarting scraper for r/{subreddit}: {e}")
+        logger.error(f"Error restarting scraper for r/{subreddit}: {e}")
         update_scraper_status(subreddit, "error", last_error=f"Restart failed: {str(e)}")
 
 # Start background monitoring thread
@@ -433,11 +443,11 @@ def run_scraper(config: ScraperConfig):
             "last_error": None
         }
         
-        print(f"Started container {container_name} ({container_id[:12]}) for r/{config.subreddit}")
+        logger.info(f"Started container {container_name} ({container_id[:12]}) for r/{config.subreddit}")
         
     except Exception as e:
         error_msg = f"Error starting container for r/{config.subreddit}: {e}"
-        print(error_msg)
+        logger.error(error_msg)
         update_scraper_status(config.subreddit, "error", last_error=str(e))
         if config.subreddit in active_scrapers:
             active_scrapers[config.subreddit]["status"] = "error"
@@ -979,7 +989,7 @@ async def list_scrapers():
             }
     
     except Exception as e:
-        print(f"Error listing scrapers from database: {e}")
+        logger.error(f"Error listing scrapers from database: {e}")
         # Fallback to memory cache
         for subreddit, info in active_scrapers.items():
             # Check if container is still running
@@ -1019,7 +1029,7 @@ async def start_scraper(config: ScraperConfig, background_tasks: BackgroundTasks
                 raise HTTPException(status_code=400, detail="Scraper already running for this subreddit")
         
         # If not running, we can restart with new config
-        print(f"Updating existing scraper configuration for r/{config.subreddit}")
+        logger.info(f"Updating existing scraper configuration for r/{config.subreddit}")
     
     # Validate required credentials are provided
     if not all([
@@ -1092,7 +1102,7 @@ async def stop_scraper(subreddit: str):
                 update_scraper_status(subreddit, "stopped")
                 if subreddit in active_scrapers:
                     active_scrapers[subreddit]["status"] = "stopped"
-                print(f"Stopped container {container_name} for r/{subreddit}")
+                logger.info(f"Stopped container {container_name} for r/{subreddit}")
             else:
                 # Try force kill if stop didn't work
                 subprocess.run([
@@ -1101,7 +1111,7 @@ async def stop_scraper(subreddit: str):
                 update_scraper_status(subreddit, "stopped")
                 if subreddit in active_scrapers:
                     active_scrapers[subreddit]["status"] = "stopped"
-                print(f"Force killed container {container_name} for r/{subreddit}")
+                logger.info(f"Force killed container {container_name} for r/{subreddit}")
                 
         except subprocess.TimeoutExpired:
             # Force kill if timeout
@@ -1111,7 +1121,7 @@ async def stop_scraper(subreddit: str):
             update_scraper_status(subreddit, "stopped")
             if subreddit in active_scrapers:
                 active_scrapers[subreddit]["status"] = "stopped"
-            print(f"Timeout - force killed container {container_name} for r/{subreddit}")
+            logger.info(f"Timeout - force killed container {container_name} for r/{subreddit}")
         except Exception as e:
             update_scraper_status(subreddit, "error", last_error=f"Error stopping container: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error stopping container: {str(e)}")
@@ -1378,7 +1388,7 @@ async def restart_all_failed_scrapers(background_tasks: BackgroundTasks):
             subreddit = scraper_doc["subreddit"]
             scraper_data = load_scraper_from_db(subreddit)
             if scraper_data and scraper_data["config"]:
-                print(f"Manually restarting failed scraper for r/{subreddit}")
+                logger.info(f"Manually restarting failed scraper for r/{subreddit}")
                 background_tasks.add_task(restart_scraper, scraper_data["config"], subreddit)
                 restarted_count += 1
         

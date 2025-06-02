@@ -1,4 +1,17 @@
 import time
+import logging
+
+# Import centralized configuration
+from config import LOGGING_CONFIG
+
+# Configure logging with timestamps
+logging.basicConfig(
+    format=LOGGING_CONFIG["format"],
+    datefmt=LOGGING_CONFIG["date_format"],
+    level=getattr(logging, LOGGING_CONFIG["level"]),
+    force=True  # Override any existing logging configuration
+)
+logger = logging.getLogger("rate-limits")
 
 
 def check_rate_limit(reddit, min_remaining=50):
@@ -20,22 +33,22 @@ def check_rate_limit(reddit, min_remaining=50):
         
         # Handle None values
         if remaining is None or used is None or reset_time is None:
-            print("Rate limit info not available, adding precautionary delay...")
+            logger.info("Rate limit info not available, adding precautionary delay...")
             time.sleep(1)
             return None
             
         time_until_reset = reset_time - time.time()
         
-        print(f"Rate limit - Remaining: {remaining}, Used: {used}, Reset in: {time_until_reset:.1f}s")
+        logger.info(f"Rate limit - Remaining: {remaining}, Used: {used}, Reset in: {time_until_reset:.1f}s")
         
         # If we're running low on requests, wait for reset
         if remaining <= min_remaining:
             if time_until_reset > 0:
-                print(f"Rate limit low ({remaining} remaining). Waiting {time_until_reset:.1f} seconds for reset...")
+                logger.info(f"Rate limit low ({remaining} remaining). Waiting {time_until_reset:.1f} seconds for reset...")
                 time.sleep(time_until_reset + 5)  # Add 5 seconds buffer
-                print("Rate limit reset. Continuing...")
+                logger.info("Rate limit reset. Continuing...")
             else:
-                print("Rate limit reset time has passed. Continuing...")
+                logger.info("Rate limit reset time has passed. Continuing...")
         
         return {
             'remaining': remaining,
@@ -43,7 +56,7 @@ def check_rate_limit(reddit, min_remaining=50):
             'reset_in_seconds': time_until_reset
         }
     except Exception as e:
-        print(f"Error checking rate limit: {e}")
+        logger.error(f"Error checking rate limit: {e}")
         # If we can't check rate limits, add a small delay as precaution
         time.sleep(1)
         return None

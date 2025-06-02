@@ -5,11 +5,21 @@ import pymongo
 import os
 import time
 from rate_limits import check_rate_limit
+import logging
 
 # Import centralized configuration
-from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG
+from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
 
 load_dotenv()
+
+# Configure logging with timestamps
+logging.basicConfig(
+    format=LOGGING_CONFIG["format"],
+    datefmt=LOGGING_CONFIG["date_format"],
+    level=getattr(logging, LOGGING_CONFIG["level"]),
+    force=True  # Override any existing logging configuration
+)
+logger = logging.getLogger("subreddit-metadata")
 
 # MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
@@ -39,7 +49,7 @@ def scrape_subreddit_metadata(subreddit_name):
     Returns:
         dict: Subreddit metadata dictionary
     """
-    print(f"\n--- Scraping metadata for r/{subreddit_name} ---")
+    logger.info(f"\n--- Scraping metadata for r/{subreddit_name} ---")
     
     # Check rate limits before making API calls
     check_rate_limit(reddit)
@@ -88,17 +98,17 @@ def scrape_subreddit_metadata(subreddit_name):
             "last_updated": datetime.now(UTC)
         }
         
-        print(f"Successfully scraped metadata for r/{subreddit_name}")
-        print(f"Subscribers: {metadata['subscribers']:,}")
-        print(f"Active users: {metadata['active_user_count']:,}")
-        print(f"Created: {metadata['created_datetime'].strftime('%Y-%m-%d')}")
-        print(f"Over 18: {metadata['over_18']}")
-        print(f"Language: {metadata['lang']}")
+        logger.info(f"Successfully scraped metadata for r/{subreddit_name}")
+        logger.info(f"Subscribers: {metadata['subscribers']:,}")
+        logger.info(f"Active users: {metadata['active_user_count']:,}")
+        logger.info(f"Created: {metadata['created_datetime'].strftime('%Y-%m-%d')}")
+        logger.info(f"Over 18: {metadata['over_18']}")
+        logger.info(f"Language: {metadata['lang']}")
         
         return metadata
         
     except Exception as e:
-        print(f"Error scraping subreddit metadata: {e}")
+        logger.error(f"Error scraping subreddit metadata: {e}")
         return None
 
 
@@ -127,14 +137,14 @@ def save_subreddit_metadata(metadata):
         )
         
         if result.upserted_id:
-            print(f"✅ Inserted new subreddit metadata for r/{metadata['subreddit_name']}")
+            logger.info(f"✅ Inserted new subreddit metadata for r/{metadata['subreddit_name']}")
         else:
-            print(f"🔄 Updated existing subreddit metadata for r/{metadata['subreddit_name']}")
+            logger.info(f"🔄 Updated existing subreddit metadata for r/{metadata['subreddit_name']}")
         
         return True
         
     except Exception as e:
-        print(f"❌ Error saving subreddit metadata: {e}")
+        logger.error(f"❌ Error saving subreddit metadata: {e}")
         return False
 
 
@@ -156,7 +166,7 @@ def should_update_subreddit_metadata(subreddit_name):
         )
         
         if not latest_metadata:
-            print(f"📋 No existing metadata found for r/{subreddit_name}")
+            logger.info(f"📋 No existing metadata found for r/{subreddit_name}")
             return True
         
         # Check if enough time has passed since last update
@@ -174,15 +184,15 @@ def should_update_subreddit_metadata(subreddit_name):
         should_update = time_since_update >= SUBREDDIT_SCRAPE_INTERVAL
         
         if should_update:
-            print(f"⏰ Last subreddit update was {time_since_update/3600:.1f} hours ago - updating")
+            logger.info(f"⏰ Last subreddit update was {time_since_update/3600:.1f} hours ago - updating")
         else:
             time_until_update = (SUBREDDIT_SCRAPE_INTERVAL - time_since_update) / 3600
-            print(f"⏳ Subreddit updated {time_since_update/3600:.1f} hours ago - next update in {time_until_update:.1f} hours")
+            logger.info(f"⏳ Subreddit updated {time_since_update/3600:.1f} hours ago - next update in {time_until_update:.1f} hours")
         
         return should_update
         
     except Exception as e:
-        print(f"❌ Error checking subreddit update status: {e}")
+        logger.error(f"❌ Error checking subreddit update status: {e}")
         return True  # Default to updating if we can't check
 
 
@@ -224,7 +234,7 @@ def get_subreddit_metadata_stats():
             "subreddits": subreddits
         }
     except Exception as e:
-        print(f"❌ Error getting subreddit stats: {e}")
+        logger.error(f"❌ Error getting subreddit stats: {e}")
         return {}
 
 
@@ -232,15 +242,15 @@ def print_subreddit_stats():
     """Print current subreddit metadata statistics."""
     stats = get_subreddit_metadata_stats()
     if stats:
-        print(f"\n{'='*60}")
-        print("SUBREDDIT METADATA STATISTICS")
-        print(f"{'='*60}")
-        print(f"Total subreddits tracked: {stats['total_subreddits']}")
+        logger.info(f"\n{'='*60}")
+        logger.info("SUBREDDIT METADATA STATISTICS")
+        logger.info(f"{'='*60}")
+        logger.info(f"Total subreddits tracked: {stats['total_subreddits']}")
         
         if stats['subreddits']:
-            print(f"\nRecent subreddit updates:")
-            print(f"{'Subreddit':<20} {'Last Updated':<20} {'Subscribers':<12} {'Active':<8}")
-            print(f"{'-'*60}")
+            logger.info(f"\nRecent subreddit updates:")
+            logger.info(f"{'Subreddit':<20} {'Last Updated':<20} {'Subscribers':<12} {'Active':<8}")
+            logger.info(f"{'-'*60}")
             
             for sub in stats['subreddits'][:10]:  # Show last 10
                 last_updated = sub.get('last_updated', 'Never')
@@ -256,9 +266,9 @@ def print_subreddit_stats():
                 subscribers = sub.get('subscribers', 0)
                 active = sub.get('active_user_count', 0)
                 
-                print(f"r/{sub['subreddit_name']:<19} {str(last_updated):<20} {subscribers:<12,} {active:<8,}")
+                logger.info(f"r/{sub['subreddit_name']:<19} {str(last_updated):<20} {subscribers:<12,} {active:<8,}")
         
-        print(f"{'='*60}")
+        logger.info(f"{'='*60}")
 
 
 def scrape_multiple_subreddits(subreddit_names, force_update=False):
@@ -272,8 +282,8 @@ def scrape_multiple_subreddits(subreddit_names, force_update=False):
     Returns:
         dict: Results summary
     """
-    print(f"\n🚀 Starting batch subreddit metadata scraping...")
-    print(f"📋 Subreddits to process: {len(subreddit_names)}")
+    logger.info(f"\n🚀 Starting batch subreddit metadata scraping...")
+    logger.info(f"📋 Subreddits to process: {len(subreddit_names)}")
     
     results = {
         "total": len(subreddit_names),
@@ -283,7 +293,7 @@ def scrape_multiple_subreddits(subreddit_names, force_update=False):
     }
     
     for i, subreddit_name in enumerate(subreddit_names, 1):
-        print(f"\n📊 Processing {i}/{len(subreddit_names)}: r/{subreddit_name}")
+        logger.info(f"\n📊 Processing {i}/{len(subreddit_names)}: r/{subreddit_name}")
         
         try:
             if force_update or should_update_subreddit_metadata(subreddit_name):
@@ -299,17 +309,17 @@ def scrape_multiple_subreddits(subreddit_names, force_update=False):
             time.sleep(2)
             
         except Exception as e:
-            print(f"❌ Error processing r/{subreddit_name}: {e}")
+            logger.error(f"❌ Error processing r/{subreddit_name}: {e}")
             results["errors"] += 1
     
-    print(f"\n{'='*50}")
-    print("BATCH SCRAPING SUMMARY")
-    print(f"{'='*50}")
-    print(f"Total subreddits: {results['total']}")
-    print(f"Updated: {results['updated']}")
-    print(f"Skipped: {results['skipped']}")
-    print(f"Errors: {results['errors']}")
-    print(f"{'='*50}")
+    logger.info(f"\n{'='*50}")
+    logger.info("BATCH SCRAPING SUMMARY")
+    logger.info(f"{'='*50}")
+    logger.info(f"Total subreddits: {results['total']}")
+    logger.info(f"Updated: {results['updated']}")
+    logger.info(f"Skipped: {results['skipped']}")
+    logger.info(f"Errors: {results['errors']}")
+    logger.info(f"{'='*50}")
     
     return results
 
@@ -317,7 +327,7 @@ def scrape_multiple_subreddits(subreddit_names, force_update=False):
 if __name__ == "__main__":
     import sys
     
-    print(f"🔗 Authenticated as: {reddit.user.me()}")
+    logger.info(f"🔗 Authenticated as: {reddit.user.me()}")
     
     if len(sys.argv) > 1:
         command = sys.argv[1]
@@ -334,37 +344,37 @@ if __name__ == "__main__":
             if len(subreddits) == 1:
                 # Single subreddit
                 subreddit_name = subreddits[0].strip()
-                print(f"🎯 Scraping metadata for r/{subreddit_name}...")
+                logger.info(f"🎯 Scraping metadata for r/{subreddit_name}...")
                 
                 if force_update:
                     metadata = scrape_subreddit_metadata(subreddit_name)
                     if metadata:
                         updated = save_subreddit_metadata(metadata)
-                        print(f"✅ Force updated r/{subreddit_name}")
+                        logger.info(f"✅ Force updated r/{subreddit_name}")
                     else:
-                        print(f"❌ Failed to scrape r/{subreddit_name}")
+                        logger.error(f"❌ Failed to scrape r/{subreddit_name}")
                 else:
                     updated = scrape_and_save_subreddit_metadata(subreddit_name)
-                    print(f"📊 r/{subreddit_name}: {'Updated' if updated else 'No update needed'}")
+                    logger.info(f"📊 r/{subreddit_name}: {'Updated' if updated else 'No update needed'}")
             else:
                 # Multiple subreddits
                 subreddits = [s.strip() for s in subreddits]
                 scrape_multiple_subreddits(subreddits, force_update)
         
         elif command == "--help":
-            print("\n📖 Usage:")
-            print("  python scrape_subreddit_metadata.py --stats                    # Show statistics")
-            print("  python scrape_subreddit_metadata.py --scrape wallstreetbets    # Scrape single subreddit")
-            print("  python scrape_subreddit_metadata.py --scrape sub1,sub2,sub3   # Scrape multiple subreddits")
-            print("  python scrape_subreddit_metadata.py --scrape subreddit --force # Force update regardless of time")
-            print("  python scrape_subreddit_metadata.py --help                     # Show this help")
+            logger.info("\n📖 Usage:")
+            logger.info("  python scrape_subreddit_metadata.py --stats                    # Show statistics")
+            logger.info("  python scrape_subreddit_metadata.py --scrape wallstreetbets    # Scrape single subreddit")
+            logger.info("  python scrape_subreddit_metadata.py --scrape sub1,sub2,sub3   # Scrape multiple subreddits")
+            logger.info("  python scrape_subreddit_metadata.py --scrape subreddit --force # Force update regardless of time")
+            logger.info("  python scrape_subreddit_metadata.py --help                     # Show this help")
         
         else:
-            print("❌ Invalid command. Use --help for usage instructions.")
+            logger.error("❌ Invalid command. Use --help for usage instructions.")
     
     else:
         # Default: show stats and scrape wallstreetbets if needed
         print_subreddit_stats()
-        print(f"\n🎯 Checking r/wallstreetbets metadata...")
+        logger.info(f"\n🎯 Checking r/wallstreetbets metadata...")
         updated = scrape_and_save_subreddit_metadata("wallstreetbets")
-        print(f"📊 Wallstreetbets metadata: {'Updated' if updated else 'No update needed'}") 
+        logger.info(f"📊 Wallstreetbets metadata: {'Updated' if updated else 'No update needed'}") 

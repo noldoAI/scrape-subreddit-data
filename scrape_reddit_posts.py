@@ -6,11 +6,21 @@ import os
 import time
 from rate_limits import check_rate_limit
 from praw.models import MoreComments
+import logging
 
 # Import centralized configuration
-from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG
+from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
 
 load_dotenv()
+
+# Configure logging with timestamps
+logging.basicConfig(
+    format=LOGGING_CONFIG["format"],
+    datefmt=LOGGING_CONFIG["date_format"],
+    level=getattr(logging, LOGGING_CONFIG["level"]),
+    force=True  # Override any existing logging configuration
+)
+logger = logging.getLogger("reddit-posts")
 
 # MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
@@ -46,7 +56,7 @@ def scrape_hot_posts(subreddit_name, limit=1000):
     Returns:
         list: List of post dictionaries
     """
-    print(f"\n--- Scraping {limit} hot posts from r/{subreddit_name} ---")
+    logger.info(f"\n--- Scraping {limit} hot posts from r/{subreddit_name} ---")
     
     # Check rate limits before making API calls
     check_rate_limit(reddit)
@@ -86,11 +96,11 @@ def scrape_hot_posts(subreddit_name, limit=1000):
             }
             posts_list.append(post_data)
         
-        print(f"Successfully scraped {len(posts_list)} posts")
+        logger.info(f"Successfully scraped {len(posts_list)} posts")
         return posts_list
         
     except Exception as e:
-        print(f"Error scraping posts: {e}")
+        logger.error(f"Error scraping posts: {e}")
         return []
 
 
@@ -151,13 +161,13 @@ def save_posts_to_db(posts_list):
             new_posts = result.upserted_count
             modified_posts = result.modified_count
             
-            print(f"Bulk operation completed: {new_posts} new posts, {modified_posts} updated posts")
+            logger.info(f"Bulk operation completed: {new_posts} new posts, {modified_posts} updated posts")
             return new_posts
         else:
             return 0
         
     except Exception as e:
-        print(f"Error saving posts to database: {e}")
+        logger.error(f"Error saving posts to database: {e}")
         return 0
 
 
@@ -214,11 +224,11 @@ def get_posts_needing_comment_updates(limit=20):
             ("created_utc", -1)               # Then newest first
         ]).limit(limit))
         
-        print(f"Found {len(posts)} posts needing comment updates")
+        logger.info(f"Found {len(posts)} posts needing comment updates")
         return posts
         
     except Exception as e:
-        print(f"Error fetching posts needing updates: {e}")
+        logger.error(f"Error fetching posts needing updates: {e}")
         return []
 
 
@@ -239,7 +249,7 @@ def get_existing_comment_ids(post_id):
         )
         return {doc["comment_id"] for doc in existing_comments}
     except Exception as e:
-        print(f"Error getting existing comment IDs for post {post_id}: {e}")
+        logger.error(f"Error getting existing comment IDs for post {post_id}: {e}")
         return set()
 
 
@@ -253,7 +263,7 @@ def scrape_post_comments(post_id):
     Returns:
         list: List of new comment dictionaries
     """
-    print(f"\n--- Scraping comments for post {post_id} ---")
+    logger.info(f"\n--- Scraping comments for post {post_id} ---")
     
     # Check rate limits before making API calls
     check_rate_limit(reddit)
@@ -261,7 +271,7 @@ def scrape_post_comments(post_id):
     try:
         # Get existing comment IDs to avoid duplicates
         existing_comment_ids = get_existing_comment_ids(post_id)
-        print(f"Found {len(existing_comment_ids)} existing comments for this post")
+        logger.info(f"Found {len(existing_comment_ids)} existing comments for this post")
         
         # Get the submission
         submission = reddit.submission(id=post_id)
@@ -320,17 +330,17 @@ def scrape_post_comments(post_id):
                         process_comment(reply, parent_id=comment.id, depth=depth + 1)
                         
             except Exception as e:
-                print(f"Error processing comment {getattr(comment, 'id', 'unknown')}: {e}")
+                logger.error(f"Error processing comment {getattr(comment, 'id', 'unknown')}: {e}")
         
         # Process all top-level comments
         for comment in submission.comments:
             process_comment(comment, parent_id=None, depth=0)
         
-        print(f"Found {new_comments_count} new comments (out of {len(comments_data)} processed)")
+        logger.info(f"Found {new_comments_count} new comments (out of {len(comments_data)} processed)")
         return comments_data
         
     except Exception as e:
-        print(f"Error scraping comments for post {post_id}: {e}")
+        logger.error(f"Error scraping comments for post {post_id}: {e}")
         return []
 
 
@@ -371,13 +381,13 @@ def save_comments_to_db(comments_list):
             new_comments = result.upserted_count
             modified_comments = result.modified_count
             
-            print(f"Bulk operation completed: {new_comments} new comments, {modified_comments} updated comments")
+            logger.info(f"Bulk operation completed: {new_comments} new comments, {modified_comments} updated comments")
             return new_comments
         else:
             return 0
         
     except Exception as e:
-        print(f"Error saving comments to database: {e}")
+        logger.error(f"Error saving comments to database: {e}")
         return 0
 
 
@@ -397,7 +407,7 @@ def mark_post_comments_scraped(post_id):
             }}
         )
     except Exception as e:
-        print(f"Error marking post {post_id} as scraped: {e}")
+        logger.error(f"Error marking post {post_id} as scraped: {e}")
 
 
 def mark_posts_comments_updated(post_ids, is_initial_scrape=False):
@@ -438,10 +448,10 @@ def mark_posts_comments_updated(post_ids, is_initial_scrape=False):
         if bulk_operations:
             result = posts_collection.bulk_write(bulk_operations, ordered=False)
             action = "initially scraped" if is_initial_scrape else "updated"
-            print(f"Marked {result.modified_count} posts as comments {action}")
+            logger.info(f"Marked {result.modified_count} posts as comments {action}")
         
     except Exception as e:
-        print(f"Error marking posts as updated: {e}")
+        logger.error(f"Error marking posts as updated: {e}")
 
 
 def scrape_comments_for_posts():
@@ -451,15 +461,15 @@ def scrape_comments_for_posts():
     Returns:
         tuple: (posts_processed, total_comments)
     """
-    print(f"\n{'='*60}")
-    print("COMMENT SCRAPING PHASE")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info("COMMENT SCRAPING PHASE")
+    logger.info(f"{'='*60}")
     
     # Get posts that need comment scraping or updates
     posts = get_posts_needing_comment_updates(POSTS_PER_COMMENT_BATCH)
     
     if not posts:
-        print("No posts found that need comment updates.")
+        logger.info("No posts found that need comment updates.")
         return 0, 0
     
     total_comments = 0
@@ -475,7 +485,7 @@ def scrape_comments_for_posts():
             is_initial = not post.get("initial_comments_scraped", False)
             action = "Initial scrape" if is_initial else "Update"
             
-            print(f"\n{action} for post: {post['title'][:50]}...")
+            logger.info(f"\n{action} for post: {post['title'][:50]}...")
             
             # Scrape comments for this post (will only get new ones)
             comments = scrape_post_comments(post_id)
@@ -492,7 +502,7 @@ def scrape_comments_for_posts():
             time.sleep(2)
             
         except Exception as e:
-            print(f"Error processing post {post.get('post_id', 'unknown')}: {e}")
+            logger.error(f"Error processing post {post.get('post_id', 'unknown')}: {e}")
             continue
     
     # Bulk save all comments at once
@@ -508,7 +518,7 @@ def scrape_comments_for_posts():
     
     initial_count = len(initial_scrape_posts)
     update_count = len(update_posts)
-    print(f"\nComment scraping completed: {posts_processed} posts ({initial_count} initial, {update_count} updates), {total_comments} new comments")
+    logger.info(f"\nComment scraping completed: {posts_processed} posts ({initial_count} initial, {update_count} updates), {total_comments} new comments")
     return posts_processed, total_comments
 
 
@@ -516,11 +526,11 @@ def continuous_scrape():
     """
     Continuously scrape posts and comments in the correct order.
     """
-    print(f"Starting unified Reddit scraping for r/{SUB}")
-    print(f"Scrape interval: {SCRAPE_INTERVAL} seconds")
-    print(f"Posts per scrape: {POSTS_LIMIT}")
-    print(f"Comments batch size: {POSTS_PER_COMMENT_BATCH} posts")
-    print("Press Ctrl+C to stop\n")
+    logger.info(f"Starting unified Reddit scraping for r/{SUB}")
+    logger.info(f"Scrape interval: {SCRAPE_INTERVAL} seconds")
+    logger.info(f"Posts per scrape: {POSTS_LIMIT}")
+    logger.info(f"Comments batch size: {POSTS_PER_COMMENT_BATCH} posts")
+    logger.info("Press Ctrl+C to stop\n")
     
     cycle_count = 0
     
@@ -529,14 +539,14 @@ def continuous_scrape():
             cycle_count += 1
             start_time = time.time()
             
-            print(f"\n{'='*80}")
-            print(f"SCRAPE CYCLE #{cycle_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"{'='*80}")
+            logger.info(f"\n{'='*80}")
+            logger.info(f"SCRAPE CYCLE #{cycle_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"{'='*80}")
             
             # PHASE 1: Scrape Posts
-            print(f"\n{'='*60}")
-            print("POST SCRAPING PHASE")
-            print(f"{'='*60}")
+            logger.info(f"\n{'='*60}")
+            logger.info("POST SCRAPING PHASE")
+            logger.info(f"{'='*60}")
             
             posts = scrape_hot_posts(SUB, POSTS_LIMIT)
             new_posts = save_posts_to_db(posts)
@@ -548,22 +558,22 @@ def continuous_scrape():
             elapsed_time = time.time() - start_time
             
             # Summary
-            print(f"\n{'='*60}")
-            print("CYCLE SUMMARY")
-            print(f"{'='*60}")
-            print(f"Posts scraped: {len(posts)} ({new_posts} new)")
-            print(f"Comments processed: {posts_processed} posts, {total_comments} new comments")
-            print(f"Cycle completed in {elapsed_time:.2f} seconds")
+            logger.info(f"\n{'='*60}")
+            logger.info("CYCLE SUMMARY")
+            logger.info(f"{'='*60}")
+            logger.info(f"Posts scraped: {len(posts)} ({new_posts} new)")
+            logger.info(f"Comments processed: {posts_processed} posts, {total_comments} new comments")
+            logger.info(f"Cycle completed in {elapsed_time:.2f} seconds")
             
             # Wait before next cycle
-            print(f"\nWaiting {SCRAPE_INTERVAL} seconds before next cycle...")
+            logger.info(f"\nWaiting {SCRAPE_INTERVAL} seconds before next cycle...")
             time.sleep(SCRAPE_INTERVAL)
             
     except KeyboardInterrupt:
-        print(f"\n\nScraping stopped by user after {cycle_count} cycles")
+        logger.info(f"\n\nScraping stopped by user after {cycle_count} cycles")
     except Exception as e:
-        print(f"Unexpected error: {e}")
-        print("Restarting in 60 seconds...")
+        logger.error(f"Unexpected error: {e}")
+        logger.info("Restarting in 60 seconds...")
         time.sleep(60)
         continuous_scrape()  # Restart on error
 
@@ -598,7 +608,7 @@ def get_scraping_stats():
             "initial_completion_rate": (posts_with_initial_comments / total_posts * 100) if total_posts > 0 else 0
         }
     except Exception as e:
-        print(f"Error getting stats: {e}")
+        logger.error(f"Error getting stats: {e}")
         return {}
 
 
@@ -606,16 +616,16 @@ def print_stats():
     """Print current scraping statistics."""
     stats = get_scraping_stats()
     if stats:
-        print(f"\n{'='*50}")
-        print("CURRENT SCRAPING STATISTICS")
-        print(f"{'='*50}")
-        print(f"Total posts: {stats['total_posts']}")
-        print(f"Posts with initial comments scraped: {stats['posts_with_initial_comments']}")
-        print(f"Posts without initial comments: {stats['posts_without_initial_comments']}")
-        print(f"Posts with recent updates: {stats['posts_with_recent_updates']}")
-        print(f"Total comments: {stats['total_comments']}")
-        print(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
-        print(f"{'='*50}")
+        logger.info(f"\n{'='*50}")
+        logger.info("CURRENT SCRAPING STATISTICS")
+        logger.info(f"{'='*50}")
+        logger.info(f"Total posts: {stats['total_posts']}")
+        logger.info(f"Posts with initial comments scraped: {stats['posts_with_initial_comments']}")
+        logger.info(f"Posts without initial comments: {stats['posts_without_initial_comments']}")
+        logger.info(f"Posts with recent updates: {stats['posts_with_recent_updates']}")
+        logger.info(f"Total comments: {stats['total_comments']}")
+        logger.info(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
+        logger.info(f"{'='*50}")
 
 
 if __name__ == "__main__":
@@ -626,9 +636,9 @@ if __name__ == "__main__":
         print_stats()
     elif len(sys.argv) > 1 and sys.argv[1] == "--comments-only":
         # Run comment scraping only
-        print("Running comment scraping only...")
+        logger.info("Running comment scraping only...")
         posts_processed, total_comments = scrape_comments_for_posts()
-        print(f"Completed: {posts_processed} posts, {total_comments} comments")
+        logger.info(f"Completed: {posts_processed} posts, {total_comments} comments")
     else:
         # Run full continuous scraping
         print_stats()  # Show initial stats
