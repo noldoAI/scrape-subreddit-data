@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  reddit-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    container_name: reddit-scraper
+    env_file:
+      - .env
+    environment:
+      # Override with your target subreddit
+      - TARGET_SUBREDDIT=${TARGET_SUBREDDIT:-wallstreetbets}
+    restart: unless-stopped
+    command: >
+      python reddit_scraper.py ${TARGET_SUBREDDIT:-wallstreetbets}
+      --posts-limit ${POSTS_LIMIT:-1000}
+      --interval ${SCRAPE_INTERVAL:-300}
+      --comment-batch ${COMMENT_BATCH:-20}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import reddit_scraper; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

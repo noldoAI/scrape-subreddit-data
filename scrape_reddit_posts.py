@@ -32,7 +32,7 @@ print(f"Authenticated as: {reddit.user.me()}")
 SUB = "wallstreetbets"
 SCRAPE_INTERVAL = 10  # 5 minutes between full cycles
 POSTS_LIMIT = 1000
-POSTS_PER_COMMENT_BATCH = 20  # Process comments for 20 posts at a time
+POSTS_PER_COMMENT_BATCH = 100  # Process comments for 100 posts at a time
 
 
 def scrape_hot_posts(subreddit_name, limit=1000):
