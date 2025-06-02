@@ -462,269 +462,6 @@ git clone <repository-url>
 cd scrape-subreddit-data
 ```
 
-## How to Use
-
-There are two main scrapers that work independently:
-
-### Posts and Comments Scraper
-
-This is the main scraper that continuously collects hot posts from subreddits and downloads all their comments. It runs in cycles and never stops.
-
-```bash
-# Run continuously (this is the main scraper)
-python scrape_reddit.py
-
-# Show current statistics
-python scrape_reddit.py --stats
-
-# Only scrape comments for existing posts
-python scrape_reddit.py --comments-only
-```
-
-What it does:
-
-- Scrapes hot posts from r/wallstreetbets (you can change this in the code)
-- Downloads all comments with full tree structure (replies to replies etc)
-- Runs every 5 minutes by default
-- Stores everything in `reddit_posts` and `reddit_comments` collections
-
-<details>
-<summary><strong>How scrape_reddit_posts.py Works (Technical Details)</strong></summary>
-
-### Two-Phase Continuous Scraping System
-
-The main scraper runs in continuous 5-minute cycles with two distinct phases:
-
-#### Phase 1: Posts Scraping
-
-```python
-posts = scrape_hot_posts(SUB, POSTS_LIMIT)  # Gets 1000 hot posts
-new_posts = save_posts_to_db(posts)         # Saves to database
-```
-
-**What happens:**
-
-- Fetches current top 1000 hot posts from r/wallstreetbets
-- Updates existing posts with new scores, comment counts, upvote ratios
-- Adds new posts that entered the hot list
-- Preserves comment tracking status for existing posts
-
-#### Phase 2: Smart Comment Updates
-
-```python
-posts_processed, total_comments = scrape_comments_for_posts()
-```
-
-**instead of scraping comments once, it continuously updates them:**
-
-**Smart Prioritization Logic:**
-
-1. **Never scraped posts** (highest priority) - initial complete scrape
-2. **Recent posts (< 24h old)** - update every 6 hours
-3. **Older posts** - update every 24 hours
-
-**Comment Deduplication Process:**
-
-```python
-# Before scraping, get existing comment IDs
-existing_comment_ids = get_existing_comment_ids(post_id)
-
-# Skip comments that already exist
-if comment.id in existing_comment_ids:
-    # Still check replies for new sub-comments
-    process_replies_only()
-```
-
-### Database Schema for Tracking
-
-Each post now tracks:
-
-```json
-{
-  "post_id": "abc123",
-  "comments_scraped": true,
-  "initial_comments_scraped": true,
-  "last_comment_fetch_time": "2024-01-20T15:30:00",
-  "comments_scraped_at": "2024-01-20T12:00:00"
-}
-```
-
-### Example Timeline for a Popular Post
-
-```
-Hour 0:  Post appears in hot → Initial scrape (all 50 comments)
-Hour 6:  Still hot, 75 comments → Update scrape (25 new comments only)
-Hour 12: Still hot, 120 comments → Update scrape (45 new comments only)
-Hour 18: Falling in ranks, 140 comments → Update scrape (20 new comments)
-Day 2:   Older post, 145 comments → Daily update (5 new comments)
-```
-
-### Performance Benefits
-
-**Before (Traditional):**
-
-- Scrape all comments once per post
-- Miss all new comments added later
-- Waste API calls re-scraping same comments
-
-**After (Continuous Updates):**
-
-- Only process new comments each update
-- Capture live discussion as it happens
-- 90% reduction in API calls for comment updates
-- Complete comment history preserved
-
-### Output Examples
-
-```bash
---- Scraping comments for post abc123 ---
-Found 150 existing comments for this post
-Found 23 new comments (out of 173 processed)
-
-Initial scrape for post: TSLA calls are printing money...
-Found 0 existing comments for this post
-Found 45 new comments (out of 45 processed)
-
-Update for post: Market crash incoming...
-Found 200 existing comments for this post
-Found 12 new comments (out of 212 processed)
-
-Comment scraping completed: 5 posts (2 initial, 3 updates), 80 new comments
-```
-
-### Statistics Tracking
-
-The `--stats` command now shows:
-
-- **Total posts**: All posts ever collected
-- **Posts with initial comments**: Posts that have been fully scraped once
-- **Posts without initial comments**: Posts waiting for first scrape
-- **Posts with recent updates**: Posts updated in last 24 hours
-- **Total comments**: All comments collected across all updates
-- **Initial completion rate**: Percentage of posts with complete initial scrape
-
-This system ensures you get **live-updating comment data** while being efficient and respectful to Reddit's API limits.
-
-</details>
-
-### Subreddit Metadata Scraper
-
-This scraper collects information about the subreddit itself like subscriber count, description, settings, etc. It only runs when you tell it to and respects a 24-hour cooldown.
-
-```bash
-# Check and update subreddit info (respects 24h cooldown)
-python scrape_subreddit_metadata.py
-
-# Force update a specific subreddit
-python scrape_subreddit_metadata.py --scrape wallstreetbets --force
-
-# Update multiple subreddits
-python scrape_subreddit_metadata.py --scrape wallstreetbets,stocks,investing
-
-# Show metadata statistics
-python scrape_subreddit_metadata.py --stats
-
-# Get help
-python scrape_subreddit_metadata.py --help
-```
-
-What it collects:
-
-- Subscriber count and active users
-- Subreddit description and rules
-- Settings like what content is allowed
-- Visual stuff like icons and banners
-- Creation date, language, NSFW status
-- Stores everything in `subreddit_metadata` collection
-- Only updates every 24 hours to avoid spam
-
-### Simple workflow
-
-```bash
-# 1. Start the main scraper in background
-python scrape_reddit.py &
-
-# 2. Update subreddit info once
-python scrape_subreddit_metadata.py --scrape wallstreetbets
-
-# 3. Check what you collected
-python scrape_reddit.py --stats
-python scrape_subreddit_metadata.py --stats
-```
-
-## Docker Usage
-
-### Main Posts/Comments Scraper
-
-You'll need a separate Dockerfile for the main scraper (create `Dockerfile.main`):
-
-```bash
-# Build and run main scraper
-docker build -f Dockerfile.main -t reddit-scraper .
-docker run --env-file .env reddit-scraper
-```
-
-### Metadata Scraper
-
-```bash
-# Build metadata scraper
-docker build -f Dockerfile.metadata -t reddit-metadata-scraper .
-
-# Run with different commands
-docker run --env-file .env reddit-metadata-scraper python scrape_subreddit_metadata.py --stats
-docker run --env-file .env reddit-metadata-scraper python scrape_subreddit_metadata.py --scrape wallstreetbets
-```
-
-### Docker Compose
-
-For metadata scraper only:
-
-```bash
-docker-compose -f docker-compose.metadata.yml up -d
-```
-
-## Local Development
-
-### Prerequisites
-
-- Python 3.11+
-- MongoDB Atlas account (cloud database)
-- Reddit API credentials
-
-### Installation
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy environment file
-cp .env.example .env
-# Edit .env with your credentials and MongoDB Atlas URI
-
-# Run scrapers
-python scrape_reddit.py
-python scrape_subreddit_metadata.py
-```
-
-## Configuration
-
-Edit the Python files to customize:
-
-**For main scraper (`scrape_reddit.py`):**
-
-```python
-SUB = "wallstreetbets"              # Target subreddit
-SCRAPE_INTERVAL = 300               # Seconds between cycles
-POSTS_LIMIT = 1000                  # Posts per scrape
-POSTS_PER_COMMENT_BATCH = 20        # Comments batch size
-```
-
-**For metadata scraper (`scrape_subreddit_metadata.py`):**
-
-```python
-SUBREDDIT_SCRAPE_INTERVAL = 86400   # 24 hours between updates
-```
-
 ## Database Schema
 
 ### Posts Collection (reddit_posts)
@@ -796,17 +533,17 @@ SUBREDDIT_SCRAPE_INTERVAL = 86400   # 24 hours between updates
 docker ps
 
 # View logs
-docker logs reddit-metadata-scraper
+docker logs reddit-scraper
 
 # Follow logs in real-time
-docker logs -f reddit-metadata-scraper
+docker logs -f reddit-scraper
 ```
 
 ### Get statistics
 
 ```bash
 # From running container
-docker exec reddit-metadata-scraper python scrape_subreddit_metadata.py --stats
+docker exec reddit-scraper python reddit_scraper.py wallstreetbets --stats
 ```
 
 ## Troubleshooting
@@ -834,7 +571,7 @@ docker exec reddit-metadata-scraper python scrape_subreddit_metadata.py --stats
 
 ```bash
 # For Docker containers
-docker logs reddit-metadata-scraper
+docker logs reddit-scraper
 
 # Check if containers are healthy
 docker ps
