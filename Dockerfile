@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY reddit_scraper.py .
+COPY config.py .
 COPY rate_limits.py .
 COPY .env* ./
 
