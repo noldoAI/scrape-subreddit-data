@@ -5,7 +5,7 @@ Centralizes all database names, collection names, and other constants.
 """
 
 # Database Configuration
-DATABASE_NAME = "seeky_testing"
+DATABASE_NAME = "seeky"
 
 # Collection Names
 COLLECTIONS = {
