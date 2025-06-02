@@ -3,4 +3,5 @@ pymongo==4.6.1
 python-dotenv==1.0.0
 fastapi
 uvicorn[standard]
-pydantic 
+pydantic
+cryptography 
