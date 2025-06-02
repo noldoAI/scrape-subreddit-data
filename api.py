@@ -26,23 +26,29 @@ import hashlib
 from cryptography.fernet import Fernet
 import asyncio
 
+# Import centralized configuration
+from config import (
+    DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, 
+    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG
+)
+
 # Load environment variables (fallback defaults)
 load_dotenv()
 
 app = FastAPI(
-    title="Reddit Scraper API",
-    description="Manage multiple Reddit scrapers with unique credentials",
-    version="1.0.0"
+    title=API_CONFIG["title"],
+    description=API_CONFIG["description"],
+    version=API_CONFIG["version"]
 )
 
 # MongoDB connection for stats and scraper storage
 try:
     client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-    db = client["seeky_testing"]
-    posts_collection = db["reddit_posts"]
-    comments_collection = db["reddit_comments"]
-    subreddit_collection = db["subreddit_metadata"]
-    scrapers_collection = db["reddit_scrapers"]  # New collection for scraper persistence
+    db = client[DATABASE_NAME]
+    posts_collection = db[COLLECTIONS["POSTS"]]
+    comments_collection = db[COLLECTIONS["COMMENTS"]]
+    subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
+    scrapers_collection = db[COLLECTIONS["SCRAPERS"]]
     mongo_connected = True
 except:
     mongo_connected = False
@@ -52,7 +58,7 @@ active_scrapers: Dict[str, dict] = {}
 
 # Encryption key for credentials (generate one if not exists)
 def get_encryption_key():
-    key_file = ".scraper_key"
+    key_file = SECURITY_CONFIG["encryption_key_file"]
     if os.path.exists(key_file):
         with open(key_file, "rb") as f:
             return f.read()
@@ -82,9 +88,9 @@ class RedditCredentials(BaseModel):
 
 class ScraperConfig(BaseModel):
     subreddit: str
-    posts_limit: int = 1000
-    interval: int = 300
-    comment_batch: int = 20
+    posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
+    interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
+    comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
     credentials: RedditCredentials
     mongodb_uri: Optional[str] = None  # Allow custom MongoDB per scraper
     auto_restart: bool = True  # Enable automatic restart on failure
@@ -238,10 +244,10 @@ def load_all_scrapers_from_db():
                 # Create safe config for memory storage (masked credentials)
                 safe_config = scraper_data["config"].model_copy()
                 safe_config.credentials = RedditCredentials(
-                    client_id="***",
-                    client_secret="***",
+                    client_id=SECURITY_CONFIG["masked_credential_value"],
+                    client_secret=SECURITY_CONFIG["masked_credential_value"],
                     username=scraper_data["config"].credentials.username,
-                    password="***",
+                    password=SECURITY_CONFIG["masked_credential_value"],
                     user_agent=scraper_data["config"].credentials.user_agent
                 )
                 
@@ -286,7 +292,7 @@ def check_for_failed_scrapers():
                                                 increment_restart=True)
                             
                             # Attempt restart after a short delay to avoid rapid restarts
-                            time.sleep(5)
+                            time.sleep(MONITORING_CONFIG["restart_delay"])
                             restart_scraper(scraper_data["config"], subreddit)
             
             # Also check for scrapers that are marked as "stopped" but should be running
@@ -297,19 +303,19 @@ def check_for_failed_scrapers():
             
             for scraper_doc in stopped_scrapers:
                 subreddit = scraper_doc["subreddit"]
-                # Only restart if it's been stopped for more than 30 seconds to avoid rapid restarts
+                # Only restart if it's been stopped for more than configured cooldown
                 last_updated = scraper_doc.get("last_updated")
                 if last_updated:
                     time_since_update = (datetime.now(UTC) - last_updated).total_seconds()
-                    if time_since_update > 30:
+                    if time_since_update > MONITORING_CONFIG["restart_cooldown"]:
                         print(f"Auto-restarting stopped scraper for r/{subreddit}...")
                         
                         scraper_data = load_scraper_from_db(subreddit)
                         if scraper_data and scraper_data["config"]:
                             restart_scraper(scraper_data["config"], subreddit)
             
-            # Sleep for 30 seconds before next check (more frequent monitoring)
-            time.sleep(30)
+            # Sleep for configured interval before next check
+            time.sleep(MONITORING_CONFIG["check_interval"])
             
         except Exception as e:
             print(f"Error in failed scraper check: {e}")
@@ -320,8 +326,8 @@ def restart_scraper(config: ScraperConfig, subreddit: str):
     try:
         print(f"Restarting scraper for r/{subreddit}")
         
-        # Stop any existing container first
-        container_name = f"reddit-scraper-{subreddit}"
+        # Stop any existing container first using centralized naming
+        container_name = f"{DOCKER_CONFIG['container_prefix']}{subreddit}"
         subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
         
         # Update status to restarting
@@ -346,8 +352,8 @@ if mongo_connected:
 def run_scraper(config: ScraperConfig):
     """Run a scraper in a separate Docker container with unique credentials"""
     try:
-        # Create unique container name
-        container_name = f"reddit-scraper-{config.subreddit}"
+        # Create unique container name using centralized prefix
+        container_name = f"{DOCKER_CONFIG['container_prefix']}{config.subreddit}"
         
         # Save to database first
         save_scraper_to_db(config.subreddit, config, "starting", container_name=container_name)
@@ -362,13 +368,14 @@ def run_scraper(config: ScraperConfig):
             f"MONGODB_URI={config.mongodb_uri or os.getenv('MONGODB_URI', '')}"
         ]
         
-        # Build Docker command
-        cmd = [
-            "docker", "run",
-            "--name", container_name,
-            "--rm",  # Remove container when it stops
-            "-d",    # Run in detached mode
-        ]
+        # Build Docker command using centralized config
+        cmd = ["docker", "run", "--name", container_name]
+        
+        # Add flags based on configuration
+        if DOCKER_CONFIG["remove_on_exit"]:
+            cmd.append("--rm")
+        if DOCKER_CONFIG["detached"]:
+            cmd.append("-d")
         
         # Add environment variables
         for env_var in env_vars:
@@ -376,7 +383,7 @@ def run_scraper(config: ScraperConfig):
         
         # Add the image and command
         cmd.extend([
-            "reddit-scraper",  # Docker image name
+            DOCKER_CONFIG["image_name"],
             "python", "reddit_scraper.py", config.subreddit,
             "--posts-limit", str(config.posts_limit),
             "--interval", str(config.interval),
@@ -384,9 +391,7 @@ def run_scraper(config: ScraperConfig):
         ])
         
         # Remove any existing container with the same name
-        subprocess.run([
-            "docker", "stop", container_name
-        ], capture_output=True, text=True)
+        subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
         
         # Start the container
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -404,10 +409,10 @@ def run_scraper(config: ScraperConfig):
         # Update memory cache with safe config (use model_copy instead of copy)
         config_safe = config.model_copy()
         config_safe.credentials = RedditCredentials(
-            client_id="***",
-            client_secret="***", 
+            client_id=SECURITY_CONFIG["masked_credential_value"],
+            client_secret=SECURITY_CONFIG["masked_credential_value"], 
             username=config.credentials.username,  # Keep username for identification
-            password="***",
+            password=SECURITY_CONFIG["masked_credential_value"],
             user_agent=config.credentials.user_agent
         )
         
@@ -939,12 +944,12 @@ async def list_scrapers():
                     update_scraper_status(subreddit, "stopped", last_error="Container not running")
                     container_status = "stopped"
             
-            # Create safe credentials for display
+            # Create safe credentials for display using centralized config
             safe_credentials = {
-                "client_id": "***",
-                "client_secret": "***",
+                "client_id": SECURITY_CONFIG["masked_credential_value"],
+                "client_secret": SECURITY_CONFIG["masked_credential_value"],
                 "username": scraper_doc["credentials"]["username"],
-                "password": "***",
+                "password": SECURITY_CONFIG["masked_credential_value"],
                 "user_agent": scraper_doc["credentials"]["user_agent"]
             }
             
@@ -1032,13 +1037,13 @@ async def start_scraper(config: ScraperConfig, background_tasks: BackgroundTasks
     # Check if reddit-scraper Docker image exists
     try:
         result = subprocess.run([
-            "docker", "images", "reddit-scraper", "--format", "{{.Repository}}"
+            "docker", "images", DOCKER_CONFIG["image_name"], "--format", "{{.Repository}}"
         ], capture_output=True, text=True, timeout=10)
         
-        if result.returncode != 0 or "reddit-scraper" not in result.stdout:
+        if result.returncode != 0 or DOCKER_CONFIG["image_name"] not in result.stdout:
             raise HTTPException(
                 status_code=500,
-                detail="Docker image 'reddit-scraper' not found. Please run: docker build -f Dockerfile -t reddit-scraper ."
+                detail=f"Docker image '{DOCKER_CONFIG['image_name']}' not found. Please run: docker build -f Dockerfile -t {DOCKER_CONFIG['image_name']} ."
             )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Docker command timed out")
@@ -1054,7 +1059,7 @@ async def start_scraper(config: ScraperConfig, background_tasks: BackgroundTasks
         "posts_limit": config.posts_limit,
         "interval": config.interval,
         "comment_batch": config.comment_batch,
-        "container_name": f"reddit-scraper-{config.subreddit}",
+        "container_name": f"{DOCKER_CONFIG['container_prefix']}{config.subreddit}",
         "auto_restart": config.auto_restart
     }
 
@@ -1165,12 +1170,12 @@ async def get_scraper_status(subreddit: str):
     else:
         status = scraper_data["status"]
     
-    # Create safe credentials for display
+    # Create safe credentials for display using centralized config
     safe_credentials = {
-        "client_id": "***",
-        "client_secret": "***",
+        "client_id": SECURITY_CONFIG["masked_credential_value"],
+        "client_secret": SECURITY_CONFIG["masked_credential_value"],
         "username": scraper_data["config"].credentials.username,
-        "password": "***",
+        "password": SECURITY_CONFIG["masked_credential_value"],
         "user_agent": scraper_data["config"].credentials.user_agent
     }
     
@@ -1408,4 +1413,4 @@ async def get_status_summary():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host=API_CONFIG["host"], port=API_CONFIG["port"])

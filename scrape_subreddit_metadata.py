@@ -6,12 +6,15 @@ import os
 import time
 from rate_limits import check_rate_limit
 
+# Import centralized configuration
+from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG
+
 load_dotenv()
 
-# MongoDB setup
+# MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-db = client["techbro"]
-subreddit_collection = db["subreddit_metadata"]
+db = client[DATABASE_NAME]
+subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
 
 # Reddit API setup
 reddit = praw.Reddit(
@@ -22,8 +25,8 @@ reddit = praw.Reddit(
     user_agent=os.getenv("R_USER_AGENT")
 )
 
-# Configuration
-SUBREDDIT_SCRAPE_INTERVAL = 86400  # 24 hours between subreddit metadata updates
+# Configuration using centralized values
+SUBREDDIT_SCRAPE_INTERVAL = DEFAULT_SCRAPER_CONFIG["subreddit_update_interval"]  # 24 hours between subreddit metadata updates
 
 
 def scrape_subreddit_metadata(subreddit_name):

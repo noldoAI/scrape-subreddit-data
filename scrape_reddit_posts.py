@@ -7,14 +7,16 @@ import time
 from rate_limits import check_rate_limit
 from praw.models import MoreComments
 
+# Import centralized configuration
+from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG
 
 load_dotenv()
 
+# MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-db = client["seeky_testing"]
-posts_collection = db["reddit_posts"]
-comments_collection = db["reddit_comments"]
-
+db = client[DATABASE_NAME]
+posts_collection = db[COLLECTIONS["POSTS"]]
+comments_collection = db[COLLECTIONS["COMMENTS"]]
 
 reddit = praw.Reddit(
     client_id=os.getenv("R_CLIENT_ID"),
@@ -24,15 +26,13 @@ reddit = praw.Reddit(
     user_agent=os.getenv("R_USER_AGENT")
 )
 
-
 print(f"Authenticated as: {reddit.user.me()}")
 
-
-# Configuration
+# Configuration using centralized values
 SUB = "wallstreetbets"
 SCRAPE_INTERVAL = 10  # 5 minutes between full cycles
-POSTS_LIMIT = 1000
-POSTS_PER_COMMENT_BATCH = 100  # Process comments for 100 posts at a time
+POSTS_LIMIT = DEFAULT_SCRAPER_CONFIG["posts_limit"]
+POSTS_PER_COMMENT_BATCH = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
 
 
 def scrape_hot_posts(subreddit_name, limit=1000):
