@@ -17,15 +17,18 @@ import argparse
 from rate_limits import check_rate_limit
 from praw.models import MoreComments
 
+# Import centralized configuration
+from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG
+
 # Load environment variables
 load_dotenv()
 
-# MongoDB setup
+# MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-db = client["seeky_testing"]
-posts_collection = db["reddit_posts"]
-comments_collection = db["reddit_comments"]
-subreddit_collection = db["subreddit_metadata"]
+db = client[DATABASE_NAME]
+posts_collection = db[COLLECTIONS["POSTS"]]
+comments_collection = db[COLLECTIONS["COMMENTS"]]
+subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
 
 # Reddit API setup
 reddit = praw.Reddit(
@@ -36,19 +39,11 @@ reddit = praw.Reddit(
     user_agent=os.getenv("R_USER_AGENT")
 )
 
-# Default configuration
-DEFAULT_CONFIG = {
-    "scrape_interval": 300,        # 5 minutes between cycles
-    "posts_limit": 1000,           # Posts per scrape
-    "posts_per_comment_batch": 20, # Comments batch size
-    "subreddit_update_interval": 86400,  # 24 hours for subreddit metadata
-}
-
 
 class UnifiedRedditScraper:
     def __init__(self, subreddit_name, config=None):
         self.subreddit_name = subreddit_name
-        self.config = {**DEFAULT_CONFIG, **(config or {})}
+        self.config = {**DEFAULT_SCRAPER_CONFIG, **(config or {})}
         self.cycle_count = 0
         
         print(f"🔗 Authenticated as: {reddit.user.me()}")
