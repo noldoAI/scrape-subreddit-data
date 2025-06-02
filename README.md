@@ -4,15 +4,15 @@ A comprehensive Reddit scraping system that collects posts, comments, and subred
 
 ## Features
 
-- 🚀 **Unified scraping**: Posts and comments in optimized cycles
-- 📊 **Subreddit metadata**: Track subscriber counts, settings, and community info
-- ⚡ **Bulk operations**: High-performance MongoDB operations
-- 🛡️ **Rate limiting**: Automatic Reddit API rate limit handling
-- 🌳 **Comment trees**: Preserves hierarchical comment structure
-- 📈 **Analytics**: Built-in statistics and progress tracking
-- 🐳 **Docker ready**: Easy deployment with Docker Compose
+- Unified scraping: Posts and comments in optimized cycles
+- Subreddit metadata: Track subscriber counts, settings, and community info
+- Bulk operations: High-performance MongoDB operations
+- Rate limiting: Automatic Reddit API rate limit handling
+- Comment trees: Preserves hierarchical comment structure
+- Analytics: Built-in statistics and progress tracking
+- Docker ready: Easy deployment with Docker Compose
 
-## Quick Start with Docker
+## Setup
 
 ### 1. Clone the repository
 
@@ -23,7 +23,7 @@ cd scrape-subreddit-data
 
 ### 2. Set up environment variables
 
-Create a `.env` file with your Reddit API credentials:
+Create a `.env` file with your Reddit API credentials and MongoDB Atlas connection:
 
 ```bash
 # Reddit API Credentials (get from https://www.reddit.com/prefs/apps)
@@ -32,62 +32,49 @@ R_CLIENT_SECRET=your_reddit_client_secret
 R_USERNAME=your_reddit_username
 R_PASSWORD=your_reddit_password
 R_USER_AGENT=RedditScraper/1.0 by YourUsername
+
+# MongoDB Atlas Connection
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/dbname?retryWrites=true&w=majority
 ```
 
-### 3. Deploy with Docker Compose
+## How to Use
+
+There are two main scrapers that work independently:
+
+### Posts and Comments Scraper
+
+This is the main scraper that continuously collects hot posts from subreddits and downloads all their comments. It runs in cycles and never stops.
 
 ```bash
-# Start all services (scraper + MongoDB + Mongo Express)
-docker-compose up -d
-
-# View logs
-docker-compose logs -f reddit-scraper
-
-# Stop services
-docker-compose down
-```
-
-### 4. Access services
-
-- **MongoDB**: `localhost:27017`
-- **Mongo Express** (Web UI): `http://localhost:8081` (admin/admin123)
-
-## How to Scrape Reddit Data
-
-### 📝 **Posts and Comments** (Main Scraper)
-
-Collects hot posts from subreddits and their comment threads:
-
-```bash
-# Continuous scraping (runs forever, scraping posts + comments)
+# Run continuously (this is the main scraper)
 python scrape_reddit.py
 
 # Show current statistics
 python scrape_reddit.py --stats
 
-# Catch up on comments only (for existing posts)
+# Only scrape comments for existing posts
 python scrape_reddit.py --comments-only
 ```
 
-**What it does:**
+What it does:
 
-- Scrapes hot posts from r/wallstreetbets (configurable)
-- Downloads all comments with full tree structure
-- Updates every 5 minutes by default
-- Stores in `reddit_posts` and `reddit_comments` collections
+- Scrapes hot posts from r/wallstreetbets (you can change this in the code)
+- Downloads all comments with full tree structure (replies to replies etc)
+- Runs every 5 minutes by default
+- Stores everything in `reddit_posts` and `reddit_comments` collections
 
-### 🏢 **Subreddit Metadata** (Separate Scraper)
+### Subreddit Metadata Scraper
 
-Collects subreddit information like subscriber count, description, settings:
+This scraper collects information about the subreddit itself like subscriber count, description, settings, etc. It only runs when you tell it to and respects a 24-hour cooldown.
 
 ```bash
-# Check and update wallstreetbets metadata (respects 24h interval)
+# Check and update subreddit info (respects 24h cooldown)
 python scrape_subreddit_metadata.py
 
 # Force update a specific subreddit
 python scrape_subreddit_metadata.py --scrape wallstreetbets --force
 
-# Scrape multiple subreddits at once
+# Update multiple subreddits
 python scrape_subreddit_metadata.py --scrape wallstreetbets,stocks,investing
 
 # Show metadata statistics
@@ -97,40 +84,59 @@ python scrape_subreddit_metadata.py --stats
 python scrape_subreddit_metadata.py --help
 ```
 
-**What it collects:**
+What it collects:
 
-- Subscriber count, active users
-- Subreddit description, rules, settings
-- Visual elements (icons, banners)
+- Subscriber count and active users
+- Subreddit description and rules
+- Settings like what content is allowed
+- Visual stuff like icons and banners
 - Creation date, language, NSFW status
-- Stores in `subreddit_metadata` collection
-- Updates every 24 hours automatically
+- Stores everything in `subreddit_metadata` collection
+- Only updates every 24 hours to avoid spam
 
-### 🚀 **Quick Example Workflow**
+### Simple workflow
 
 ```bash
-# 1. Start main scraper (posts + comments)
+# 1. Start the main scraper in background
 python scrape_reddit.py &
 
-# 2. Update subreddit metadata once
+# 2. Update subreddit info once
 python scrape_subreddit_metadata.py --scrape wallstreetbets
 
-# 3. Check what you've collected
+# 3. Check what you collected
 python scrape_reddit.py --stats
 python scrape_subreddit_metadata.py --stats
 ```
 
-## Manual Docker Build
+## Docker Usage
+
+### Main Posts/Comments Scraper
+
+You'll need a separate Dockerfile for the main scraper (create `Dockerfile.main`):
 
 ```bash
-# Build the image
-docker build -t reddit-scraper .
-
-# Run with environment file
+# Build and run main scraper
+docker build -f Dockerfile.main -t reddit-scraper .
 docker run --env-file .env reddit-scraper
+```
 
-# Run with custom command
-docker run --env-file .env reddit-scraper python scrape_reddit.py --stats
+### Metadata Scraper
+
+```bash
+# Build metadata scraper
+docker build -f Dockerfile.metadata -t reddit-metadata-scraper .
+
+# Run with different commands
+docker run --env-file .env reddit-metadata-scraper python scrape_subreddit_metadata.py --stats
+docker run --env-file .env reddit-metadata-scraper python scrape_subreddit_metadata.py --scrape wallstreetbets
+```
+
+### Docker Compose
+
+For metadata scraper only:
+
+```bash
+docker-compose -f docker-compose.metadata.yml up -d
 ```
 
 ## Local Development
@@ -138,7 +144,7 @@ docker run --env-file .env reddit-scraper python scrape_reddit.py --stats
 ### Prerequisites
 
 - Python 3.11+
-- MongoDB
+- MongoDB Atlas account (cloud database)
 - Reddit API credentials
 
 ### Installation
@@ -149,42 +155,18 @@ pip install -r requirements.txt
 
 # Copy environment file
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env with your credentials and MongoDB Atlas URI
 
-# Run the scraper
+# Run scrapers
 python scrape_reddit.py
-```
-
-## Usage
-
-### Main Commands
-
-```bash
-# Full continuous scraping (default)
-python scrape_reddit.py
-
-# Show statistics only
-python scrape_reddit.py --stats
-
-# Scrape comments only (catch up mode)
-python scrape_reddit.py --comments-only
-```
-
-### Reconstruct Posts
-
-```bash
-# Interactive mode
-python reconstruct_posts.py
-
-# Command line
-python reconstruct_posts.py POST_ID
-python reconstruct_posts.py POST_ID --save
-python reconstruct_posts.py POST_ID --json
+python scrape_subreddit_metadata.py
 ```
 
 ## Configuration
 
-Edit `scrape_reddit.py` to customize:
+Edit the Python files to customize:
+
+**For main scraper (`scrape_reddit.py`):**
 
 ```python
 SUB = "wallstreetbets"              # Target subreddit
@@ -193,9 +175,15 @@ POSTS_LIMIT = 1000                  # Posts per scrape
 POSTS_PER_COMMENT_BATCH = 20        # Comments batch size
 ```
 
+**For metadata scraper (`scrape_subreddit_metadata.py`):**
+
+```python
+SUBREDDIT_SCRAPE_INTERVAL = 86400   # 24 hours between updates
+```
+
 ## Database Schema
 
-### Posts Collection (`reddit_posts`)
+### Posts Collection (reddit_posts)
 
 ```json
 {
@@ -215,7 +203,7 @@ POSTS_PER_COMMENT_BATCH = 20        # Comments batch size
 }
 ```
 
-### Comments Collection (`reddit_comments`)
+### Comments Collection (reddit_comments)
 
 ```json
 {
@@ -232,7 +220,7 @@ POSTS_PER_COMMENT_BATCH = 20        # Comments batch size
 }
 ```
 
-### Subreddit Metadata Collection (`subreddit_metadata`)
+### Subreddit Metadata Collection (subreddit_metadata)
 
 ```json
 {
@@ -255,92 +243,67 @@ POSTS_PER_COMMENT_BATCH = 20        # Comments batch size
 }
 ```
 
-## Docker Services
-
-### reddit-scraper
-
-- **Purpose**: Main scraping application
-- **Restart**: Unless stopped
-- **Health check**: Every 30 seconds
-
-### mongodb
-
-- **Image**: mongo:7.0
-- **Port**: 27017
-- **Volume**: Persistent data storage
-
-### mongo-express
-
-- **Purpose**: Web-based MongoDB admin interface
-- **Port**: 8081
-- **Credentials**: admin/admin123
-
 ## Monitoring
 
-### Health Checks
+### Check Docker containers
 
 ```bash
-# Check container health
+# See running containers
 docker ps
 
-# View detailed logs
-docker-compose logs reddit-scraper
+# View logs
+docker logs reddit-metadata-scraper
 
-# Monitor in real-time
-docker-compose logs -f reddit-scraper
+# Follow logs in real-time
+docker logs -f reddit-metadata-scraper
 ```
 
-### Statistics
+### Get statistics
 
 ```bash
-# Get current stats
-docker-compose exec reddit-scraper python scrape_reddit.py --stats
+# From running container
+docker exec reddit-metadata-scraper python scrape_subreddit_metadata.py --stats
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Reddit API Rate Limits**
+**Reddit API Rate Limits**
 
-   - The scraper automatically handles rate limits
-   - Reduce `POSTS_LIMIT` if hitting limits frequently
+- The scrapers handle rate limits automatically
+- If you hit limits often, reduce POSTS_LIMIT in the main scraper
 
-2. **MongoDB Connection**
+**MongoDB Connection**
 
-   - Ensure MongoDB is running: `docker-compose ps`
-   - Check connection string in environment variables
+- Make sure your MONGODB_URI is correct
+- Check that your IP is whitelisted in MongoDB Atlas
+- Verify your database user has proper permissions
 
-3. **Reddit Authentication**
-   - Verify credentials in `.env` file
-   - Check Reddit app permissions
+**Reddit Authentication**
+
+- Double-check credentials in .env file
+- Make sure your Reddit app has the right permissions
+- User agent should be descriptive and unique
 
 ### Logs
 
 ```bash
-# Application logs
-docker-compose logs reddit-scraper
+# For Docker containers
+docker logs reddit-metadata-scraper
 
-# MongoDB logs
-docker-compose logs mongodb
-
-# All services
-docker-compose logs
+# Check if containers are healthy
+docker ps
 ```
-
-## Security
-
-- ✅ Non-root user in container
-- ✅ Environment variables for secrets
-- ✅ No hardcoded credentials
-- ✅ Minimal base image (Python slim)
 
 ## Performance
 
-- **Bulk operations**: ~1000x fewer database operations
-- **Rate limiting**: Automatic API throttling
-- **Efficient indexing**: Optimized MongoDB queries
-- **Memory efficient**: Streaming data processing
+- Bulk operations: Much faster database writes
+- Rate limiting: Automatic API throttling to avoid bans
+- Efficient indexing: Fast MongoDB queries
+- Memory efficient: Processes data in streams
+
+The scrapers are designed to be respectful to Reddit's API and run reliably for long periods.
 
 ## License
 
