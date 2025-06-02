@@ -306,7 +306,15 @@ def check_for_failed_scrapers():
                 # Only restart if it's been stopped for more than configured cooldown
                 last_updated = scraper_doc.get("last_updated")
                 if last_updated:
-                    time_since_update = (datetime.now(UTC) - last_updated).total_seconds()
+                    current_time = datetime.now(UTC)
+                    # Ensure consistent timezone handling
+                    if last_updated.tzinfo is None:
+                        # Database has timezone-naive datetime, convert to UTC for comparison
+                        last_updated_utc = last_updated.replace(tzinfo=UTC)
+                    else:
+                        last_updated_utc = last_updated
+                    
+                    time_since_update = (current_time - last_updated_utc).total_seconds()
                     if time_since_update > MONITORING_CONFIG["restart_cooldown"]:
                         print(f"Auto-restarting stopped scraper for r/{subreddit}...")
                         
@@ -1202,20 +1210,21 @@ async def get_scraper_status(subreddit: str):
 @app.get("/scrapers/{subreddit}/logs")
 async def get_scraper_logs(subreddit: str, lines: int = 100):
     """Get recent logs from a scraper container"""
-    if subreddit not in active_scrapers:
+    scraper_data = load_scraper_from_db(subreddit)
+    if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
     
-    scraper_info = active_scrapers[subreddit]
-    if "container_name" not in scraper_info:
+    container_name = scraper_data.get("container_name")
+    if not container_name:
         raise HTTPException(status_code=400, detail="No container found for this scraper")
     
-    logs = get_container_logs(scraper_info["container_name"], lines)
+    logs = get_container_logs(container_name, lines)
     if logs is None:
         raise HTTPException(status_code=404, detail="Container not found or no logs available")
     
     return {
         "subreddit": subreddit,
-        "container_name": scraper_info["container_name"],
+        "container_name": container_name,
         "logs": logs,
         "lines_requested": lines
     }

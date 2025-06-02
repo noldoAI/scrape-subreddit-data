@@ -43,7 +43,7 @@ API_CONFIG = {
 DOCKER_CONFIG = {
     "image_name": "reddit-scraper",
     "container_prefix": "reddit-scraper-",
-    "remove_on_exit": True,        # --rm flag
+    "remove_on_exit": False,       # Temporarily disable --rm flag to see logs
     "detached": True,              # -d flag
 }
 
