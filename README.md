@@ -4,14 +4,29 @@ A comprehensive Reddit scraping system with a web-based management API that orch
 
 ## 🚀 Quick Start
 
-### 1. Start the API Server
+### Step 1: Set Up Environment
+
+Create a `.env` file with your MongoDB connection (Reddit credentials are provided per scraper):
 
 ```bash
-# Build the API container
-docker-compose -f docker-compose.api.yml up --build -d
+# MongoDB Atlas (free database) - shared across all scrapers
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/reddit_data
+```
 
-# Access the web dashboard
-open http://localhost:8000
+**Important**: Each scraper runs in its own Docker container with unique Reddit API credentials to avoid rate limit conflicts.
+
+### Step 2: Build Docker Image & Start API
+
+```bash
+# Build the scraper Docker image first
+docker build -f Dockerfile -t reddit-scraper .
+
+# Start the API server
+docker-compose -f docker-compose.api.yml up -d
+
+# Or run directly (requires Docker)
+pip install -r requirements.txt
+python api.py
 ```
 
 ### 2. Use the Web Dashboard
