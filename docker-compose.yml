@@ -4,7 +4,7 @@ services:
   reddit-scraper:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile
     container_name: reddit-scraper
     env_file:
       - .env

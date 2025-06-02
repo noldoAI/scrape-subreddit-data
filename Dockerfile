@@ -1,21 +1,10 @@
-# Use Python 3.11 slim image as base
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
-
-ENV R_CLIENT_ID="NnlgLHzMwE2MSpC4fsMQUQ"
-ENV R_CLIENT_SECRET="MxeC9Yst237ss00TPAD69KpHm5LCng"
-ENV R_USER_AGENT="seeky/1.0 (by /u/Objective_Crazy_5434)"
-ENV R_USERNAME="Objective_Crazy_5434"
-ENV R_PASSWORD="Luka170917340186!"  
-ENV MONGODB_URI="mongodb+srv://luka:1CYzf6RXmvjrtGzr@bitpulse.mu20dsa.mongodb.net"
-
+# Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -28,8 +17,18 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application files
+COPY reddit_scraper.py .
+COPY rate_limits.py .
+COPY .env* ./
 
-# Default command
-CMD ["python", "scrape_reddit_posts.py"] 
+# Change ownership to non-root user
+RUN chown -R appuser:appuser /app
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import reddit_scraper; print('OK')" || exit 1
+
+# Default command - scrape wallstreetbets
+CMD ["python", "reddit_scraper.py", "wallstreetbets"] 

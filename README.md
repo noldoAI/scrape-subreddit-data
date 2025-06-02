@@ -1,10 +1,10 @@
-# Unified Reddit Scraper
+# Reddit Scraper
 
 A comprehensive Reddit scraping system that continuously collects posts, comments, and subreddit metadata for any specified subreddit using one set of Reddit API credentials.
 
 ## Features
 
-- **Unified System**: One script handles posts, comments, and subreddit metadata
+- - System\*\*: One script handles posts, comments, and subreddit metadata
 - **Configurable**: Target any subreddit by name
 - **Continuous Updates**: Live comment tracking with smart deduplication
 - **Bulk Operations**: High-performance MongoDB operations
@@ -122,9 +122,9 @@ MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/dbname
 Then run with:
 
 ```bash
-docker-compose -f docker-compose.unified.yml --env-file .env.wallstreetbets up -d
+docker-compose -f docker-compose.yml --env-file .env.wallstreetbets up -d
 # or
-docker-compose -f docker-compose.unified.yml --env-file .env.investing up -d
+docker-compose -f docker-compose.yml --env-file .env.investing up -d
 ```
 
 ## Quick Start
@@ -196,7 +196,7 @@ python reddit_scraper.py pennystocks --posts-limit 500 --interval 600 --comment-
 
 ```bash
 # Build the image
-docker build -f Dockerfile.unified -t reddit-scraper .
+docker build -f Dockerfile -t reddit-scraper .
 
 # Run with default settings
 docker run --env-file .env reddit-scraper
@@ -261,16 +261,16 @@ Run with your chosen configuration:
 
 ```bash
 # Start scraper with specific configuration
-docker-compose -f docker-compose.unified.yml --env-file .env.wallstreetbets up -d
+docker-compose -f docker-compose.yml --env-file .env.wallstreetbets up -d
 
 # Switch to different subreddit
-docker-compose -f docker-compose.unified.yml --env-file .env.investing up -d
+docker-compose -f docker-compose.yml --env-file .env.investing up -d
 
 # View logs
-docker-compose -f docker-compose.unified.yml logs -f
+docker-compose -f docker-compose.yml logs -f
 
 # Stop scraper
-docker-compose -f docker-compose.unified.yml down
+docker-compose -f docker-compose.yml down
 ```
 
 ## Local Development
@@ -381,7 +381,7 @@ Subreddit metadata: ✓
 Metadata last updated: 2.3 hours ago
 ============================================================
 
-🚀 Starting unified Reddit scraping for r/wallstreetbets
+🚀 Starting Reddit scraping for r/wallstreetbets
 ⏰ Scrape interval: 300 seconds
 📊 Posts per scrape: 1000
 💬 Comments batch size: 20 posts
@@ -431,7 +431,7 @@ Waiting 300 seconds before next cycle...
 
 ## How It Works
 
-The unified scraper runs **three integrated phases** in continuous cycles:
+The scraper runs **three integrated phases** in continuous cycles:
 
 ### **Phase 1: Posts Scraping** (Every 5 minutes)
 
