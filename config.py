@@ -49,6 +49,6 @@ DOCKER_CONFIG = {
 
 # Security Configuration
 SECURITY_CONFIG = {
-    "encryption_key_file": ".scraper_key",
+    "encryption_key_file": "/tmp/.scraper_key",
     "masked_credential_value": "***"
 } 
