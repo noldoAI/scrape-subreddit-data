@@ -1,5 +1,5 @@
 import praw
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pymongo
 import os
@@ -11,7 +11,7 @@ from praw.models import MoreComments
 load_dotenv()
 
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-db = client["techbro"]
+db = client["seeky_testing"]
 posts_collection = db["reddit_posts"]
 comments_collection = db["reddit_comments"]
 
@@ -30,7 +30,7 @@ print(f"Authenticated as: {reddit.user.me()}")
 
 # Configuration
 SUB = "wallstreetbets"
-SCRAPE_INTERVAL = 300  # 5 minutes between full cycles
+SCRAPE_INTERVAL = 10  # 5 minutes between full cycles
 POSTS_LIMIT = 1000
 POSTS_PER_COMMENT_BATCH = 20  # Process comments for 20 posts at a time
 
@@ -80,7 +80,9 @@ def scrape_hot_posts(subreddit_name, limit=1000):
                 "over_18": post.over_18,
                 "spoiler": post.spoiler,
                 "locked": post.locked,
-                "comments_scraped": False  # Initialize as not scraped
+                "comments_scraped": False,  # Initialize as not scraped
+                "last_comment_fetch_time": None,  # Track when comments were last fetched
+                "initial_comments_scraped": False  # Track if we've done the initial scrape
             }
             posts_list.append(post_data)
         
@@ -115,7 +117,8 @@ def save_posts_to_db(posts_list):
             doc["post_id"]: doc 
             for doc in posts_collection.find(
                 {"post_id": {"$in": post_ids}}, 
-                {"post_id": 1, "comments_scraped": 1, "comments_scraped_at": 1}
+                {"post_id": 1, "comments_scraped": 1, "comments_scraped_at": 1, 
+                 "last_comment_fetch_time": 1, "initial_comments_scraped": 1}
             )
         }
         
@@ -125,10 +128,13 @@ def save_posts_to_db(posts_list):
         for post in posts_list:
             post_id = post["post_id"]
             
-            # Preserve existing comments_scraped status if it exists and is True
-            if post_id in existing_posts and existing_posts[post_id].get("comments_scraped"):
-                post["comments_scraped"] = existing_posts[post_id]["comments_scraped"]
-                post["comments_scraped_at"] = existing_posts[post_id].get("comments_scraped_at")
+            # Preserve existing comment tracking fields if they exist
+            if post_id in existing_posts:
+                existing = existing_posts[post_id]
+                post["comments_scraped"] = existing.get("comments_scraped", False)
+                post["comments_scraped_at"] = existing.get("comments_scraped_at")
+                post["last_comment_fetch_time"] = existing.get("last_comment_fetch_time")
+                post["initial_comments_scraped"] = existing.get("initial_comments_scraped", False)
             
             # Add upsert operation to bulk
             bulk_operations.append(
@@ -155,42 +161,92 @@ def save_posts_to_db(posts_list):
         return 0
 
 
-def get_posts_without_comments(limit=20):
+def get_posts_needing_comment_updates(limit=20):
     """
-    Get posts from database that haven't had their comments scraped yet.
+    Get posts that need comment scraping or updates.
+    Prioritizes:
+    1. Posts that have never been scraped
+    2. Posts that haven't been updated in the last 6 hours (for active posts)
+    3. Posts that haven't been updated in 24 hours (for older posts)
     
     Args:
         limit (int): Maximum number of posts to return
     
     Returns:
-        list: List of post documents
+        list: List of post documents that need comment updates
     """
     try:
-        # Find posts that don't have comments_scraped flag or it's False
+        current_time = datetime.utcnow()
+        six_hours_ago = current_time - timedelta(hours=6)
+        twenty_four_hours_ago = current_time - timedelta(hours=24)
+        
+        # Query for posts needing updates, prioritized by urgency
         posts = list(posts_collection.find({
             "$or": [
-                {"comments_scraped": {"$exists": False}},
-                {"comments_scraped": False}
+                # Never had initial comments scraped
+                {"initial_comments_scraped": {"$ne": True}},
+                # Recent posts (< 24h old) that haven't been updated in 6 hours  
+                {
+                    "created_datetime": {"$gte": twenty_four_hours_ago},
+                    "$or": [
+                        {"last_comment_fetch_time": {"$exists": False}},
+                        {"last_comment_fetch_time": {"$lte": six_hours_ago}},
+                        {"last_comment_fetch_time": None}
+                    ]
+                },
+                # Older posts that haven't been updated in 24 hours
+                {
+                    "created_datetime": {"$lt": twenty_four_hours_ago},
+                    "$or": [
+                        {"last_comment_fetch_time": {"$exists": False}},
+                        {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago}},
+                        {"last_comment_fetch_time": None}
+                    ]
+                }
             ]
-        }).sort("created_utc", -1).limit(limit))  # Process newest first
+        }).sort([
+            ("initial_comments_scraped", 1),  # Unscraped posts first
+            ("created_utc", -1)               # Then newest first
+        ]).limit(limit))
         
-        print(f"Found {len(posts)} posts without comments scraped")
+        print(f"Found {len(posts)} posts needing comment updates")
         return posts
         
     except Exception as e:
-        print(f"Error fetching posts: {e}")
+        print(f"Error fetching posts needing updates: {e}")
         return []
 
 
-def scrape_post_comments(post_id):
+def get_existing_comment_ids(post_id):
     """
-    Scrape comments for a specific post with tree structure preservation.
+    Get existing comment IDs for a post to avoid duplicates.
     
     Args:
         post_id (str): Reddit post ID
     
     Returns:
-        list: List of comment dictionaries
+        set: Set of existing comment IDs
+    """
+    try:
+        existing_comments = comments_collection.find(
+            {"post_id": post_id}, 
+            {"comment_id": 1}
+        )
+        return {doc["comment_id"] for doc in existing_comments}
+    except Exception as e:
+        print(f"Error getting existing comment IDs for post {post_id}: {e}")
+        return set()
+
+
+def scrape_post_comments(post_id):
+    """
+    Scrape comments for a specific post, only collecting new comments not already in DB.
+    
+    Args:
+        post_id (str): Reddit post ID
+    
+    Returns:
+        list: List of new comment dictionaries
     """
     print(f"\n--- Scraping comments for post {post_id} ---")
     
@@ -198,6 +254,10 @@ def scrape_post_comments(post_id):
     check_rate_limit(reddit)
     
     try:
+        # Get existing comment IDs to avoid duplicates
+        existing_comment_ids = get_existing_comment_ids(post_id)
+        print(f"Found {len(existing_comment_ids)} existing comments for this post")
+        
         # Get the submission
         submission = reddit.submission(id=post_id)
         
@@ -205,13 +265,25 @@ def scrape_post_comments(post_id):
         submission.comments.replace_more(limit=10)  # Limit to avoid too many API calls
         
         comments_data = []
+        new_comments_count = 0
         
         def process_comment(comment, parent_id=None, depth=0):
             """Recursively process comments and their replies"""
+            nonlocal new_comments_count
+            
             if isinstance(comment, MoreComments):
                 return
             
             try:
+                # Skip if comment already exists in database
+                if comment.id in existing_comment_ids:
+                    # Still process replies in case there are new ones
+                    if hasattr(comment, 'replies') and comment.replies:
+                        for reply in comment.replies:
+                            process_comment(reply, parent_id=comment.id, depth=depth + 1)
+                    return
+                
+                # This is a new comment, process it
                 comment_data = {
                     "comment_id": comment.id,
                     "post_id": post_id,
@@ -235,6 +307,7 @@ def scrape_post_comments(post_id):
                 }
                 
                 comments_data.append(comment_data)
+                new_comments_count += 1
                 
                 # Process replies recursively
                 if hasattr(comment, 'replies') and comment.replies:
@@ -248,7 +321,7 @@ def scrape_post_comments(post_id):
         for comment in submission.comments:
             process_comment(comment, parent_id=None, depth=0)
         
-        print(f"Processed {len(comments_data)} comments for post {post_id}")
+        print(f"Found {new_comments_count} new comments (out of {len(comments_data)} processed)")
         return comments_data
         
     except Exception as e:
@@ -322,12 +395,13 @@ def mark_post_comments_scraped(post_id):
         print(f"Error marking post {post_id} as scraped: {e}")
 
 
-def mark_posts_comments_scraped_bulk(post_ids):
+def mark_posts_comments_updated(post_ids, is_initial_scrape=False):
     """
-    Mark multiple posts as having their comments scraped using bulk operation.
+    Mark posts as having their comments updated and record the fetch time.
     
     Args:
         post_ids (list): List of Reddit post IDs
+        is_initial_scrape (bool): Whether this was the first time scraping comments
     """
     if not post_ids:
         return
@@ -335,31 +409,39 @@ def mark_posts_comments_scraped_bulk(post_ids):
     try:
         # Prepare bulk operations
         bulk_operations = []
-        scraped_time = datetime.utcnow()
+        update_time = datetime.utcnow()
         
         for post_id in post_ids:
+            update_data = {
+                "comments_scraped": True,
+                "last_comment_fetch_time": update_time
+            }
+            
+            # Mark initial scrape as complete if this is the first time
+            if is_initial_scrape:
+                update_data["initial_comments_scraped"] = True
+                update_data["comments_scraped_at"] = update_time
+            
             bulk_operations.append(
                 pymongo.UpdateOne(
                     {"post_id": post_id},
-                    {"$set": {
-                        "comments_scraped": True,
-                        "comments_scraped_at": scraped_time
-                    }}
+                    {"$set": update_data}
                 )
             )
         
         # Execute bulk operation
         if bulk_operations:
             result = posts_collection.bulk_write(bulk_operations, ordered=False)
-            print(f"Marked {result.modified_count} posts as comments scraped")
+            action = "initially scraped" if is_initial_scrape else "updated"
+            print(f"Marked {result.modified_count} posts as comments {action}")
         
     except Exception as e:
-        print(f"Error marking posts as scraped: {e}")
+        print(f"Error marking posts as updated: {e}")
 
 
 def scrape_comments_for_posts():
     """
-    Scrape comments for posts that haven't been processed yet.
+    Scrape comments for posts that need updates (initial scrape or periodic refresh).
     
     Returns:
         tuple: (posts_processed, total_comments)
@@ -368,30 +450,37 @@ def scrape_comments_for_posts():
     print("COMMENT SCRAPING PHASE")
     print(f"{'='*60}")
     
-    # Get posts that need comment scraping
-    posts = get_posts_without_comments(POSTS_PER_COMMENT_BATCH)
+    # Get posts that need comment scraping or updates
+    posts = get_posts_needing_comment_updates(POSTS_PER_COMMENT_BATCH)
     
     if not posts:
-        print("No posts found that need comment scraping.")
+        print("No posts found that need comment updates.")
         return 0, 0
     
     total_comments = 0
     posts_processed = 0
-    processed_post_ids = []
+    initial_scrape_posts = []
+    update_posts = []
     all_comments = []
     
     # Process all posts and collect comments
     for post in posts:
         try:
             post_id = post["post_id"]
-            print(f"\nProcessing post: {post['title'][:50]}...")
+            is_initial = not post.get("initial_comments_scraped", False)
+            action = "Initial scrape" if is_initial else "Update"
             
-            # Scrape comments for this post
+            print(f"\n{action} for post: {post['title'][:50]}...")
+            
+            # Scrape comments for this post (will only get new ones)
             comments = scrape_post_comments(post_id)
             
-            if comments:
+            if comments or is_initial:  # Always mark initial scrapes even if no comments
                 all_comments.extend(comments)
-                processed_post_ids.append(post_id)
+                if is_initial:
+                    initial_scrape_posts.append(post_id)
+                else:
+                    update_posts.append(post_id)
                 posts_processed += 1
             
             # Small delay between posts to be respectful
@@ -406,11 +495,15 @@ def scrape_comments_for_posts():
         new_comments = save_comments_to_db(all_comments)
         total_comments = new_comments
     
-    # Bulk mark all processed posts as scraped
-    if processed_post_ids:
-        mark_posts_comments_scraped_bulk(processed_post_ids)
+    # Bulk mark posts as updated with appropriate flags
+    if initial_scrape_posts:
+        mark_posts_comments_updated(initial_scrape_posts, is_initial_scrape=True)
+    if update_posts:
+        mark_posts_comments_updated(update_posts, is_initial_scrape=False)
     
-    print(f"\nComment scraping completed: {posts_processed} posts, {total_comments} new comments")
+    initial_count = len(initial_scrape_posts)
+    update_count = len(update_posts)
+    print(f"\nComment scraping completed: {posts_processed} posts ({initial_count} initial, {update_count} updates), {total_comments} new comments")
     return posts_processed, total_comments
 
 
@@ -479,21 +572,25 @@ def get_scraping_stats():
     """
     try:
         total_posts = posts_collection.count_documents({})
-        posts_with_comments = posts_collection.count_documents({"comments_scraped": True})
-        posts_without_comments = posts_collection.count_documents({
+        posts_with_initial_comments = posts_collection.count_documents({"initial_comments_scraped": True})
+        posts_without_initial_comments = posts_collection.count_documents({
             "$or": [
-                {"comments_scraped": {"$exists": False}},
-                {"comments_scraped": False}
+                {"initial_comments_scraped": {"$exists": False}},
+                {"initial_comments_scraped": False}
             ]
+        })
+        posts_with_recent_updates = posts_collection.count_documents({
+            "last_comment_fetch_time": {"$gte": datetime.utcnow() - timedelta(hours=24)}
         })
         total_comments = comments_collection.count_documents({})
         
         return {
             "total_posts": total_posts,
-            "posts_with_comments": posts_with_comments,
-            "posts_without_comments": posts_without_comments,
+            "posts_with_initial_comments": posts_with_initial_comments,
+            "posts_without_initial_comments": posts_without_initial_comments,
+            "posts_with_recent_updates": posts_with_recent_updates,
             "total_comments": total_comments,
-            "completion_rate": (posts_with_comments / total_posts * 100) if total_posts > 0 else 0
+            "initial_completion_rate": (posts_with_initial_comments / total_posts * 100) if total_posts > 0 else 0
         }
     except Exception as e:
         print(f"Error getting stats: {e}")
@@ -508,10 +605,11 @@ def print_stats():
         print("CURRENT SCRAPING STATISTICS")
         print(f"{'='*50}")
         print(f"Total posts: {stats['total_posts']}")
-        print(f"Posts with comments scraped: {stats['posts_with_comments']}")
-        print(f"Posts without comments: {stats['posts_without_comments']}")
+        print(f"Posts with initial comments scraped: {stats['posts_with_initial_comments']}")
+        print(f"Posts without initial comments: {stats['posts_without_initial_comments']}")
+        print(f"Posts with recent updates: {stats['posts_with_recent_updates']}")
         print(f"Total comments: {stats['total_comments']}")
-        print(f"Completion rate: {stats['completion_rate']:.1f}%")
+        print(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
         print(f"{'='*50}")
 
 

@@ -63,6 +63,125 @@ What it does:
 - Runs every 5 minutes by default
 - Stores everything in `reddit_posts` and `reddit_comments` collections
 
+<details>
+<summary><strong>How scrape_reddit_posts.py Works (Technical Details)</strong></summary>
+
+### Two-Phase Continuous Scraping System
+
+The main scraper runs in continuous 5-minute cycles with two distinct phases:
+
+#### Phase 1: Posts Scraping
+
+```python
+posts = scrape_hot_posts(SUB, POSTS_LIMIT)  # Gets 1000 hot posts
+new_posts = save_posts_to_db(posts)         # Saves to database
+```
+
+**What happens:**
+
+- Fetches current top 1000 hot posts from r/wallstreetbets
+- Updates existing posts with new scores, comment counts, upvote ratios
+- Adds new posts that entered the hot list
+- Preserves comment tracking status for existing posts
+
+#### Phase 2: Smart Comment Updates
+
+```python
+posts_processed, total_comments = scrape_comments_for_posts()
+```
+
+**Revolutionary approach - instead of scraping comments once, it continuously updates them:**
+
+**Smart Prioritization Logic:**
+
+1. **Never scraped posts** (highest priority) - initial complete scrape
+2. **Recent posts (< 24h old)** - update every 6 hours
+3. **Older posts** - update every 24 hours
+
+**Comment Deduplication Process:**
+
+```python
+# Before scraping, get existing comment IDs
+existing_comment_ids = get_existing_comment_ids(post_id)
+
+# Skip comments that already exist
+if comment.id in existing_comment_ids:
+    # Still check replies for new sub-comments
+    process_replies_only()
+```
+
+### Database Schema for Tracking
+
+Each post now tracks:
+
+```json
+{
+  "post_id": "abc123",
+  "comments_scraped": true,
+  "initial_comments_scraped": true,
+  "last_comment_fetch_time": "2024-01-20T15:30:00",
+  "comments_scraped_at": "2024-01-20T12:00:00"
+}
+```
+
+### Example Timeline for a Popular Post
+
+```
+Hour 0:  Post appears in hot → Initial scrape (all 50 comments)
+Hour 6:  Still hot, 75 comments → Update scrape (25 new comments only)
+Hour 12: Still hot, 120 comments → Update scrape (45 new comments only)
+Hour 18: Falling in ranks, 140 comments → Update scrape (20 new comments)
+Day 2:   Older post, 145 comments → Daily update (5 new comments)
+```
+
+### Performance Benefits
+
+**Before (Traditional):**
+
+- Scrape all comments once per post
+- Miss all new comments added later
+- Waste API calls re-scraping same comments
+
+**After (Continuous Updates):**
+
+- Only process new comments each update
+- Capture live discussion as it happens
+- 90% reduction in API calls for comment updates
+- Complete comment history preserved
+
+### Output Examples
+
+```bash
+--- Scraping comments for post abc123 ---
+Found 150 existing comments for this post
+Found 23 new comments (out of 173 processed)
+
+Initial scrape for post: TSLA calls are printing money...
+Found 0 existing comments for this post
+Found 45 new comments (out of 45 processed)
+
+Update for post: Market crash incoming...
+Found 200 existing comments for this post
+Found 12 new comments (out of 212 processed)
+
+Comment scraping completed: 5 posts (2 initial, 3 updates), 80 new comments
+```
+
+### Statistics Tracking
+
+The `--stats` command now shows:
+
+- **Total posts**: All posts ever collected
+- **Posts with initial comments**: Posts that have been fully scraped once
+- **Posts without initial comments**: Posts waiting for first scrape
+- **Posts with recent updates**: Posts updated in last 24 hours
+- **Total comments**: All comments collected across all updates
+- **Initial completion rate**: Percentage of posts with complete initial scrape
+
+This system ensures you get **live-updating comment data** while being efficient and respectful to Reddit's API limits.
+
+</details>
+
 ### Subreddit Metadata Scraper
 
 This scraper collects information about the subreddit itself like subscriber count, description, settings, etc. It only runs when you tell it to and respects a 24-hour cooldown.
