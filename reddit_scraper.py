@@ -7,7 +7,7 @@ Combines all scraping functionality into one unified system.
 """
 
 import praw
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from dotenv import load_dotenv
 import pymongo
 import os
@@ -82,7 +82,7 @@ class UnifiedRedditScraper:
                     "author": str(post.author) if post.author else "[deleted]",
                     "subreddit": self.subreddit_name,
                     "post_id": post.id,
-                    "scraped_at": datetime.utcnow(),
+                    "scraped_at": datetime.now(UTC),
                     "selftext": post.selftext[:1000] if post.selftext else "",
                     "is_self": post.is_self,
                     "upvote_ratio": post.upvote_ratio,
@@ -159,27 +159,32 @@ class UnifiedRedditScraper:
     def get_posts_needing_comment_updates(self, limit=20):
         """Get posts that need comment scraping or updates."""
         try:
-            current_time = datetime.utcnow()
+            current_time = datetime.now(UTC)
             six_hours_ago = current_time - timedelta(hours=6)
             twenty_four_hours_ago = current_time - timedelta(hours=24)
+            
+            # Convert to timezone-naive for database comparison (since existing data might be timezone-naive)
+            current_time_naive = current_time.replace(tzinfo=None)
+            six_hours_ago_naive = six_hours_ago.replace(tzinfo=None)
+            twenty_four_hours_ago_naive = twenty_four_hours_ago.replace(tzinfo=None)
             
             posts = list(posts_collection.find({
                 "subreddit": self.subreddit_name,  # Only posts from our target subreddit
                 "$or": [
                     {"initial_comments_scraped": {"$ne": True}},
                     {
-                        "created_datetime": {"$gte": twenty_four_hours_ago},
+                        "created_datetime": {"$gte": twenty_four_hours_ago_naive},
                         "$or": [
                             {"last_comment_fetch_time": {"$exists": False}},
-                            {"last_comment_fetch_time": {"$lte": six_hours_ago}},
+                            {"last_comment_fetch_time": {"$lte": six_hours_ago_naive}},
                             {"last_comment_fetch_time": None}
                         ]
                     },
                     {
-                        "created_datetime": {"$lt": twenty_four_hours_ago},
+                        "created_datetime": {"$lt": twenty_four_hours_ago_naive},
                         "$or": [
                             {"last_comment_fetch_time": {"$exists": False}},
-                            {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago}},
+                            {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago_naive}},
                             {"last_comment_fetch_time": None}
                         ]
                     }
@@ -253,7 +258,7 @@ class UnifiedRedditScraper:
                         "stickied": comment.stickied if hasattr(comment, 'stickied') else False,
                         "edited": bool(comment.edited) if hasattr(comment, 'edited') else False,
                         "controversiality": comment.controversiality if hasattr(comment, 'controversiality') else 0,
-                        "scraped_at": datetime.utcnow(),
+                        "scraped_at": datetime.now(UTC),
                         "subreddit": self.subreddit_name,
                         "gilded": comment.gilded if hasattr(comment, 'gilded') else 0,
                         "total_awards_received": comment.total_awards_received if hasattr(comment, 'total_awards_received') else 0
@@ -317,7 +322,7 @@ class UnifiedRedditScraper:
         
         try:
             bulk_operations = []
-            update_time = datetime.utcnow()
+            update_time = datetime.now(UTC)
             
             for post_id in post_ids:
                 update_data = {
@@ -415,7 +420,13 @@ class UnifiedRedditScraper:
             if not last_updated:
                 return True
             
-            time_since_update = (datetime.utcnow() - last_updated).total_seconds()
+            # Handle both timezone-aware and timezone-naive datetimes
+            current_time = datetime.now(UTC)
+            if last_updated.tzinfo is None:
+                # Database has timezone-naive datetime, convert it to UTC
+                last_updated = last_updated.replace(tzinfo=UTC)
+            
+            time_since_update = (current_time - last_updated).total_seconds()
             should_update = time_since_update >= self.config["subreddit_update_interval"]
             
             if should_update:
@@ -475,8 +486,8 @@ class UnifiedRedditScraper:
                 "banner_img": subreddit.banner_img,
                 "banner_background_image": subreddit.banner_background_image,
                 "mobile_banner_image": subreddit.mobile_banner_image,
-                "scraped_at": datetime.utcnow(),
-                "last_updated": datetime.utcnow()
+                "scraped_at": datetime.now(UTC),
+                "last_updated": datetime.now(UTC)
             }
             
             print(f"Subscribers: {metadata['subscribers']:,}, Active: {metadata['active_user_count']:,}")
@@ -538,7 +549,7 @@ class UnifiedRedditScraper:
             })
             posts_with_recent_updates = posts_collection.count_documents({
                 "subreddit": self.subreddit_name,
-                "last_comment_fetch_time": {"$gte": datetime.utcnow() - timedelta(hours=24)}
+                "last_comment_fetch_time": {"$gte": (datetime.now(UTC) - timedelta(hours=24)).replace(tzinfo=None)}
             })
             total_comments = comments_collection.count_documents({"subreddit": self.subreddit_name})
             
@@ -575,7 +586,13 @@ class UnifiedRedditScraper:
             print(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
             print(f"Subreddit metadata: {'✓' if stats['subreddit_metadata_exists'] else '✗'}")
             if stats['subreddit_last_updated']:
-                hours_ago = (datetime.utcnow() - stats['subreddit_last_updated']).total_seconds() / 3600
+                # Handle both timezone-aware and timezone-naive datetimes
+                current_time = datetime.now(UTC)
+                last_updated = stats['subreddit_last_updated']
+                if last_updated.tzinfo is None:
+                    # Database has timezone-naive datetime, convert it to UTC
+                    last_updated = last_updated.replace(tzinfo=UTC)
+                hours_ago = (current_time - last_updated).total_seconds() / 3600
                 print(f"Metadata last updated: {hours_ago:.1f} hours ago")
             print(f"{'='*60}")
     

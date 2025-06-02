@@ -1,5 +1,5 @@
 import praw
-from datetime import datetime
+from datetime import datetime, UTC
 from dotenv import load_dotenv
 import pymongo
 import os
@@ -81,8 +81,8 @@ def scrape_subreddit_metadata(subreddit_name):
             "banner_img": subreddit.banner_img,
             "banner_background_image": subreddit.banner_background_image,
             "mobile_banner_image": subreddit.mobile_banner_image,
-            "scraped_at": datetime.utcnow(),
-            "last_updated": datetime.utcnow()
+            "scraped_at": datetime.now(UTC),
+            "last_updated": datetime.now(UTC)
         }
         
         print(f"Successfully scraped metadata for r/{subreddit_name}")
@@ -161,7 +161,13 @@ def should_update_subreddit_metadata(subreddit_name):
         if not last_updated:
             return True
         
-        time_since_update = (datetime.utcnow() - last_updated).total_seconds()
+        # Handle both timezone-aware and timezone-naive datetimes
+        current_time = datetime.now(UTC)
+        if last_updated.tzinfo is None:
+            # Database has timezone-naive datetime, convert it to UTC
+            last_updated = last_updated.replace(tzinfo=UTC)
+        
+        time_since_update = (current_time - last_updated).total_seconds()
         should_update = time_since_update >= SUBREDDIT_SCRAPE_INTERVAL
         
         if should_update:
@@ -236,7 +242,12 @@ def print_subreddit_stats():
             for sub in stats['subreddits'][:10]:  # Show last 10
                 last_updated = sub.get('last_updated', 'Never')
                 if isinstance(last_updated, datetime):
-                    time_ago = (datetime.utcnow() - last_updated).total_seconds() / 3600
+                    # Handle both timezone-aware and timezone-naive datetimes
+                    current_time = datetime.now(UTC)
+                    if last_updated.tzinfo is None:
+                        # Database has timezone-naive datetime, convert it to UTC
+                        last_updated = last_updated.replace(tzinfo=UTC)
+                    time_ago = (current_time - last_updated).total_seconds() / 3600
                     last_updated = f"{time_ago:.1f}h ago"
                 
                 subscribers = sub.get('subscribers', 0)

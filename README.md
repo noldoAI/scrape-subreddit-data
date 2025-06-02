@@ -4,7 +4,7 @@ A comprehensive Reddit scraping system that continuously collects posts, comment
 
 ## Features
 
-- - System\*\*: One script handles posts, comments, and subreddit metadata
+- **Unified System**: One script handles posts, comments, and subreddit metadata
 - **Configurable**: Target any subreddit by name
 - **Continuous Updates**: Live comment tracking with smart deduplication
 - **Bulk Operations**: High-performance MongoDB operations

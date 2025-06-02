@@ -1,5 +1,5 @@
 import praw
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from dotenv import load_dotenv
 import pymongo
 import os
@@ -71,7 +71,7 @@ def scrape_hot_posts(subreddit_name, limit=1000):
                 "author": str(post.author) if post.author else "[deleted]",
                 "subreddit": subreddit_name,
                 "post_id": post.id,
-                "scraped_at": datetime.utcnow(),
+                "scraped_at": datetime.now(UTC),
                 "selftext": post.selftext[:1000] if post.selftext else "",  # Limit text length
                 "is_self": post.is_self,
                 "upvote_ratio": post.upvote_ratio,
@@ -176,9 +176,14 @@ def get_posts_needing_comment_updates(limit=20):
         list: List of post documents that need comment updates
     """
     try:
-        current_time = datetime.utcnow()
+        current_time = datetime.now(UTC)
         six_hours_ago = current_time - timedelta(hours=6)
         twenty_four_hours_ago = current_time - timedelta(hours=24)
+        
+        # Convert to timezone-naive for database comparison (since existing data might be timezone-naive)
+        current_time_naive = current_time.replace(tzinfo=None)
+        six_hours_ago_naive = six_hours_ago.replace(tzinfo=None)
+        twenty_four_hours_ago_naive = twenty_four_hours_ago.replace(tzinfo=None)
         
         # Query for posts needing updates, prioritized by urgency
         posts = list(posts_collection.find({
@@ -187,19 +192,19 @@ def get_posts_needing_comment_updates(limit=20):
                 {"initial_comments_scraped": {"$ne": True}},
                 # Recent posts (< 24h old) that haven't been updated in 6 hours  
                 {
-                    "created_datetime": {"$gte": twenty_four_hours_ago},
+                    "created_datetime": {"$gte": twenty_four_hours_ago_naive},
                     "$or": [
                         {"last_comment_fetch_time": {"$exists": False}},
-                        {"last_comment_fetch_time": {"$lte": six_hours_ago}},
+                        {"last_comment_fetch_time": {"$lte": six_hours_ago_naive}},
                         {"last_comment_fetch_time": None}
                     ]
                 },
                 # Older posts that haven't been updated in 24 hours
                 {
-                    "created_datetime": {"$lt": twenty_four_hours_ago},
+                    "created_datetime": {"$lt": twenty_four_hours_ago_naive},
                     "$or": [
                         {"last_comment_fetch_time": {"$exists": False}},
-                        {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago}},
+                        {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago_naive}},
                         {"last_comment_fetch_time": None}
                     ]
                 }
@@ -300,7 +305,7 @@ def scrape_post_comments(post_id):
                     "stickied": comment.stickied if hasattr(comment, 'stickied') else False,
                     "edited": bool(comment.edited) if hasattr(comment, 'edited') else False,
                     "controversiality": comment.controversiality if hasattr(comment, 'controversiality') else 0,
-                    "scraped_at": datetime.utcnow(),
+                    "scraped_at": datetime.now(UTC),
                     "subreddit": submission.subreddit.display_name,
                     "gilded": comment.gilded if hasattr(comment, 'gilded') else 0,
                     "total_awards_received": comment.total_awards_received if hasattr(comment, 'total_awards_received') else 0
@@ -388,7 +393,7 @@ def mark_post_comments_scraped(post_id):
             {"post_id": post_id},
             {"$set": {
                 "comments_scraped": True,
-                "comments_scraped_at": datetime.utcnow()
+                "comments_scraped_at": datetime.now(UTC)
             }}
         )
     except Exception as e:
@@ -409,7 +414,7 @@ def mark_posts_comments_updated(post_ids, is_initial_scrape=False):
     try:
         # Prepare bulk operations
         bulk_operations = []
-        update_time = datetime.utcnow()
+        update_time = datetime.now(UTC)
         
         for post_id in post_ids:
             update_data = {
@@ -580,7 +585,7 @@ def get_scraping_stats():
             ]
         })
         posts_with_recent_updates = posts_collection.count_documents({
-            "last_comment_fetch_time": {"$gte": datetime.utcnow() - timedelta(hours=24)}
+            "last_comment_fetch_time": {"$gte": (datetime.now(UTC) - timedelta(hours=24)).replace(tzinfo=None)}
         })
         total_comments = comments_collection.count_documents({})
         
