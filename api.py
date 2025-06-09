@@ -102,7 +102,6 @@ class ScraperConfig(BaseModel):
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
     credentials: RedditCredentials
-    mongodb_uri: Optional[str] = None  # Allow custom MongoDB per scraper
     auto_restart: bool = True  # Enable automatic restart on failure
 
 class ScraperStatus(BaseModel):
@@ -112,6 +111,102 @@ class ScraperStatus(BaseModel):
     started_at: Optional[datetime] = None
     config: Optional[ScraperConfig] = None
     last_error: Optional[str] = None
+
+class ScraperStartRequest(BaseModel):
+    subreddit: str
+    posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
+    interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
+    comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
+    auto_restart: bool = True
+    
+    # Option 1: Use saved account
+    saved_account_name: Optional[str] = None
+    
+    # Option 2: Manual credentials (and optionally save them)
+    credentials: Optional[RedditCredentials] = None
+    save_account_as: Optional[str] = None  # If provided, save manual credentials with this name
+
+# Local account storage for Reddit credentials
+ACCOUNTS_FILE = "saved_accounts.json"
+
+def save_reddit_account(account_name: str, credentials: RedditCredentials):
+    """Save Reddit credentials locally with encryption"""
+    try:
+        # Load existing accounts
+        accounts = load_saved_accounts()
+        
+        # Encrypt sensitive credentials
+        encrypted_account = {
+            "account_name": account_name,
+            "client_id": encrypt_credential(credentials.client_id),
+            "client_secret": encrypt_credential(credentials.client_secret),
+            "username": credentials.username,  # Keep username unencrypted for display
+            "password": encrypt_credential(credentials.password),
+            "user_agent": credentials.user_agent,  # Keep user agent unencrypted
+            "created_at": datetime.now(UTC).isoformat()
+        }
+        
+        # Update or add account
+        accounts[account_name] = encrypted_account
+        
+        # Save to file
+        with open(ACCOUNTS_FILE, "w") as f:
+            json.dump(accounts, f, indent=2)
+        
+        logger.info(f"Saved Reddit account: {account_name}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving Reddit account: {e}")
+        return False
+
+def load_saved_accounts():
+    """Load saved Reddit accounts from local file"""
+    try:
+        if os.path.exists(ACCOUNTS_FILE):
+            with open(ACCOUNTS_FILE, "r") as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        logger.error(f"Error loading saved accounts: {e}")
+        return {}
+
+def get_reddit_account(account_name: str) -> Optional[RedditCredentials]:
+    """Get decrypted Reddit credentials for an account"""
+    try:
+        accounts = load_saved_accounts()
+        if account_name not in accounts:
+            return None
+        
+        account = accounts[account_name]
+        
+        # Decrypt credentials
+        return RedditCredentials(
+            client_id=decrypt_credential(account["client_id"]),
+            client_secret=decrypt_credential(account["client_secret"]),
+            username=account["username"],
+            password=decrypt_credential(account["password"]),
+            user_agent=account["user_agent"]
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting Reddit account {account_name}: {e}")
+        return None
+
+def delete_reddit_account(account_name: str):
+    """Delete a saved Reddit account"""
+    try:
+        accounts = load_saved_accounts()
+        if account_name in accounts:
+            del accounts[account_name]
+            with open(ACCOUNTS_FILE, "w") as f:
+                json.dump(accounts, f, indent=2)
+            logger.info(f"Deleted Reddit account: {account_name}")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error deleting Reddit account {account_name}: {e}")
+        return False
 
 def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting", 
                        container_id: str = None, container_name: str = None, 
@@ -138,7 +233,6 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
                 "comment_batch": config.comment_batch
             },
             "credentials": encrypted_credentials,
-            "mongodb_uri": config.mongodb_uri,
             "auto_restart": config.auto_restart,
             "last_updated": datetime.now(UTC),
             "last_error": last_error,
@@ -185,7 +279,6 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
             interval=scraper_doc["config"]["interval"],
             comment_batch=scraper_doc["config"]["comment_batch"],
             credentials=decrypted_credentials,
-            mongodb_uri=scraper_doc.get("mongodb_uri"),
             auto_restart=scraper_doc.get("auto_restart", True)
         )
         
@@ -383,7 +476,7 @@ def run_scraper(config: ScraperConfig):
             f"R_USERNAME={config.credentials.username}",
             f"R_PASSWORD={config.credentials.password}",
             f"R_USER_AGENT={config.credentials.user_agent}",
-            f"MONGODB_URI={config.mongodb_uri or os.getenv('MONGODB_URI', '')}"
+            f"MONGODB_URI={os.getenv('MONGODB_URI', '')}"
         ]
         
         # Build Docker command using centralized config
@@ -623,37 +716,104 @@ async def dashboard():
                 </label>
             </div>
             
-            <button class="collapsible">📋 Reddit API Credentials (Required)</button>
-            <div class="content credentials-section">
+            <h3>👤 Reddit Account Selection</h3>
+            <div class="form-row">
+                <label>Account Type:</label>
+                <select id="account_type" onchange="toggleAccountType()">
+                    <option value="saved">Use Saved Account</option>
+                    <option value="manual">Enter Credentials Manually</option>
+                </select>
+            </div>
+            
+            <!-- Saved Account Selection -->
+            <div id="saved_account_section">
                 <div class="form-row">
-                    <label>Client ID:</label>
-                    <input type="text" id="client_id" placeholder="Your Reddit app client ID" required />
+                    <label>Saved Account:</label>
+                    <select id="saved_account_name">
+                        <option value="">Select an account...</option>
+                    </select>
+                    <button onclick="loadSavedAccounts()" class="stats">🔄 Refresh</button>
+                    <button onclick="showAccountManager()" class="stats">⚙️ Manage Accounts</button>
                 </div>
-                <div class="form-row">
-                    <label>Client Secret:</label>
-                    <input type="password" id="client_secret" placeholder="Your Reddit app client secret" required />
+            </div>
+            
+            <!-- Manual Credentials -->
+            <div id="manual_credentials_section" style="display: none;">
+                <div class="credentials-section">
+                    <div class="form-row">
+                        <label>Client ID:</label>
+                        <input type="text" id="client_id" placeholder="Your Reddit app client ID" />
+                    </div>
+                    <div class="form-row">
+                        <label>Client Secret:</label>
+                        <input type="password" id="client_secret" placeholder="Your Reddit app client secret" />
+                    </div>
+                    <div class="form-row">
+                        <label>Username:</label>
+                        <input type="text" id="username" placeholder="Your Reddit username" />
+                    </div>
+                    <div class="form-row">
+                        <label>Password:</label>
+                        <input type="password" id="password" placeholder="Your Reddit password" />
+                    </div>
+                    <div class="form-row">
+                        <label>User Agent:</label>
+                        <input type="text" id="user_agent" placeholder="RedditScraper/1.0 by YourUsername" />
+                    </div>
+                    <div class="form-row">
+                        <label>Save as:</label>
+                        <input type="text" id="save_account_as" placeholder="Account name (optional)" />
+                        <small>Save these credentials for future use</small>
+                    </div>
+                    <p><small>💡 Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">https://www.reddit.com/prefs/apps</a></small></p>
                 </div>
-                <div class="form-row">
-                    <label>Username:</label>
-                    <input type="text" id="username" placeholder="Your Reddit username" required />
-                </div>
-                <div class="form-row">
-                    <label>Password:</label>
-                    <input type="password" id="password" placeholder="Your Reddit password" required />
-                </div>
-                <div class="form-row">
-                    <label>User Agent:</label>
-                    <input type="text" id="user_agent" placeholder="RedditScraper/1.0 by YourUsername" required />
-                </div>
-                <div class="form-row">
-                    <label>MongoDB URI:</label>
-                    <input type="text" id="mongodb_uri" placeholder="mongodb+srv://... (optional, uses default)" />
-                </div>
-                <p><small>💡 Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">https://www.reddit.com/prefs/apps</a></small></p>
             </div>
             
             <br>
             <button onclick="startScraper()" class="start" id="startScraperBtn">🚀 Start Scraper</button>
+        </div>
+        
+        <!-- Account Manager Modal -->
+        <div id="accountManagerModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1001;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; width: 80%; max-width: 600px; max-height: 80%; overflow-y: auto;">
+                <h2>⚙️ Account Manager</h2>
+                
+                <h3>📝 Add New Account</h3>
+                <div class="credentials-section">
+                    <div class="form-row">
+                        <label>Account Name:</label>
+                        <input type="text" id="new_account_name" placeholder="Give this account a name" />
+                    </div>
+                    <div class="form-row">
+                        <label>Client ID:</label>
+                        <input type="text" id="new_client_id" placeholder="Your Reddit app client ID" />
+                    </div>
+                    <div class="form-row">
+                        <label>Client Secret:</label>
+                        <input type="password" id="new_client_secret" placeholder="Your Reddit app client secret" />
+                    </div>
+                    <div class="form-row">
+                        <label>Username:</label>
+                        <input type="text" id="new_username" placeholder="Your Reddit username" />
+                    </div>
+                    <div class="form-row">
+                        <label>Password:</label>
+                        <input type="password" id="new_password" placeholder="Your Reddit password" />
+                    </div>
+                    <div class="form-row">
+                        <label>User Agent:</label>
+                        <input type="text" id="new_user_agent" placeholder="RedditScraper/1.0 by YourUsername" />
+                    </div>
+                    <button onclick="saveNewAccount()" class="start">💾 Save Account</button>
+                </div>
+                
+                <h3>📋 Saved Accounts</h3>
+                <div id="savedAccountsList"></div>
+                
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="hideAccountManager()" class="stop">❌ Close</button>
+                </div>
+            </div>
         </div>
         
         <script>
@@ -797,51 +957,224 @@ async def dashboard():
                 }
             }
             
-            async function startScraper() {
-                const button = document.getElementById('startScraperBtn');
+            // Account management functions
+            function toggleAccountType() {
+                const accountType = document.getElementById('account_type').value;
+                const savedSection = document.getElementById('saved_account_section');
+                const manualSection = document.getElementById('manual_credentials_section');
                 
-                // Validate required fields
-                const requiredFields = ['subreddit', 'client_id', 'client_secret', 'username', 'password', 'user_agent'];
-                for (const field of requiredFields) {
-                    if (!document.getElementById(field).value) {
-                        alert(`Please fill in ${field.replace('_', ' ')}`);
+                if (accountType === 'saved') {
+                    savedSection.style.display = 'block';
+                    manualSection.style.display = 'none';
+                } else {
+                    savedSection.style.display = 'none';
+                    manualSection.style.display = 'block';
+                }
+            }
+            
+            async function loadSavedAccounts() {
+                try {
+                    const response = await fetch('/accounts');
+                    const accounts = await response.json();
+                    const select = document.getElementById('saved_account_name');
+                    
+                    // Clear existing options
+                    select.innerHTML = '<option value="">Select an account...</option>';
+                    
+                    // Add accounts
+                    Object.keys(accounts).forEach(accountName => {
+                        const option = document.createElement('option');
+                        option.value = accountName;
+                        option.textContent = `${accountName} (${accounts[accountName].username})`;
+                        select.appendChild(option);
+                    });
+                } catch (error) {
+                    console.error('Error loading saved accounts:', error);
+                }
+            }
+            
+            function showAccountManager() {
+                document.getElementById('accountManagerModal').style.display = 'block';
+                loadAccountsInManager();
+            }
+            
+            function hideAccountManager() {
+                document.getElementById('accountManagerModal').style.display = 'none';
+                // Clear form
+                ['new_account_name', 'new_client_id', 'new_client_secret', 'new_username', 'new_password', 'new_user_agent'].forEach(id => {
+                    document.getElementById(id).value = '';
+                });
+            }
+            
+            async function saveNewAccount() {
+                const accountName = document.getElementById('new_account_name').value;
+                const credentials = {
+                    client_id: document.getElementById('new_client_id').value,
+                    client_secret: document.getElementById('new_client_secret').value,
+                    username: document.getElementById('new_username').value,
+                    password: document.getElementById('new_password').value,
+                    user_agent: document.getElementById('new_user_agent').value
+                };
+                
+                // Validate
+                if (!accountName) {
+                    alert('Please enter an account name');
+                    return;
+                }
+                
+                if (!Object.values(credentials).every(v => v)) {
+                    alert('Please fill in all credential fields');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`/accounts?account_name=${encodeURIComponent(accountName)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(credentials)
+                    });
+                    
+                    if (response.ok) {
+                        alert('Account saved successfully!');
+                        loadAccountsInManager();
+                        loadSavedAccounts();
+                        // Clear form
+                        ['new_account_name', 'new_client_id', 'new_client_secret', 'new_username', 'new_password', 'new_user_agent'].forEach(id => {
+                            document.getElementById(id).value = '';
+                        });
+                    } else {
+                        const error = await response.json();
+                        alert('Error saving account: ' + error.detail);
+                    }
+                } catch (error) {
+                    alert('Error saving account: ' + error.message);
+                }
+            }
+            
+            async function loadAccountsInManager() {
+                try {
+                    const response = await fetch('/accounts');
+                    const accounts = await response.json();
+                    const container = document.getElementById('savedAccountsList');
+                    
+                    if (Object.keys(accounts).length === 0) {
+                        container.innerHTML = '<p>No saved accounts yet.</p>';
                         return;
                     }
+                    
+                    container.innerHTML = '';
+                    Object.entries(accounts).forEach(([accountName, account]) => {
+                        const div = document.createElement('div');
+                        div.style.cssText = 'border: 1px solid #ddd; padding: 10px; margin: 5px 0; border-radius: 3px; display: flex; justify-content: space-between; align-items: center;';
+                        div.innerHTML = `
+                            <div>
+                                <strong>${accountName}</strong><br>
+                                <small>User: ${account.username} | Created: ${new Date(account.created_at).toLocaleDateString()}</small>
+                            </div>
+                            <button onclick="deleteAccount('${accountName}')" class="delete" style="padding: 5px 10px;">🗑️ Delete</button>
+                        `;
+                        container.appendChild(div);
+                    });
+                } catch (error) {
+                    console.error('Error loading accounts in manager:', error);
                 }
+            }
+            
+            async function deleteAccount(accountName) {
+                if (confirm(`Are you sure you want to delete account "${accountName}"?`)) {
+                    try {
+                        const response = await fetch(`/accounts/${encodeURIComponent(accountName)}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        if (response.ok) {
+                            alert('Account deleted successfully!');
+                            loadAccountsInManager();
+                            loadSavedAccounts();
+                        } else {
+                            alert('Error deleting account');
+                        }
+                    } catch (error) {
+                        alert('Error deleting account: ' + error.message);
+                    }
+                }
+            }
+            
+            async function startScraper() {
+                const button = document.getElementById('startScraperBtn');
+                const accountType = document.getElementById('account_type').value;
                 
                 setButtonLoading(button, true, 'Starting...');
                 
                 try {
-                    const config = {
+                    let requestData = {
                         subreddit: document.getElementById('subreddit').value,
                         posts_limit: parseInt(document.getElementById('posts_limit').value),
                         interval: parseInt(document.getElementById('interval').value),
                         comment_batch: parseInt(document.getElementById('comment_batch').value),
-                        auto_restart: document.getElementById('auto_restart').checked,
-                        credentials: {
+                        auto_restart: document.getElementById('auto_restart').checked
+                    };
+                    
+                    if (!requestData.subreddit) {
+                        alert('Please enter a subreddit name');
+                        return;
+                    }
+                    
+                    if (accountType === 'saved') {
+                        const savedAccountName = document.getElementById('saved_account_name').value;
+                        if (!savedAccountName) {
+                            alert('Please select a saved account');
+                            return;
+                        }
+                        requestData.saved_account_name = savedAccountName;
+                    } else {
+                        // Manual credentials
+                        const credentials = {
                             client_id: document.getElementById('client_id').value,
                             client_secret: document.getElementById('client_secret').value,
                             username: document.getElementById('username').value,
                             password: document.getElementById('password').value,
                             user_agent: document.getElementById('user_agent').value
-                        },
-                        mongodb_uri: document.getElementById('mongodb_uri').value || null
-                    };
+                        };
+                        
+                        if (!Object.values(credentials).every(v => v)) {
+                            alert('Please fill in all credential fields');
+                            return;
+                        }
+                        
+                        requestData.credentials = credentials;
+                        
+                        // Optionally save account
+                        const saveAccountAs = document.getElementById('save_account_as').value;
+                        if (saveAccountAs) {
+                            requestData.save_account_as = saveAccountAs;
+                        }
+                    }
                     
-                    const response = await fetch('/scrapers/start', {
+                    const response = await fetch('/scrapers/start-flexible', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(config)
+                        body: JSON.stringify(requestData)
                     });
                     
                     if (response.ok) {
-                        alert('Scraper started successfully!');
-                        // Clear credentials for security
-                        ['client_id', 'client_secret', 'password'].forEach(id => {
-                            document.getElementById(id).value = '';
-                        });
+                        const result = await response.json();
+                        let message = 'Scraper started successfully!';
+                        if (result.saved_new_account) {
+                            message += ` Account saved as "${requestData.save_account_as}".`;
+                        }
+                        alert(message);
+                        
+                        // Clear sensitive fields
+                        if (accountType === 'manual') {
+                            ['client_id', 'client_secret', 'password', 'save_account_as'].forEach(id => {
+                                document.getElementById(id).value = '';
+                            });
+                        }
+                        
                         loadScrapers();
                         loadHealthStatus();
+                        loadSavedAccounts(); // Refresh in case account was saved
                     } else {
                         const error = await response.json();
                         alert('Error: ' + error.detail);
@@ -971,9 +1304,10 @@ ${logs.logs}
                 }
             }
             
-            // Load scrapers and health on page load and refresh every 15 seconds
+            // Load scrapers, health, and accounts on page load and refresh every 15 seconds
             loadScrapers();
             loadHealthStatus();
+            loadSavedAccounts();
             setInterval(() => {
                 loadScrapers();
                 loadHealthStatus();
@@ -1057,44 +1391,62 @@ async def list_scrapers():
     
     return result
 
-@app.post("/scrapers/start")
-async def start_scraper(config: ScraperConfig, background_tasks: BackgroundTasks):
-    """Start a new scraper for a subreddit with unique credentials"""
+@app.post("/scrapers/start-flexible")
+async def start_scraper_flexible(request: ScraperStartRequest, background_tasks: BackgroundTasks):
+    """Start a new scraper using either saved account or manual credentials"""
     
-    # Check if scraper already exists in database
+    # Determine which credentials to use
+    if request.saved_account_name:
+        # Use saved account
+        credentials = get_reddit_account(request.saved_account_name)
+        if not credentials:
+            raise HTTPException(status_code=404, detail=f"Saved account '{request.saved_account_name}' not found")
+        logger.info(f"Using saved account '{request.saved_account_name}' for r/{request.subreddit}")
+    elif request.credentials:
+        # Use manual credentials
+        credentials = request.credentials
+        
+        # Optionally save the account
+        if request.save_account_as:
+            save_success = save_reddit_account(request.save_account_as, credentials)
+            if save_success:
+                logger.info(f"Saved new account '{request.save_account_as}'")
+            else:
+                logger.warning(f"Failed to save account '{request.save_account_as}'")
+    else:
+        raise HTTPException(
+            status_code=400, 
+            detail="Either 'saved_account_name' or 'credentials' must be provided"
+        )
+    
+    # Create scraper config
+    config = ScraperConfig(
+        subreddit=request.subreddit,
+        posts_limit=request.posts_limit,
+        interval=request.interval,
+        comment_batch=request.comment_batch,
+        credentials=credentials,
+        auto_restart=request.auto_restart
+    )
+    
+    # Check if scraper already exists
     existing_scraper = load_scraper_from_db(config.subreddit)
     if existing_scraper:
-        # Check if it's actually running
         if existing_scraper["container_name"]:
             container_status = check_container_status(existing_scraper["container_name"])
             if container_status == "running":
                 raise HTTPException(status_code=400, detail="Scraper already running for this subreddit")
-        
-        # If not running, we can restart with new config
         logger.info(f"Updating existing scraper configuration for r/{config.subreddit}")
     
-    # Validate required credentials are provided
-    if not all([
-        config.credentials.client_id,
-        config.credentials.client_secret,
-        config.credentials.username,
-        config.credentials.password,
-        config.credentials.user_agent
-    ]):
-        raise HTTPException(
-            status_code=400, 
-            detail="All Reddit API credentials are required (client_id, client_secret, username, password, user_agent)"
-        )
-    
-    # Check if MongoDB URI is available (either in config or environment)
-    mongodb_uri = config.mongodb_uri or os.getenv("MONGODB_URI")
+    # Check MongoDB URI
+    mongodb_uri = os.getenv("MONGODB_URI")
     if not mongodb_uri:
         raise HTTPException(
             status_code=400,
-            detail="MongoDB URI is required (either in config or MONGODB_URI environment variable)"
+            detail="MongoDB URI is required in environment variables (MONGODB_URI)"
         )
     
-    # Check if reddit-scraper Docker image exists
+    # Check Docker image exists
     try:
         result = subprocess.run([
             "docker", "images", DOCKER_CONFIG["image_name"], "--format", "{{.Repository}}"
@@ -1115,13 +1467,31 @@ async def start_scraper(config: ScraperConfig, background_tasks: BackgroundTasks
     
     return {
         "message": f"Scraper started for r/{config.subreddit}",
-        "reddit_user": config.credentials.username,
+        "reddit_user": credentials.username,
         "posts_limit": config.posts_limit,
         "interval": config.interval,
         "comment_batch": config.comment_batch,
         "container_name": f"{DOCKER_CONFIG['container_prefix']}{config.subreddit}",
-        "auto_restart": config.auto_restart
+        "auto_restart": config.auto_restart,
+        "used_saved_account": request.saved_account_name is not None,
+        "saved_new_account": request.save_account_as is not None
     }
+
+@app.post("/scrapers/start")
+async def start_scraper_legacy(config: ScraperConfig, background_tasks: BackgroundTasks):
+    """Legacy endpoint - redirects to flexible endpoint (MongoDB URI must be in environment)"""
+    
+    # Convert to new format
+    request = ScraperStartRequest(
+        subreddit=config.subreddit,
+        posts_limit=config.posts_limit,
+        interval=config.interval,
+        comment_batch=config.comment_batch,
+        auto_restart=config.auto_restart,
+        credentials=config.credentials
+    )
+    
+    return await start_scraper_flexible(request, background_tasks)
 
 @app.post("/scrapers/{subreddit}/stop")
 async def stop_scraper(subreddit: str):
@@ -1413,6 +1783,79 @@ async def get_presets():
             "comment_batch": 10
         }
     }
+
+@app.get("/accounts")
+async def list_saved_accounts():
+    """List all saved Reddit accounts (without sensitive data)"""
+    try:
+        accounts = load_saved_accounts()
+        safe_accounts = {}
+        
+        for account_name, account_data in accounts.items():
+            safe_accounts[account_name] = {
+                "account_name": account_name,
+                "username": account_data["username"],
+                "user_agent": account_data["user_agent"],
+                "created_at": account_data.get("created_at")
+            }
+        
+        return safe_accounts
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading accounts: {str(e)}")
+
+@app.post("/accounts")
+async def save_account(account_name: str, credentials: RedditCredentials):
+    """Save Reddit credentials for reuse"""
+    if not account_name or not account_name.strip():
+        raise HTTPException(status_code=400, detail="Account name is required")
+    
+    # Validate credentials are provided
+    if not all([
+        credentials.client_id,
+        credentials.client_secret,
+        credentials.username,
+        credentials.password,
+        credentials.user_agent
+    ]):
+        raise HTTPException(
+            status_code=400, 
+            detail="All Reddit API credentials are required"
+        )
+    
+    success = save_reddit_account(account_name.strip(), credentials)
+    if success:
+        return {"message": f"Account '{account_name}' saved successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save account")
+
+@app.delete("/accounts/{account_name}")
+async def delete_account(account_name: str):
+    """Delete a saved Reddit account"""
+    success = delete_reddit_account(account_name)
+    if success:
+        return {"message": f"Account '{account_name}' deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+@app.get("/accounts/{account_name}")
+async def get_account_info(account_name: str):
+    """Get account info (without sensitive credentials)"""
+    try:
+        accounts = load_saved_accounts()
+        if account_name not in accounts:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        account = accounts[account_name]
+        return {
+            "account_name": account_name,
+            "username": account["username"],
+            "user_agent": account["user_agent"],
+            "created_at": account.get("created_at")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting account info: {str(e)}")
 
 @app.post("/scrapers/restart-all-failed")
 async def restart_all_failed_scrapers(background_tasks: BackgroundTasks):
