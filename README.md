@@ -2,7 +2,7 @@
 
 A comprehensive Reddit scraping system with a web-based management API that orchestrates multiple containerized scrapers. Each scraper can use unique Reddit API credentials and target different subreddits simultaneously, with automatic monitoring, restart capabilities, and persistent storage.
 ```
-http://ec2-16-16-121-90.eu-north-1.compute.amazonaws.com/
+ec2-16-171-56-82.eu-north-1.compute.amazonaws.com
 ```
 
 ## 🚀 Quick Start
