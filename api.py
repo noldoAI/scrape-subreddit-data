@@ -53,14 +53,23 @@ app = FastAPI(
 
 # MongoDB connection for stats and scraper storage
 try:
-    client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-    db = client[DATABASE_NAME]
-    posts_collection = db[COLLECTIONS["POSTS"]]
-    comments_collection = db[COLLECTIONS["COMMENTS"]]
-    subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
-    scrapers_collection = db[COLLECTIONS["SCRAPERS"]]
-    mongo_connected = True
-except:
+    mongodb_uri = os.getenv("MONGODB_URI")
+    if not mongodb_uri:
+        logger.error("MONGODB_URI environment variable not set")
+        mongo_connected = False
+    else:
+        client = pymongo.MongoClient(mongodb_uri)
+        # Test the connection
+        client.admin.command('ping')
+        db = client[DATABASE_NAME]
+        posts_collection = db[COLLECTIONS["POSTS"]]
+        comments_collection = db[COLLECTIONS["COMMENTS"]]
+        subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
+        scrapers_collection = db[COLLECTIONS["SCRAPERS"]]
+        mongo_connected = True
+        logger.info("Successfully connected to MongoDB")
+except Exception as e:
+    logger.error(f"Failed to connect to MongoDB: {e}")
     mongo_connected = False
 
 # Global storage for active scrapers (for quick access, backed by database)
@@ -127,7 +136,8 @@ class ScraperStartRequest(BaseModel):
     save_account_as: Optional[str] = None  # If provided, save manual credentials with this name
 
 # Local account storage for Reddit credentials
-ACCOUNTS_FILE = "saved_accounts.json"
+# Use /app directory since that's where the container has write access
+ACCOUNTS_FILE = "/app/saved_accounts.json"
 
 def save_reddit_account(account_name: str, credentials: RedditCredentials):
     """Save Reddit credentials locally with encryption"""
@@ -259,6 +269,10 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
 def load_scraper_from_db(subreddit: str) -> Optional[dict]:
     """Load scraper configuration from database"""
     try:
+        if not mongo_connected:
+            logger.warning("Database not connected, cannot load scraper")
+            return None
+            
         scraper_doc = scrapers_collection.find_one({"subreddit": subreddit})
         if not scraper_doc:
             return None
@@ -294,7 +308,7 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
         }
         
     except Exception as e:
-        logger.error(f"Error loading scraper from database: {e}")
+        logger.error(f"Error loading scraper from database for r/{subreddit}: {e}")
         return None
 
 def update_scraper_status(subreddit: str, status: str, container_id: str = None, 
@@ -368,10 +382,86 @@ def load_all_scrapers_from_db():
     except Exception as e:
         logger.error(f"Error loading scrapers from database: {e}")
 
+def check_container_status(container_name):
+    """Check if a Docker container is running"""
+    try:
+        result = subprocess.run([
+            "docker", "inspect", container_name, "--format", "{{.State.Status}}"
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return None
+    except Exception as e:
+        logger.debug(f"Error checking container status for {container_name}: {e}")
+        return None
+
+def cleanup_container(container_name, timeout=30):
+    """Stop and remove a Docker container completely"""
+    try:
+        # Try to stop the container gracefully first
+        result = subprocess.run([
+            "docker", "stop", container_name
+        ], capture_output=True, text=True, timeout=timeout)
+        
+        if result.returncode == 0:
+            logger.debug(f"Stopped container {container_name}")
+        else:
+            # If stop failed, try force kill
+            subprocess.run([
+                "docker", "kill", container_name
+            ], capture_output=True, text=True)
+            logger.debug(f"Force killed container {container_name}")
+            
+    except subprocess.TimeoutExpired:
+        # Force kill if timeout
+        subprocess.run([
+            "docker", "kill", container_name
+        ], capture_output=True, text=True)
+        logger.debug(f"Timeout - force killed container {container_name}")
+    except Exception as e:
+        logger.debug(f"Container {container_name} may not exist: {e}")
+    
+    # Remove the container completely
+    try:
+        result = subprocess.run([
+            "docker", "rm", container_name
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            logger.debug(f"Removed container {container_name}")
+            return True
+        else:
+            logger.warning(f"Failed to remove container {container_name}: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.warning(f"Error removing container {container_name}: {e}")
+        return False
+
+def get_container_logs(container_name, lines=50):
+    """Get recent logs from a Docker container"""
+    try:
+        result = subprocess.run([
+            "docker", "logs", "--tail", str(lines), container_name
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return result.stdout
+        return None
+    except Exception as e:
+        logger.debug(f"Error getting logs for container {container_name}: {e}")
+        return None
+
 def check_for_failed_scrapers():
     """Background task to check for failed containers and restart if needed"""
     while True:
         try:
+            # Skip if database not connected
+            if not mongo_connected:
+                logger.debug("Database not connected, skipping failed scraper check")
+                time.sleep(60)
+                continue
+            
             # Get all scrapers that should be running
             running_scrapers = scrapers_collection.find({"status": "running", "auto_restart": True})
             
@@ -545,74 +635,6 @@ def run_scraper(config: ScraperConfig):
         if config.subreddit in active_scrapers:
             active_scrapers[config.subreddit]["status"] = "error"
             active_scrapers[config.subreddit]["last_error"] = str(e)
-
-def check_container_status(container_name):
-    """Check if a Docker container is running"""
-    try:
-        result = subprocess.run([
-            "docker", "inspect", container_name, "--format", "{{.State.Status}}"
-        ], capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return None
-    except:
-        return None
-
-def cleanup_container(container_name, timeout=30):
-    """Stop and remove a Docker container completely"""
-    try:
-        # Try to stop the container gracefully first
-        result = subprocess.run([
-            "docker", "stop", container_name
-        ], capture_output=True, text=True, timeout=timeout)
-        
-        if result.returncode == 0:
-            logger.debug(f"Stopped container {container_name}")
-        else:
-            # If stop failed, try force kill
-            subprocess.run([
-                "docker", "kill", container_name
-            ], capture_output=True, text=True)
-            logger.debug(f"Force killed container {container_name}")
-            
-    except subprocess.TimeoutExpired:
-        # Force kill if timeout
-        subprocess.run([
-            "docker", "kill", container_name
-        ], capture_output=True, text=True)
-        logger.debug(f"Timeout - force killed container {container_name}")
-    except Exception as e:
-        logger.debug(f"Container {container_name} may not exist: {e}")
-    
-    # Remove the container completely
-    try:
-        result = subprocess.run([
-            "docker", "rm", container_name
-        ], capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            logger.debug(f"Removed container {container_name}")
-            return True
-        else:
-            logger.warning(f"Failed to remove container {container_name}: {result.stderr}")
-            return False
-    except Exception as e:
-        logger.warning(f"Error removing container {container_name}: {e}")
-        return False
-
-def get_container_logs(container_name, lines=50):
-    """Get recent logs from a Docker container"""
-    try:
-        result = subprocess.run([
-            "docker", "logs", "--tail", str(lines), container_name
-        ], capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            return result.stdout
-        return None
-    except:
-        return None
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
