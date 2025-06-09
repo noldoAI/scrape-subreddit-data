@@ -431,33 +431,45 @@ def check_container_status(container_name):
 def cleanup_container(container_name, timeout=30):
     """Stop and remove a Docker container completely"""
     try:
-        # Try to stop the container gracefully first
-        result = subprocess.run([
-            "docker", "stop", container_name
-        ], capture_output=True, text=True, timeout=timeout)
+        # First check if container exists and get its status
+        status = check_container_status(container_name)
         
-        if result.returncode == 0:
-            logger.debug(f"Stopped container {container_name}")
+        if status is None:
+            logger.debug(f"Container {container_name} does not exist")
+            return True
+        
+        # If container is running, stop it first
+        if status == "running":
+            try:
+                result = subprocess.run([
+                    "docker", "stop", container_name
+                ], capture_output=True, text=True, timeout=timeout)
+                
+                if result.returncode == 0:
+                    logger.debug(f"Stopped container {container_name}")
+                else:
+                    # If stop failed, try force kill
+                    subprocess.run([
+                        "docker", "kill", container_name
+                    ], capture_output=True, text=True)
+                    logger.debug(f"Force killed container {container_name}")
+                    
+            except subprocess.TimeoutExpired:
+                # Force kill if timeout
+                subprocess.run([
+                    "docker", "kill", container_name
+                ], capture_output=True, text=True)
+                logger.debug(f"Timeout - force killed container {container_name}")
         else:
-            # If stop failed, try force kill
-            subprocess.run([
-                "docker", "kill", container_name
-            ], capture_output=True, text=True)
-            logger.debug(f"Force killed container {container_name}")
-            
-    except subprocess.TimeoutExpired:
-        # Force kill if timeout
-        subprocess.run([
-            "docker", "kill", container_name
-        ], capture_output=True, text=True)
-        logger.debug(f"Timeout - force killed container {container_name}")
-    except Exception as e:
-        logger.debug(f"Container {container_name} may not exist: {e}")
+            logger.debug(f"Container {container_name} is already stopped (status: {status})")
     
-    # Remove the container completely
+    except Exception as e:
+        logger.debug(f"Error during container stop phase for {container_name}: {e}")
+    
+    # Always try to remove the container, regardless of stop result
     try:
         result = subprocess.run([
-            "docker", "rm", container_name
+            "docker", "rm", "-f", container_name  # Use -f to force remove
         ], capture_output=True, text=True)
         
         if result.returncode == 0:
@@ -788,6 +800,13 @@ async def dashboard():
                     </select>
                     <button onclick="loadSavedAccounts()" class="stats">🔄 Refresh</button>
                     <button onclick="showAccountManager()" class="stats">⚙️ Manage Accounts</button>
+                </div>
+            </div>
+            
+            <!-- Maintenance Section -->
+            <div style="margin-top: 20px; padding: 15px; background: #f0f8ff; border-radius: 5px;">
+                <h4>🔧 Maintenance</h4>
+                <button onclick="cleanupOrphanedContainers()" class="delete">🧹 Cleanup Orphaned Containers</button>
                 </div>
             </div>
             
@@ -1355,6 +1374,44 @@ ${logs.logs}
                     alert('Error loading logs: ' + error.message);
                 } finally {
                     setButtonLoading(button, false);
+                }
+            }
+            
+            async function cleanupOrphanedContainers() {
+                if (confirm('This will remove all Docker containers that are no longer tracked in the database. Continue?')) {
+                    showGlobalLoading('Cleaning up orphaned containers...');
+                    
+                    try {
+                        const response = await fetch('/maintenance/cleanup-containers', {
+                            method: 'POST'
+                        });
+                        
+                        if (response.ok) {
+                            const result = await response.json();
+                            const message = `
+Cleanup Results:
+━━━━━━━━━━━━━━━━━━━━━━
+Total containers found: ${result.total_containers_found}
+Tracked containers: ${result.tracked_containers}
+Orphaned containers: ${result.orphaned_containers}
+Successfully cleaned: ${result.cleaned_up.length}
+Failed to clean: ${result.failed_cleanup.length}
+
+${result.cleaned_up.length > 0 ? 'Cleaned up: ' + result.cleaned_up.join(', ') : ''}
+${result.failed_cleanup.length > 0 ? 'Failed: ' + result.failed_cleanup.join(', ') : ''}
+                            `;
+                            alert(message);
+                            loadScrapers(); // Refresh scraper list
+                            loadHealthStatus(); // Refresh health status
+                        } else {
+                            const error = await response.json();
+                            alert('Error during cleanup: ' + error.detail);
+                        }
+                    } catch (error) {
+                        alert('Error during cleanup: ' + error.message);
+                    } finally {
+                        hideGlobalLoading();
+                    }
                 }
             }
             
@@ -1969,6 +2026,68 @@ async def get_status_summary():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting status summary: {str(e)}")
+
+@app.post("/maintenance/cleanup-containers")
+async def cleanup_orphaned_containers():
+    """Clean up orphaned scraper containers that are no longer tracked in database"""
+    try:
+        # Get all containers with our prefix
+        result = subprocess.run([
+            "docker", "ps", "-a", "--filter", f"name={DOCKER_CONFIG['container_prefix']}", 
+            "--format", "{{.Names}}"
+        ], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Failed to list Docker containers")
+        
+        container_names = [name.strip() for name in result.stdout.strip().split('\n') if name.strip()]
+        
+        # Get all containers tracked in database
+        tracked_containers = set()
+        if mongo_connected:
+            scrapers = scrapers_collection.find({}, {"container_name": 1})
+            for scraper in scrapers:
+                if scraper.get("container_name"):
+                    tracked_containers.add(scraper["container_name"])
+        
+        # Find orphaned containers
+        orphaned_containers = []
+        for container_name in container_names:
+            if container_name not in tracked_containers:
+                orphaned_containers.append(container_name)
+        
+        # Clean up orphaned containers
+        cleaned_up = []
+        failed_cleanup = []
+        
+        for container_name in orphaned_containers:
+            try:
+                # Force remove the orphaned container
+                result = subprocess.run([
+                    "docker", "rm", "-f", container_name
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    cleaned_up.append(container_name)
+                    logger.info(f"Cleaned up orphaned container: {container_name}")
+                else:
+                    failed_cleanup.append(container_name)
+                    logger.warning(f"Failed to clean up container {container_name}: {result.stderr}")
+            except Exception as e:
+                failed_cleanup.append(container_name)
+                logger.error(f"Error cleaning up container {container_name}: {e}")
+        
+        return {
+            "message": "Container cleanup completed",
+            "total_containers_found": len(container_names),
+            "tracked_containers": len(tracked_containers),
+            "orphaned_containers": len(orphaned_containers),
+            "cleaned_up": cleaned_up,
+            "failed_cleanup": failed_cleanup
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error during container cleanup: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
