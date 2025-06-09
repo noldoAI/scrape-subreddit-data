@@ -344,9 +344,9 @@ def restart_scraper(config: ScraperConfig, subreddit: str):
     try:
         logger.info(f"Restarting scraper for r/{subreddit}")
         
-        # Stop any existing container first using centralized naming
+        # Stop and remove any existing container first using centralized naming
         container_name = f"{DOCKER_CONFIG['container_prefix']}{subreddit}"
-        subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
+        cleanup_container(container_name)
         
         # Update status to restarting
         update_scraper_status(subreddit, "restarting")
@@ -408,8 +408,8 @@ def run_scraper(config: ScraperConfig):
             "--comment-batch", str(config.comment_batch)
         ])
         
-        # Remove any existing container with the same name
-        subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
+        # Stop and remove any existing container with the same name
+        cleanup_container(container_name)
         
         # Start the container
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -465,6 +465,48 @@ def check_container_status(container_name):
         return None
     except:
         return None
+
+def cleanup_container(container_name, timeout=30):
+    """Stop and remove a Docker container completely"""
+    try:
+        # Try to stop the container gracefully first
+        result = subprocess.run([
+            "docker", "stop", container_name
+        ], capture_output=True, text=True, timeout=timeout)
+        
+        if result.returncode == 0:
+            logger.debug(f"Stopped container {container_name}")
+        else:
+            # If stop failed, try force kill
+            subprocess.run([
+                "docker", "kill", container_name
+            ], capture_output=True, text=True)
+            logger.debug(f"Force killed container {container_name}")
+            
+    except subprocess.TimeoutExpired:
+        # Force kill if timeout
+        subprocess.run([
+            "docker", "kill", container_name
+        ], capture_output=True, text=True)
+        logger.debug(f"Timeout - force killed container {container_name}")
+    except Exception as e:
+        logger.debug(f"Container {container_name} may not exist: {e}")
+    
+    # Remove the container completely
+    try:
+        result = subprocess.run([
+            "docker", "rm", container_name
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            logger.debug(f"Removed container {container_name}")
+            return True
+        else:
+            logger.warning(f"Failed to remove container {container_name}: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.warning(f"Error removing container {container_name}: {e}")
+        return False
 
 def get_container_logs(container_name, lines=50):
     """Get recent logs from a Docker container"""
@@ -1246,10 +1288,10 @@ async def restart_scraper_endpoint(subreddit: str, background_tasks: BackgroundT
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
     
-    # Stop existing container first
+    # Stop and remove existing container first
     container_name = scraper_data.get("container_name")
     if container_name:
-        subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
+        cleanup_container(container_name)
     
     # Start new container
     background_tasks.add_task(restart_scraper, scraper_data["config"], subreddit)
@@ -1281,10 +1323,11 @@ async def remove_scraper(subreddit: str):
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
     
-    # Stop container if running
+    # Stop and remove container if it exists
     container_name = scraper_data.get("container_name")
     if container_name:
-        subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
+        cleanup_container(container_name)
+        logger.info(f"Cleaned up container {container_name} for r/{subreddit}")
     
     # Remove from database
     result = scrapers_collection.delete_one({"subreddit": subreddit})
