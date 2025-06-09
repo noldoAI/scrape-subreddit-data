@@ -66,6 +66,7 @@ try:
         comments_collection = db[COLLECTIONS["COMMENTS"]]
         subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
         scrapers_collection = db[COLLECTIONS["SCRAPERS"]]
+        accounts_collection = db[COLLECTIONS["ACCOUNTS"]]
         mongo_connected = True
         logger.info("Successfully connected to MongoDB")
 except Exception as e:
@@ -135,15 +136,19 @@ class ScraperStartRequest(BaseModel):
     credentials: Optional[RedditCredentials] = None
     save_account_as: Optional[str] = None  # If provided, save manual credentials with this name
 
-# Local account storage for Reddit credentials
-# Use /app directory since that's where the container has write access
-ACCOUNTS_FILE = "/app/saved_accounts.json"
+# Reddit account storage in MongoDB  
+def get_accounts_collection():
+    """Get the accounts collection, create if needed"""
+    return accounts_collection
 
 def save_reddit_account(account_name: str, credentials: RedditCredentials):
-    """Save Reddit credentials locally with encryption"""
+    """Save Reddit credentials to database with encryption"""
     try:
-        # Load existing accounts
-        accounts = load_saved_accounts()
+        if not mongo_connected:
+            logger.error("Database not connected, cannot save account")
+            return False
+        
+        accounts_collection = get_accounts_collection()
         
         # Encrypt sensitive credentials
         encrypted_account = {
@@ -153,15 +158,19 @@ def save_reddit_account(account_name: str, credentials: RedditCredentials):
             "username": credentials.username,  # Keep username unencrypted for display
             "password": encrypt_credential(credentials.password),
             "user_agent": credentials.user_agent,  # Keep user agent unencrypted
-            "created_at": datetime.now(UTC).isoformat()
+            "created_at": datetime.now(UTC),
+            "last_updated": datetime.now(UTC)
         }
         
-        # Update or add account
-        accounts[account_name] = encrypted_account
-        
-        # Save to file
-        with open(ACCOUNTS_FILE, "w") as f:
-            json.dump(accounts, f, indent=2)
+        # Upsert account document
+        result = accounts_collection.update_one(
+            {"account_name": account_name},
+            {
+                "$set": encrypted_account,
+                "$setOnInsert": {"created_at": datetime.now(UTC)}
+            },
+            upsert=True
+        )
         
         logger.info(f"Saved Reddit account: {account_name}")
         return True
@@ -171,12 +180,27 @@ def save_reddit_account(account_name: str, credentials: RedditCredentials):
         return False
 
 def load_saved_accounts():
-    """Load saved Reddit accounts from local file"""
+    """Load saved Reddit accounts from database"""
     try:
-        if os.path.exists(ACCOUNTS_FILE):
-            with open(ACCOUNTS_FILE, "r") as f:
-                return json.load(f)
-        return {}
+        if not mongo_connected:
+            logger.warning("Database not connected, cannot load accounts")
+            return {}
+        
+        accounts_collection = get_accounts_collection()
+        accounts_cursor = accounts_collection.find({})
+        
+        accounts = {}
+        for account_doc in accounts_cursor:
+            account_name = account_doc["account_name"]
+            accounts[account_name] = {
+                "account_name": account_name,
+                "username": account_doc["username"],
+                "user_agent": account_doc["user_agent"],
+                "created_at": account_doc["created_at"].isoformat() if isinstance(account_doc["created_at"], datetime) else account_doc["created_at"],
+                "last_updated": account_doc.get("last_updated")
+            }
+        
+        return accounts
     except Exception as e:
         logger.error(f"Error loading saved accounts: {e}")
         return {}
@@ -184,19 +208,23 @@ def load_saved_accounts():
 def get_reddit_account(account_name: str) -> Optional[RedditCredentials]:
     """Get decrypted Reddit credentials for an account"""
     try:
-        accounts = load_saved_accounts()
-        if account_name not in accounts:
+        if not mongo_connected:
+            logger.warning("Database not connected, cannot get account")
             return None
         
-        account = accounts[account_name]
+        accounts_collection = get_accounts_collection()
+        account_doc = accounts_collection.find_one({"account_name": account_name})
+        
+        if not account_doc:
+            return None
         
         # Decrypt credentials
         return RedditCredentials(
-            client_id=decrypt_credential(account["client_id"]),
-            client_secret=decrypt_credential(account["client_secret"]),
-            username=account["username"],
-            password=decrypt_credential(account["password"]),
-            user_agent=account["user_agent"]
+            client_id=decrypt_credential(account_doc["client_id"]),
+            client_secret=decrypt_credential(account_doc["client_secret"]),
+            username=account_doc["username"],
+            password=decrypt_credential(account_doc["password"]),
+            user_agent=account_doc["user_agent"]
         )
         
     except Exception as e:
@@ -206,14 +234,19 @@ def get_reddit_account(account_name: str) -> Optional[RedditCredentials]:
 def delete_reddit_account(account_name: str):
     """Delete a saved Reddit account"""
     try:
-        accounts = load_saved_accounts()
-        if account_name in accounts:
-            del accounts[account_name]
-            with open(ACCOUNTS_FILE, "w") as f:
-                json.dump(accounts, f, indent=2)
+        if not mongo_connected:
+            logger.error("Database not connected, cannot delete account")
+            return False
+        
+        accounts_collection = get_accounts_collection()
+        result = accounts_collection.delete_one({"account_name": account_name})
+        
+        if result.deleted_count > 0:
             logger.info(f"Deleted Reddit account: {account_name}")
             return True
-        return False
+        else:
+            logger.warning(f"Account '{account_name}' not found for deletion")
+            return False
     except Exception as e:
         logger.error(f"Error deleting Reddit account {account_name}: {e}")
         return False

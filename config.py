@@ -12,7 +12,8 @@ COLLECTIONS = {
     "POSTS": "reddit_posts",
     "COMMENTS": "reddit_comments", 
     "SUBREDDIT_METADATA": "subreddit_metadata",
-    "SCRAPERS": "reddit_scrapers"
+    "SCRAPERS": "reddit_scrapers",
+    "ACCOUNTS": "reddit_accounts"
 }
 
 # Scraper Configuration Defaults
