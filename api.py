@@ -150,15 +150,14 @@ def save_reddit_account(account_name: str, credentials: RedditCredentials):
         
         accounts_collection = get_accounts_collection()
         
-        # Encrypt sensitive credentials
-        encrypted_account = {
+        # Encrypt sensitive credentials for update
+        update_data = {
             "account_name": account_name,
             "client_id": encrypt_credential(credentials.client_id),
             "client_secret": encrypt_credential(credentials.client_secret),
             "username": credentials.username,  # Keep username unencrypted for display
             "password": encrypt_credential(credentials.password),
             "user_agent": credentials.user_agent,  # Keep user agent unencrypted
-            "created_at": datetime.now(UTC),
             "last_updated": datetime.now(UTC)
         }
         
@@ -166,7 +165,7 @@ def save_reddit_account(account_name: str, credentials: RedditCredentials):
         result = accounts_collection.update_one(
             {"account_name": account_name},
             {
-                "$set": encrypted_account,
+                "$set": update_data,
                 "$setOnInsert": {"created_at": datetime.now(UTC)}
             },
             upsert=True
