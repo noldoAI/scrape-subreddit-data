@@ -691,187 +691,206 @@ async def dashboard():
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
-                background-attachment: fixed;
-                color: #e0e0e0;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                background: #000000;
+                color: #e5e5e5;
                 padding: 40px;
                 min-height: 100vh;
             }
             h1 {
-                font-size: 2.5em;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                background-clip: text;
-                margin-bottom: 10px;
-                text-shadow: 0 0 30px rgba(102, 126, 234, 0.5);
+                font-size: 2.2em;
+                color: #ffffff;
+                margin-bottom: 8px;
+                font-weight: 600;
+                letter-spacing: -0.5px;
             }
             h2 {
-                color: #a78bfa;
-                margin: 30px 0 15px 0;
-                font-size: 1.8em;
+                color: #d4d4d4;
+                margin: 35px 0 18px 0;
+                font-size: 1.6em;
+                font-weight: 600;
             }
             h3 {
-                color: #c4b5fd;
-                margin: 15px 0 10px 0;
+                color: #b4b4b4;
+                margin: 20px 0 12px 0;
+                font-weight: 500;
             }
-            p { line-height: 1.6; margin: 10px 0; }
-            a { color: #818cf8; text-decoration: none; }
-            a:hover { color: #a78bfa; }
+            p { line-height: 1.6; margin: 10px 0; color: #a3a3a3; }
+            a { color: #7c7c7c; text-decoration: none; transition: color 0.2s; }
+            a:hover { color: #ffffff; }
 
             .scraper {
-                background: rgba(30, 30, 50, 0.6);
-                backdrop-filter: blur(10px);
-                border: 1px solid rgba(167, 139, 250, 0.2);
-                padding: 25px;
-                margin: 15px 0;
-                border-radius: 15px;
-                box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
-                transition: all 0.3s ease;
+                background: #0a0a0a;
+                border: 1px solid #1f1f1f;
+                padding: 24px;
+                margin: 12px 0;
+                border-radius: 6px;
+                transition: all 0.2s ease;
             }
             .scraper:hover {
-                border-color: rgba(167, 139, 250, 0.5);
-                box-shadow: 0 8px 32px 0 rgba(102, 126, 234, 0.5);
-                transform: translateY(-2px);
+                border-color: #2a2a2a;
+                background: #0d0d0d;
             }
             .running {
-                background: rgba(16, 185, 129, 0.1);
-                border-left: 4px solid #10b981;
+                border-left: 3px solid #22c55e;
             }
             .stopped {
-                background: rgba(107, 114, 128, 0.1);
-                border-left: 4px solid #6b7280;
+                border-left: 3px solid #525252;
             }
             .error {
-                background: rgba(239, 68, 68, 0.1);
-                border-left: 4px solid #ef4444;
+                border-left: 3px solid #ef4444;
             }
             .failed {
-                background: rgba(244, 63, 94, 0.1);
-                border-left: 4px solid #f43f5e;
+                border-left: 3px solid #dc2626;
             }
 
             button {
-                padding: 12px 24px;
-                margin: 5px;
-                border: none;
-                border-radius: 8px;
+                padding: 10px 18px;
+                margin: 4px 4px 4px 0;
+                border: 1px solid #2a2a2a;
+                border-radius: 4px;
                 cursor: pointer;
-                position: relative;
-                transition: all 0.3s ease;
-                font-weight: 600;
-                font-size: 14px;
-                box-shadow: 0 4px 15px 0 rgba(0, 0, 0, 0.3);
+                transition: all 0.2s ease;
+                font-weight: 500;
+                font-size: 13px;
+                background: #0a0a0a;
+                color: #e5e5e5;
             }
             button:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.4);
+                background: #1a1a1a;
+                border-color: #3a3a3a;
             }
-            button:active { transform: translateY(0px); }
-            button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+            button:active { transform: scale(0.98); }
+            button:disabled { opacity: 0.4; cursor: not-allowed; }
 
             .start {
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                color: white;
+                background: #16a34a;
+                border-color: #16a34a;
+                color: #ffffff;
             }
-            .start:hover { background: linear-gradient(135deg, #059669 0%, #047857 100%); }
+            .start:hover {
+                background: #15803d;
+                border-color: #15803d;
+            }
 
             .stop {
-                background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-                color: white;
+                background: #dc2626;
+                border-color: #dc2626;
+                color: #ffffff;
             }
-            .stop:hover { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); }
+            .stop:hover {
+                background: #b91c1c;
+                border-color: #b91c1c;
+            }
 
             .restart {
-                background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-                color: white;
+                background: #ea580c;
+                border-color: #ea580c;
+                color: #ffffff;
             }
-            .restart:hover { background: linear-gradient(135deg, #d97706 0%, #b45309 100%); }
+            .restart:hover {
+                background: #c2410c;
+                border-color: #c2410c;
+            }
 
             .delete {
-                background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
-                color: white;
+                background: #7c2d12;
+                border-color: #7c2d12;
+                color: #fca5a5;
             }
-            .delete:hover { background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%); }
+            .delete:hover {
+                background: #991b1b;
+                border-color: #991b1b;
+                color: #ffffff;
+            }
 
             .stats {
-                background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-                color: white;
+                background: #0a0a0a;
+                border-color: #2a2a2a;
+                color: #e5e5e5;
             }
-            .stats:hover { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); }
+            .stats:hover {
+                background: #1a1a1a;
+                border-color: #3a3a3a;
+            }
 
-            .loading { background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%) !important; }
+            .loading {
+                background: #171717 !important;
+                border-color: #2a2a2a !important;
+                cursor: wait !important;
+            }
 
             .spinner {
                 display: inline-block;
-                width: 16px;
-                height: 16px;
-                border: 2px solid rgba(255, 255, 255, 0.3);
+                width: 14px;
+                height: 14px;
+                border: 2px solid #404040;
                 border-radius: 50%;
-                border-top-color: #ffffff;
-                animation: spin 1s ease-in-out infinite;
+                border-top-color: #e5e5e5;
+                animation: spin 0.8s linear infinite;
                 margin-right: 8px;
+                vertical-align: middle;
             }
             @keyframes spin { to { transform: rotate(360deg); } }
 
             input, select, textarea {
-                padding: 10px;
-                margin: 5px;
-                border: 1px solid rgba(167, 139, 250, 0.3);
-                border-radius: 8px;
-                background: rgba(30, 30, 50, 0.5);
-                color: #e0e0e0;
-                transition: all 0.3s ease;
+                padding: 10px 12px;
+                margin: 5px 5px 5px 0;
+                border: 1px solid #2a2a2a;
+                border-radius: 4px;
+                background: #0a0a0a;
+                color: #e5e5e5;
+                transition: all 0.2s ease;
+                font-size: 14px;
             }
             input:focus, select:focus, textarea:focus {
                 outline: none;
-                border-color: #818cf8;
-                box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.1);
+                border-color: #525252;
+                background: #0d0d0d;
             }
-            input::placeholder { color: #6b7280; }
+            input::placeholder { color: #525252; }
 
             .credentials-section {
-                background: rgba(30, 30, 50, 0.4);
-                backdrop-filter: blur(10px);
+                background: #0a0a0a;
                 padding: 20px;
-                border-radius: 10px;
+                border-radius: 6px;
                 margin: 15px 0;
-                border: 1px solid rgba(167, 139, 250, 0.2);
+                border: 1px solid #1f1f1f;
             }
 
-            .form-row { margin: 10px 0; }
+            .form-row { margin: 12px 0; display: flex; align-items: center; flex-wrap: wrap; }
             .form-row label {
                 display: inline-block;
-                width: 150px;
-                color: #c4b5fd;
+                min-width: 140px;
+                color: #b4b4b4;
                 font-weight: 500;
+                font-size: 14px;
             }
-            .form-row small { color: #9ca3af; }
+            .form-row small { color: #737373; margin-left: 8px; }
 
             .collapsible {
                 cursor: pointer;
-                background: rgba(167, 139, 250, 0.2);
+                background: #0a0a0a;
                 padding: 12px;
-                border: none;
+                border: 1px solid #2a2a2a;
                 text-align: left;
                 width: 100%;
-                border-radius: 8px;
-                color: #e0e0e0;
-                transition: all 0.3s ease;
+                border-radius: 4px;
+                color: #e5e5e5;
+                transition: all 0.2s ease;
             }
-            .collapsible:hover { background: rgba(167, 139, 250, 0.3); }
+            .collapsible:hover { background: #171717; }
 
             .content {
                 display: none;
                 padding: 15px;
-                background: rgba(30, 30, 50, 0.3);
-                border: 1px solid rgba(167, 139, 250, 0.2);
-                border-radius: 8px;
+                background: #0a0a0a;
+                border: 1px solid #1f1f1f;
+                border-radius: 4px;
                 margin-top: 10px;
             }
 
-            .toggle { position: relative; display: inline-block; width: 60px; height: 34px; }
+            .toggle { position: relative; display: inline-block; width: 50px; height: 28px; }
             .toggle input { opacity: 0; width: 0; height: 0; }
             .slider {
                 position: absolute;
@@ -880,52 +899,52 @@ async def dashboard():
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background-color: #4b5563;
-                transition: .4s;
-                border-radius: 34px;
-                box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+                background-color: #1f1f1f;
+                transition: .3s;
+                border-radius: 28px;
             }
             .slider:before {
                 position: absolute;
                 content: "";
-                height: 26px;
-                width: 26px;
+                height: 20px;
+                width: 20px;
                 left: 4px;
                 bottom: 4px;
-                background-color: white;
-                transition: .4s;
+                background-color: #737373;
+                transition: .3s;
                 border-radius: 50%;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
             }
             input:checked + .slider {
-                background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+                background-color: #16a34a;
             }
-            input:checked + .slider:before { transform: translateX(26px); }
+            input:checked + .slider:before {
+                transform: translateX(22px);
+                background-color: #ffffff;
+            }
 
             .status-badge {
-                padding: 6px 12px;
-                border-radius: 20px;
+                padding: 4px 10px;
+                border-radius: 3px;
                 font-size: 11px;
-                font-weight: bold;
+                font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
             }
             .badge-running {
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                color: white;
+                background: #166534;
+                color: #86efac;
             }
             .badge-stopped {
-                background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
-                color: white;
+                background: #1f1f1f;
+                color: #a3a3a3;
             }
             .badge-error {
-                background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-                color: white;
+                background: #7f1d1d;
+                color: #fca5a5;
             }
             .badge-failed {
-                background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
-                color: white;
+                background: #991b1b;
+                color: #fecaca;
             }
 
             .loading-overlay {
@@ -935,8 +954,7 @@ async def dashboard():
                 left: 0;
                 width: 100%;
                 height: 100%;
-                background-color: rgba(0, 0, 0, 0.7);
-                backdrop-filter: blur(5px);
+                background-color: rgba(0, 0, 0, 0.85);
                 z-index: 1000;
             }
             .loading-message {
@@ -944,29 +962,23 @@ async def dashboard():
                 top: 50%;
                 left: 50%;
                 transform: translate(-50%, -50%);
-                background: rgba(30, 30, 50, 0.9);
-                backdrop-filter: blur(10px);
-                padding: 30px;
-                border-radius: 15px;
+                background: #0a0a0a;
+                padding: 30px 40px;
+                border-radius: 6px;
                 text-align: center;
-                border: 1px solid rgba(167, 139, 250, 0.3);
-                box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.5);
-                color: #e0e0e0;
+                border: 1px solid #2a2a2a;
+                color: #e5e5e5;
             }
 
             #health-status > div {
-                background: rgba(30, 30, 50, 0.6) !important;
-                backdrop-filter: blur(10px);
-                border: 1px solid rgba(167, 139, 250, 0.3) !important;
-                box-shadow: 0 4px 20px 0 rgba(31, 38, 135, 0.3);
+                background: #0a0a0a !important;
+                border: 1px solid #1f1f1f !important;
+                border-radius: 6px;
             }
 
-            /* Modal styling */
             #accountManagerModal > div {
-                background: rgba(15, 12, 41, 0.95) !important;
-                backdrop-filter: blur(20px);
-                border: 1px solid rgba(167, 139, 250, 0.3);
-                box-shadow: 0 20px 60px 0 rgba(0, 0, 0, 0.5);
+                background: #0a0a0a !important;
+                border: 1px solid #2a2a2a;
             }
         </style>
     </head>
@@ -978,14 +990,14 @@ async def dashboard():
             </div>
         </div>
         
-        <h1>🤖 Reddit Scraper Management Dashboard</h1>
-        <p><strong>✨ Features:</strong> Persistent storage, unique credentials per scraper, automatic restart on failure</p>
+        <h1>Reddit Scraper Management Dashboard</h1>
+        <p><strong>Features:</strong> Persistent storage, unique credentials per scraper, automatic restart on failure</p>
         
         <div id="health-status"></div>
         
         <div id="scrapers"></div>
         
-        <h2>🚀 Start New Scraper</h2>
+        <h2>Start New Scraper</h2>
         <div>
             <div class="form-row">
                 <label>Subreddit:</label>
@@ -1017,7 +1029,7 @@ async def dashboard():
                 </label>
             </div>
             
-            <h3>👤 Reddit Account Selection</h3>
+            <h3>Reddit Account Selection</h3>
             <div class="form-row">
                 <label>Account Type:</label>
                 <select id="account_type" onchange="toggleAccountType()">
@@ -1033,8 +1045,8 @@ async def dashboard():
                     <select id="saved_account_name">
                         <option value="">Select an account...</option>
                     </select>
-                    <button onclick="loadSavedAccounts()" class="stats">🔄 Refresh</button>
-                    <button onclick="showAccountManager()" class="stats">⚙️ Manage Accounts</button>
+                    <button onclick="loadSavedAccounts()" class="stats">Refresh</button>
+                    <button onclick="showAccountManager()" class="stats">Manage Accounts</button>
                 </div>
             </div>
             
@@ -1066,20 +1078,20 @@ async def dashboard():
                         <input type="text" id="save_account_as" placeholder="Account name (optional)" />
                         <small>Save these credentials for future use</small>
                     </div>
-                    <p><small>💡 Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">https://www.reddit.com/prefs/apps</a></small></p>
+                    <p><small>Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">https://www.reddit.com/prefs/apps</a></small></p>
                 </div>
             </div>
             
             <br>
-            <button onclick="startScraper()" class="start" id="startScraperBtn">🚀 Start Scraper</button>
+            <button onclick="startScraper()" class="start" id="startScraperBtn">Start Scraper</button>
         </div>
         
         <!-- Account Manager Modal -->
         <div id="accountManagerModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1001;">
             <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; width: 80%; max-width: 600px; max-height: 80%; overflow-y: auto;">
-                <h2>⚙️ Account Manager</h2>
-                
-                <h3>📝 Add New Account</h3>
+                <h2>Account Manager</h2>
+
+                <h3>Add New Account</h3>
                 <div class="credentials-section">
                     <div class="form-row">
                         <label>Account Name:</label>
@@ -1105,14 +1117,14 @@ async def dashboard():
                         <label>User Agent:</label>
                         <input type="text" id="new_user_agent" placeholder="RedditScraper/1.0 by YourUsername" />
                     </div>
-                    <button onclick="saveNewAccount()" class="start">💾 Save Account</button>
+                    <button onclick="saveNewAccount()" class="start">Save Account</button>
                 </div>
                 
-                <h3>📋 Saved Accounts</h3>
+                <h3>Saved Accounts</h3>
                 <div id="savedAccountsList"></div>
                 
                 <div style="text-align: center; margin-top: 20px;">
-                    <button onclick="hideAccountManager()" class="stop">❌ Close</button>
+                    <button onclick="hideAccountManager()" class="stop">Close</button>
                 </div>
             </div>
         </div>
@@ -1192,13 +1204,13 @@ async def dashboard():
                     const health = await response.json();
                     const healthDiv = document.getElementById('health-status');
                     healthDiv.innerHTML = `
-                        <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                            <h3>📊 System Health</h3>
-                            <p><strong>Total Scrapers:</strong> ${health.total_scrapers} | 
-                               <strong>Running:</strong> ${health.running_containers} | 
+                        <div style="padding: 15px; border-radius: 6px; margin: 10px 0;">
+                            <h3>System Health</h3>
+                            <p><strong>Total Scrapers:</strong> ${health.total_scrapers} |
+                               <strong>Running:</strong> ${health.running_containers} |
                                <strong>Failed:</strong> ${health.failed_scrapers}</p>
-                            <p><strong>Database:</strong> ${health.database_connected ? '✅ Connected' : '❌ Disconnected'} | 
-                               <strong>Docker:</strong> ${health.docker_available ? '✅ Available' : '❌ Not Available'}</p>
+                            <p><strong>Database:</strong> ${health.database_connected ? 'Connected' : 'Disconnected'} |
+                               <strong>Docker:</strong> ${health.docker_available ? 'Available' : 'Not Available'}</p>
                         </div>
                     `;
                 } catch (error) {
@@ -1211,7 +1223,7 @@ async def dashboard():
                     const response = await fetch('/scrapers');
                     const scrapers = await response.json();
                     const container = document.getElementById('scrapers');
-                    container.innerHTML = '<h2>📋 Active Scrapers</h2>';
+                    container.innerHTML = '<h2>Active Scrapers</h2>';
                     
                     if (Object.keys(scrapers).length === 0) {
                         container.innerHTML += '<p>No active scrapers. Start one above!</p>';
@@ -1244,11 +1256,11 @@ async def dashboard():
                             ${info.last_updated ? `<p><strong>Last Updated:</strong> ${new Date(info.last_updated).toLocaleString()}</p>` : ''}
                             ${info.last_error ? `<p><strong>Error:</strong> ${info.last_error}</p>` : ''}
                             <div>
-                                <button onclick="stopScraper(this, '${subreddit}')" class="stop">⏹️ Stop</button>
-                                <button onclick="restartScraper(this, '${subreddit}')" class="restart">🔄 Restart</button>
-                                <button onclick="getStats(this, '${subreddit}')" class="stats">📊 Stats</button>
-                                <button onclick="getLogs(this, '${subreddit}')" class="stats">📋 Logs</button>
-                                <button onclick="deleteScraper(this, '${subreddit}')" class="delete">🗑️ Delete</button>
+                                <button onclick="stopScraper(this, '${subreddit}')" class="stop">Stop</button>
+                                <button onclick="restartScraper(this, '${subreddit}')" class="restart">Restart</button>
+                                <button onclick="getStats(this, '${subreddit}')" class="stats">Stats</button>
+                                <button onclick="getLogs(this, '${subreddit}')" class="stats">Logs</button>
+                                <button onclick="deleteScraper(this, '${subreddit}')" class="delete">Delete</button>
                             </div>
                         `;
                         container.appendChild(div);
@@ -1372,7 +1384,7 @@ async def dashboard():
                                 <strong>${accountName}</strong><br>
                                 <small>User: ${account.username} | Created: ${new Date(account.created_at).toLocaleDateString()}</small>
                             </div>
-                            <button onclick="deleteAccount('${accountName}')" class="delete" style="padding: 5px 10px;">🗑️ Delete</button>
+                            <button onclick="deleteAccount('${accountName}')" class="delete" style="padding: 5px 10px;">Delete</button>
                         `;
                         container.appendChild(div);
                     });
@@ -1572,11 +1584,11 @@ async def dashboard():
                     const statsText = `
 r/${subreddit} Statistics:
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 Posts: ${stats.total_posts.toLocaleString()}
-💬 Comments: ${stats.total_comments.toLocaleString()}
-✅ Initial Completion: ${stats.initial_completion_rate.toFixed(1)}%
-🏢 Metadata: ${stats.subreddit_metadata_exists ? '✓' : '✗'}
-⏰ Last Updated: ${stats.subreddit_last_updated ? new Date(stats.subreddit_last_updated).toLocaleString() : 'Never'}
+Posts: ${stats.total_posts.toLocaleString()}
+Comments: ${stats.total_comments.toLocaleString()}
+Initial Completion: ${stats.initial_completion_rate.toFixed(1)}%
+Metadata: ${stats.subreddit_metadata_exists ? 'Yes' : 'No'}
+Last Updated: ${stats.subreddit_last_updated ? new Date(stats.subreddit_last_updated).toLocaleString() : 'Never'}
                     `;
                     alert(statsText);
                 } catch (error) {
