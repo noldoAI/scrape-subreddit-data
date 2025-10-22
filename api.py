@@ -1246,11 +1246,14 @@ async def dashboard():
                 }
             }
             
-            // Make credentials section collapsible
-            document.querySelector('.collapsible').onclick = function() {
-                const content = this.nextElementSibling;
-                content.style.display = content.style.display === 'block' ? 'none' : 'block';
-            };
+            // Make credentials section collapsible (if exists)
+            const collapsible = document.querySelector('.collapsible');
+            if (collapsible) {
+                collapsible.onclick = function() {
+                    const content = this.nextElementSibling;
+                    content.style.display = content.style.display === 'block' ? 'none' : 'block';
+                };
+            }
             
             document.getElementById('preset').onchange = function() {
                 const preset = presets[this.value];
