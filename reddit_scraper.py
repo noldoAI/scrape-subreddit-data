@@ -586,7 +586,64 @@ class UnifiedRedditScraper:
             if metadata:
                 return self.save_subreddit_metadata(metadata)
         return False
-    
+
+    # ======================= METRICS TRACKING =======================
+
+    def update_scraper_metrics(self, posts_count, new_posts_count, comments_count, cycle_duration):
+        """Update scraper metrics in MongoDB after each cycle"""
+        try:
+            # Get current scraper document
+            scraper_doc = db[COLLECTIONS["SCRAPERS"]].find_one({"subreddit": self.subreddit_name})
+            if not scraper_doc:
+                logger.warning("Scraper document not found, skipping metrics update")
+                return
+
+            metrics = scraper_doc.get("metrics", {})
+
+            # Update cumulative totals
+            total_posts = metrics.get("total_posts_collected", 0) + new_posts_count
+            total_comments = metrics.get("total_comments_collected", 0) + comments_count
+            total_cycles = metrics.get("total_cycles", 0) + 1
+
+            # Calculate rates (based on scraper lifetime)
+            posts_per_hour = 0
+            comments_per_hour = 0
+            if scraper_doc.get("created_at"):
+                created_at = scraper_doc["created_at"]
+                # Handle both timezone-aware and naive datetimes
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=UTC)
+                runtime_hours = (datetime.now(UTC) - created_at).total_seconds() / 3600
+                if runtime_hours > 0:
+                    posts_per_hour = total_posts / runtime_hours
+                    comments_per_hour = total_comments / runtime_hours
+
+            # Calculate average cycle duration
+            prev_avg = metrics.get("avg_cycle_duration", 0)
+            avg_cycle_duration = ((prev_avg * (total_cycles - 1)) + cycle_duration) / total_cycles if total_cycles > 0 else cycle_duration
+
+            # Update database
+            db[COLLECTIONS["SCRAPERS"]].update_one(
+                {"subreddit": self.subreddit_name},
+                {"$set": {
+                    "metrics.total_posts_collected": total_posts,
+                    "metrics.total_comments_collected": total_comments,
+                    "metrics.total_cycles": total_cycles,
+                    "metrics.last_cycle_posts": posts_count,
+                    "metrics.last_cycle_comments": comments_count,
+                    "metrics.last_cycle_time": datetime.now(UTC),
+                    "metrics.last_cycle_duration": round(cycle_duration, 1),
+                    "metrics.posts_per_hour": round(posts_per_hour, 1),
+                    "metrics.comments_per_hour": round(comments_per_hour, 1),
+                    "metrics.avg_cycle_duration": round(avg_cycle_duration, 1)
+                }}
+            )
+
+            logger.info(f"✅ Metrics updated: {total_posts:,} posts ({posts_per_hour:.1f}/hr), {total_comments:,} comments ({comments_per_hour:.1f}/hr), {total_cycles} cycles")
+
+        except Exception as e:
+            logger.error(f"Error updating scraper metrics: {e}")
+
     # ======================= MAIN SCRAPING LOOP =======================
     
     def get_scraping_stats(self):
@@ -701,7 +758,15 @@ class UnifiedRedditScraper:
                 logger.info(f"Cycle completed in {elapsed_time:.2f} seconds")
                 logger.info(f"API calls this cycle: ~{self.api_calls_this_cycle + posts_processed}")
                 logger.info(f"Estimated QPM: ~{(self.api_calls_this_cycle + posts_processed) / max(elapsed_time / 60, 1):.1f}")
-                
+
+                # Update metrics in database
+                self.update_scraper_metrics(
+                    posts_count=len(posts),
+                    new_posts_count=new_posts,
+                    comments_count=total_comments,
+                    cycle_duration=elapsed_time
+                )
+
                 # Wait before next cycle
                 logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
                 time.sleep(self.config['scrape_interval'])

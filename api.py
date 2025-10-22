@@ -283,13 +283,30 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "last_error": last_error,
             "restart_count": 0
         }
-        
-        # Upsert scraper document - only set created_at on insert
+
+        # Initialize metrics on first insert only
+        metrics_init = {
+            "total_posts_collected": 0,
+            "total_comments_collected": 0,
+            "total_cycles": 0,
+            "last_cycle_posts": 0,
+            "last_cycle_comments": 0,
+            "last_cycle_time": None,
+            "last_cycle_duration": 0,
+            "posts_per_hour": 0,
+            "comments_per_hour": 0,
+            "avg_cycle_duration": 0
+        }
+
+        # Upsert scraper document - only set created_at and metrics on insert
         scrapers_collection.update_one(
             {"subreddit": subreddit},
             {
                 "$set": scraper_doc,
-                "$setOnInsert": {"created_at": datetime.now(UTC)}
+                "$setOnInsert": {
+                    "created_at": datetime.now(UTC),
+                    "metrics": metrics_init
+                }
             },
             upsert=True
         )
@@ -1299,6 +1316,20 @@ async def dashboard():
                             <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
                             <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
                             <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
+                            ${info.metrics ? `
+                            <p style="margin-top: 12px; padding: 10px; background: #0d0d0d; border-radius: 4px;">
+                                <strong>📊 Collection Stats:</strong><br>
+                                <span style="color: #22c55e;">▸ ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts</span>
+                                <span style="color: #737373;">(${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr)</span> |
+                                <span style="color: #3b82f6;">▸ ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments</span>
+                                <span style="color: #737373;">(${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)</span><br>
+                                <small style="color: #737373;">
+                                    Last cycle: ${info.metrics.last_cycle_posts || 0} posts, ${info.metrics.last_cycle_comments || 0} comments
+                                    ${info.metrics.last_cycle_time ? `at ${new Date(info.metrics.last_cycle_time).toLocaleTimeString()}` : ''}
+                                    ${info.metrics.total_cycles ? ` • ${info.metrics.total_cycles} cycles completed` : ''}
+                                </small>
+                            </p>
+                            ` : ''}
                             <p><strong>Restarts:</strong> ${restartCount} | <strong>Auto-restart:</strong> 
                                <label class="toggle">
                                    <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
@@ -1739,6 +1770,16 @@ async def list_scrapers():
                     "credentials": safe_credentials,
                     "auto_restart": scraper_doc.get("auto_restart", True)
                 },
+                "metrics": scraper_doc.get("metrics", {
+                    "total_posts_collected": 0,
+                    "total_comments_collected": 0,
+                    "total_cycles": 0,
+                    "posts_per_hour": 0,
+                    "comments_per_hour": 0,
+                    "last_cycle_posts": 0,
+                    "last_cycle_comments": 0,
+                    "last_cycle_time": None
+                }),
                 "last_error": scraper_doc.get("last_error"),
                 "container_id": scraper_doc.get("container_id"),
                 "container_name": scraper_doc.get("container_name"),
