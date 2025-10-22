@@ -151,15 +151,15 @@ def save_reddit_account(account_name: str, credentials: RedditCredentials):
             return False
         
         accounts_collection = get_accounts_collection()
-        
-        # Encrypt sensitive credentials for update
+
+        # Store credentials directly (no encryption - MongoDB already secured)
         update_data = {
             "account_name": account_name,
-            "client_id": encrypt_credential(credentials.client_id),
-            "client_secret": encrypt_credential(credentials.client_secret),
-            "username": credentials.username,  # Keep username unencrypted for display
-            "password": encrypt_credential(credentials.password),
-            "user_agent": credentials.user_agent,  # Keep user agent unencrypted
+            "client_id": credentials.client_id,
+            "client_secret": credentials.client_secret,
+            "username": credentials.username,
+            "password": credentials.password,
+            "user_agent": credentials.user_agent,
             "last_updated": datetime.now(UTC)
         }
         
@@ -207,24 +207,24 @@ def load_saved_accounts():
         return {}
 
 def get_reddit_account(account_name: str) -> Optional[RedditCredentials]:
-    """Get decrypted Reddit credentials for an account"""
+    """Get Reddit credentials for an account"""
     try:
         if not mongo_connected:
             logger.warning("Database not connected, cannot get account")
             return None
-        
+
         accounts_collection = get_accounts_collection()
         account_doc = accounts_collection.find_one({"account_name": account_name})
-        
+
         if not account_doc:
             return None
-        
-        # Decrypt credentials
+
+        # Read credentials directly (no decryption needed)
         return RedditCredentials(
-            client_id=decrypt_credential(account_doc["client_id"]),
-            client_secret=decrypt_credential(account_doc["client_secret"]),
+            client_id=account_doc["client_id"],
+            client_secret=account_doc["client_secret"],
             username=account_doc["username"],
-            password=decrypt_credential(account_doc["password"]),
+            password=account_doc["password"],
             user_agent=account_doc["user_agent"]
         )
         
@@ -252,18 +252,18 @@ def delete_reddit_account(account_name: str):
         logger.error(f"Error deleting Reddit account {account_name}: {e}")
         return False
 
-def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting", 
-                       container_id: str = None, container_name: str = None, 
+def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting",
+                       container_id: str = None, container_name: str = None,
                        last_error: str = None):
-    """Save scraper configuration to database with encrypted credentials"""
+    """Save scraper configuration to database"""
     try:
-        # Encrypt sensitive credentials
-        encrypted_credentials = {
-            "client_id": encrypt_credential(config.credentials.client_id),
-            "client_secret": encrypt_credential(config.credentials.client_secret),
-            "username": config.credentials.username,  # Keep username unencrypted for display
-            "password": encrypt_credential(config.credentials.password),
-            "user_agent": config.credentials.user_agent  # Keep user agent unencrypted
+        # Store credentials directly (no encryption - MongoDB already secured)
+        credentials = {
+            "client_id": config.credentials.client_id,
+            "client_secret": config.credentials.client_secret,
+            "username": config.credentials.username,
+            "password": config.credentials.password,
+            "user_agent": config.credentials.user_agent
         }
         
         scraper_doc = {
@@ -277,7 +277,7 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
                 "comment_batch": config.comment_batch,
                 "sorting_methods": config.sorting_methods
             },
-            "credentials": encrypted_credentials,
+            "credentials": credentials,
             "auto_restart": config.auto_restart,
             "last_updated": datetime.now(UTC),
             "last_error": last_error,
@@ -312,12 +312,12 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
         if not scraper_doc:
             return None
         
-        # Decrypt credentials
-        decrypted_credentials = RedditCredentials(
-            client_id=decrypt_credential(scraper_doc["credentials"]["client_id"]),
-            client_secret=decrypt_credential(scraper_doc["credentials"]["client_secret"]),
+        # Read credentials directly (no decryption needed)
+        credentials = RedditCredentials(
+            client_id=scraper_doc["credentials"]["client_id"],
+            client_secret=scraper_doc["credentials"]["client_secret"],
             username=scraper_doc["credentials"]["username"],
-            password=decrypt_credential(scraper_doc["credentials"]["password"]),
+            password=scraper_doc["credentials"]["password"],
             user_agent=scraper_doc["credentials"]["user_agent"]
         )
         
@@ -328,7 +328,7 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
             interval=scraper_doc["config"]["interval"],
             comment_batch=scraper_doc["config"]["comment_batch"],
             sorting_methods=scraper_doc["config"].get("sorting_methods", ["hot"]),  # Default to ["hot"] for backward compatibility
-            credentials=decrypted_credentials,
+            credentials=credentials,
             auto_restart=scraper_doc.get("auto_restart", True)
         )
         
