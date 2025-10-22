@@ -35,7 +35,8 @@ COPY .env* ./
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
-USER appuser
+# Keep as root for Docker socket access
+# USER appuser
 
 # Expose API port
 EXPOSE 8000
