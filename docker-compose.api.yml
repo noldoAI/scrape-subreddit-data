@@ -11,6 +11,8 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    group_add:
+      - "990"  # Docker group GID
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
