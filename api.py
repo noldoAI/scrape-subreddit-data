@@ -274,7 +274,8 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "config": {
                 "posts_limit": config.posts_limit,
                 "interval": config.interval,
-                "comment_batch": config.comment_batch
+                "comment_batch": config.comment_batch,
+                "sorting_methods": config.sorting_methods
             },
             "credentials": encrypted_credentials,
             "auto_restart": config.auto_restart,
@@ -326,6 +327,7 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
             posts_limit=scraper_doc["config"]["posts_limit"],
             interval=scraper_doc["config"]["interval"],
             comment_batch=scraper_doc["config"]["comment_batch"],
+            sorting_methods=scraper_doc["config"].get("sorting_methods", ["hot"]),  # Default to ["hot"] for backward compatibility
             credentials=decrypted_credentials,
             auto_restart=scraper_doc.get("auto_restart", True)
         )
@@ -1733,6 +1735,7 @@ async def list_scrapers():
                     "posts_limit": scraper_doc["config"]["posts_limit"],
                     "interval": scraper_doc["config"]["interval"],
                     "comment_batch": scraper_doc["config"]["comment_batch"],
+                    "sorting_methods": scraper_doc["config"].get("sorting_methods", ["hot"]),
                     "credentials": safe_credentials,
                     "auto_restart": scraper_doc.get("auto_restart", True)
                 },
