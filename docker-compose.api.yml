@@ -27,10 +27,11 @@ services:
     volumes:
       # Mount the current directory so the API can access reddit_scraper.py
       - .:/app
-      # Mount Docker socket to allow API to manage other containers
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount Docker socket to allow API to manage other containers (rootless mode)
+      - /run/user/1001/docker.sock:/var/run/docker.sock
     environment:
       - PYTHONPATH=/app
+      - DOCKER_HOST=unix:///var/run/docker.sock
     depends_on:
       - reddit-scraper-builder
 
