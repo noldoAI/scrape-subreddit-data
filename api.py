@@ -111,6 +111,7 @@ class ScraperConfig(BaseModel):
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
+    sorting_methods: List[str] = DEFAULT_SCRAPER_CONFIG["sorting_methods"]  # Multiple sorting methods
     credentials: RedditCredentials
     auto_restart: bool = True  # Enable automatic restart on failure
 
@@ -127,11 +128,12 @@ class ScraperStartRequest(BaseModel):
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
+    sorting_methods: List[str] = DEFAULT_SCRAPER_CONFIG["sorting_methods"]  # Multiple sorting methods
     auto_restart: bool = True
-    
+
     # Option 1: Use saved account
     saved_account_name: Optional[str] = None
-    
+
     # Option 2: Manual credentials (and optionally save them)
     credentials: Optional[RedditCredentials] = None
     save_account_as: Optional[str] = None  # If provided, save manual credentials with this name
@@ -632,7 +634,8 @@ def run_scraper(config: ScraperConfig):
             "python", "reddit_scraper.py", config.subreddit,
             "--posts-limit", str(config.posts_limit),
             "--interval", str(config.interval),
-            "--comment-batch", str(config.comment_batch)
+            "--comment-batch", str(config.comment_batch),
+            "--sorting-methods", ",".join(config.sorting_methods)
         ])
         
         # Stop and remove any existing container with the same name
@@ -1015,18 +1018,44 @@ async def dashboard():
             <div class="form-row">
                 <label>Posts Limit:</label>
                 <input type="number" id="posts_limit" value="1000" />
-                
+
                 <label>Interval (sec):</label>
-                <input type="number" id="interval" value="300" />
-                
+                <input type="number" id="interval" value="60" />
+
                 <label>Comment Batch:</label>
-                <input type="number" id="comment_batch" value="20" />
-                
+                <input type="number" id="comment_batch" value="50" />
+
                 <label>Auto-restart:</label>
                 <label class="toggle">
                     <input type="checkbox" id="auto_restart" checked>
                     <span class="slider"></span>
                 </label>
+            </div>
+
+            <div class="form-row">
+                <label style="vertical-align: top;">Sorting Methods:</label>
+                <div style="display: inline-flex; flex-direction: column; gap: 8px;">
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" name="sorting" value="new" checked style="cursor: pointer; margin-right: 6px;"> new
+                        <small style="color: #737373; margin-left: 8px;">(Captures ALL new posts)</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" name="sorting" value="hot" checked style="cursor: pointer; margin-right: 6px;"> hot
+                        <small style="color: #737373; margin-left: 8px;">(Popular/trending posts)</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" name="sorting" value="rising" checked style="cursor: pointer; margin-right: 6px;"> rising
+                        <small style="color: #737373; margin-left: 8px;">(Early trending detection)</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" name="sorting" value="top" style="cursor: pointer; margin-right: 6px;"> top
+                        <small style="color: #737373; margin-left: 8px;">(Top posts from today)</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" name="sorting" value="controversial" style="cursor: pointer; margin-right: 6px;"> controversial
+                        <small style="color: #737373; margin-left: 8px;">(Divisive content)</small>
+                    </label>
+                </div>
             </div>
             
             <h3>Reddit Account Selection</h3>
@@ -1131,9 +1160,24 @@ async def dashboard():
         
         <script>
             const presets = {
-                high: { posts_limit: 2000, interval: 180, comment_batch: 30 },
-                medium: { posts_limit: 1000, interval: 300, comment_batch: 20 },
-                low: { posts_limit: 500, interval: 600, comment_batch: 10 }
+                high: {
+                    posts_limit: 1000,
+                    interval: 60,
+                    comment_batch: 50,
+                    sorting_methods: ['new', 'hot', 'rising']
+                },
+                medium: {
+                    posts_limit: 1000,
+                    interval: 90,
+                    comment_batch: 40,
+                    sorting_methods: ['new', 'hot']
+                },
+                low: {
+                    posts_limit: 500,
+                    interval: 120,
+                    comment_batch: 30,
+                    sorting_methods: ['new', 'hot']
+                }
             };
             
             // Loading state management
@@ -1195,6 +1239,13 @@ async def dashboard():
                     document.getElementById('posts_limit').value = preset.posts_limit;
                     document.getElementById('interval').value = preset.interval;
                     document.getElementById('comment_batch').value = preset.comment_batch;
+
+                    // Update sorting method checkboxes
+                    if (preset.sorting_methods) {
+                        document.querySelectorAll('input[name="sorting"]').forEach(checkbox => {
+                            checkbox.checked = preset.sorting_methods.includes(checkbox.value);
+                        });
+                    }
                 }
             };
             
@@ -1420,16 +1471,28 @@ async def dashboard():
                 setButtonLoading(button, true, 'Starting...');
                 
                 try {
+                    // Collect sorting methods from checkboxes
+                    const sortingMethods = Array.from(document.querySelectorAll('input[name="sorting"]:checked'))
+                                                .map(cb => cb.value);
+
+                    if (sortingMethods.length === 0) {
+                        alert('Please select at least one sorting method');
+                        setButtonLoading(button, false);
+                        return;
+                    }
+
                     let requestData = {
                         subreddit: document.getElementById('subreddit').value,
                         posts_limit: parseInt(document.getElementById('posts_limit').value),
                         interval: parseInt(document.getElementById('interval').value),
                         comment_batch: parseInt(document.getElementById('comment_batch').value),
+                        sorting_methods: sortingMethods,
                         auto_restart: document.getElementById('auto_restart').checked
                     };
-                    
+
                     if (!requestData.subreddit) {
                         alert('Please enter a subreddit name');
+                        setButtonLoading(button, false);
                         return;
                     }
                     
@@ -1740,6 +1803,7 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
         posts_limit=request.posts_limit,
         interval=request.interval,
         comment_batch=request.comment_batch,
+        sorting_methods=request.sorting_methods,
         credentials=credentials,
         auto_restart=request.auto_restart
     )
@@ -1795,17 +1859,18 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
 @app.post("/scrapers/start")
 async def start_scraper_legacy(config: ScraperConfig, background_tasks: BackgroundTasks):
     """Legacy endpoint - redirects to flexible endpoint (MongoDB URI must be in environment)"""
-    
+
     # Convert to new format
     request = ScraperStartRequest(
         subreddit=config.subreddit,
         posts_limit=config.posts_limit,
         interval=config.interval,
         comment_batch=config.comment_batch,
+        sorting_methods=config.sorting_methods,
         auto_restart=config.auto_restart,
         credentials=config.credentials
     )
-    
+
     return await start_scraper_flexible(request, background_tasks)
 
 @app.post("/scrapers/{subreddit}/stop")

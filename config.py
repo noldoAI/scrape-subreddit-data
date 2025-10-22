@@ -18,9 +18,17 @@ COLLECTIONS = {
 
 # Scraper Configuration Defaults
 DEFAULT_SCRAPER_CONFIG = {
-    "scrape_interval": 300,        # 5 minutes between cycles
-    "posts_limit": 1000,           # Posts per scrape
-    "posts_per_comment_batch": 20, # Comments batch size
+    "scrape_interval": 60,         # 1 minute between cycles (optimized for max data collection)
+    "posts_limit": 1000,           # Posts per scrape per sorting method
+    "posts_per_comment_batch": 50, # Comments batch size (increased from 20)
+    "sorting_methods": ["new", "hot", "rising"],  # Multiple sorting methods to capture more posts
+    "sort_limits": {               # Limits per sorting method
+        "new": 1000,               # Captures all new posts
+        "hot": 1000,               # Popular/trending posts
+        "rising": 500,             # Early trending detection
+        "top": 500,                # Top posts (optional)
+        "controversial": 500       # Controversial posts (optional)
+    },
     "subreddit_update_interval": 86400,  # 24 hours for subreddit metadata
 }
 

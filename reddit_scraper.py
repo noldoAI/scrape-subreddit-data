@@ -55,27 +55,47 @@ class UnifiedRedditScraper:
         self.subreddit_name = subreddit_name
         self.config = {**DEFAULT_SCRAPER_CONFIG, **(config or {})}
         self.cycle_count = 0
-        
+        self.api_calls_this_cycle = 0  # Track API calls per cycle
+
         logger.info(f"🔗 Authenticated as: {reddit.user.me()}")
         logger.info(f"🎯 Target subreddit: r/{self.subreddit_name}")
         logger.info(f"⚙️  Configuration: {self.config}")
+        logger.info(f"📊 Sorting methods: {', '.join(self.config.get('sorting_methods', ['hot']))}")
     
     # ======================= POSTS SCRAPING =======================
-    
-    def scrape_hot_posts(self, limit=1000):
-        """Scrape hot posts from the target subreddit."""
-        logger.info(f"\n--- Scraping {limit} hot posts from r/{self.subreddit_name} ---")
-        
+
+    def scrape_posts_by_sort(self, sort_method="hot", limit=1000):
+        """Scrape posts from the target subreddit using specified sorting method."""
+        logger.info(f"\n--- Scraping {limit} {sort_method} posts from r/{self.subreddit_name} ---")
+
         check_rate_limit(reddit)
-        
+        self.api_calls_this_cycle += 1  # Track API call
+
         try:
-            posts = reddit.subreddit(self.subreddit_name).hot(limit=limit)
+            subreddit = reddit.subreddit(self.subreddit_name)
+
+            # Get posts using the specified sorting method
+            if sort_method == "hot":
+                posts = subreddit.hot(limit=limit)
+            elif sort_method == "new":
+                posts = subreddit.new(limit=limit)
+            elif sort_method == "rising":
+                posts = subreddit.rising(limit=limit)
+            elif sort_method == "top":
+                posts = subreddit.top(time_filter="day", limit=limit)
+            elif sort_method == "controversial":
+                posts = subreddit.controversial(time_filter="day", limit=limit)
+            else:
+                logger.error(f"Unknown sort method: {sort_method}, defaulting to hot")
+                posts = subreddit.hot(limit=limit)
+
             posts_list = []
-            
+
             for i, post in enumerate(posts):
                 if i % 100 == 0 and i > 0:
                     check_rate_limit(reddit)
-                
+                    self.api_calls_this_cycle += 1
+
                 post_data = {
                     "title": post.title,
                     "url": post.url,
@@ -88,7 +108,7 @@ class UnifiedRedditScraper:
                     "subreddit": self.subreddit_name,
                     "post_id": post.id,
                     "scraped_at": datetime.now(UTC),
-                    "selftext": post.selftext[:1000] if post.selftext else "",
+                    "selftext": post.selftext if post.selftext else "",  # No truncation
                     "is_self": post.is_self,
                     "upvote_ratio": post.upvote_ratio,
                     "distinguished": post.distinguished,
@@ -96,18 +116,50 @@ class UnifiedRedditScraper:
                     "over_18": post.over_18,
                     "spoiler": post.spoiler,
                     "locked": post.locked,
+                    "sort_method": sort_method,  # Track which sort this came from
                     "comments_scraped": False,
                     "last_comment_fetch_time": None,
                     "initial_comments_scraped": False
                 }
                 posts_list.append(post_data)
-            
-            logger.info(f"Successfully scraped {len(posts_list)} posts")
+
+            logger.info(f"Successfully scraped {len(posts_list)} {sort_method} posts")
             return posts_list
-            
+
         except Exception as e:
-            logger.error(f"Error scraping posts: {e}")
+            logger.error(f"Error scraping {sort_method} posts: {e}")
             return []
+
+    def scrape_all_posts(self):
+        """Scrape posts using multiple sorting methods and deduplicate."""
+        sorting_methods = self.config.get("sorting_methods", ["hot"])
+        sort_limits = self.config.get("sort_limits", {})
+
+        logger.info(f"\n{'='*60}")
+        logger.info(f"MULTI-SORT POST SCRAPING: {', '.join(sorting_methods)}")
+        logger.info(f"{'='*60}")
+
+        all_posts = []
+        seen_post_ids = set()
+
+        for sort_method in sorting_methods:
+            limit = sort_limits.get(sort_method, self.config["posts_limit"])
+            posts = self.scrape_posts_by_sort(sort_method, limit)
+
+            # Deduplicate - only add posts we haven't seen yet
+            new_posts = 0
+            for post in posts:
+                if post["post_id"] not in seen_post_ids:
+                    all_posts.append(post)
+                    seen_post_ids.add(post["post_id"])
+                    new_posts += 1
+
+            logger.info(f"  → {new_posts} new posts from {sort_method} (duplicates: {len(posts) - new_posts})")
+            time.sleep(2)  # Be respectful between sort methods
+
+        logger.info(f"\nTotal unique posts collected: {len(all_posts)}")
+        logger.info(f"API calls this cycle so far: {self.api_calls_this_cycle}")
+        return all_posts
     
     def save_posts_to_db(self, posts_list):
         """Save posts to MongoDB with bulk operations."""
@@ -618,13 +670,16 @@ class UnifiedRedditScraper:
                 logger.info(f"\n{'='*80}")
                 logger.info(f"SCRAPE CYCLE #{self.cycle_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 logger.info(f"{'='*80}")
-                
-                # PHASE 1: Scrape Posts
+
+                # Reset API call counter for this cycle
+                self.api_calls_this_cycle = 0
+
+                # PHASE 1: Scrape Posts (Multi-Sort)
                 logger.info(f"\n{'='*60}")
-                logger.info("POST SCRAPING PHASE")
+                logger.info("POST SCRAPING PHASE (MULTI-SORT)")
                 logger.info(f"{'='*60}")
-                
-                posts = self.scrape_hot_posts(self.config["posts_limit"])
+
+                posts = self.scrape_all_posts()  # Use new multi-sort method
                 new_posts = self.save_posts_to_db(posts)
                 
                 # PHASE 2: Scrape Comments for existing posts
@@ -640,10 +695,12 @@ class UnifiedRedditScraper:
                 logger.info(f"\n{'='*60}")
                 logger.info("CYCLE SUMMARY")
                 logger.info(f"{'='*60}")
-                logger.info(f"Posts scraped: {len(posts)} ({new_posts} new)")
+                logger.info(f"Posts scraped: {len(posts)} unique ({new_posts} new)")
                 logger.info(f"Comments processed: {posts_processed} posts, {total_comments} new comments")
                 logger.info(f"Subreddit metadata: {'Updated' if subreddit_updated else 'No update needed'}")
                 logger.info(f"Cycle completed in {elapsed_time:.2f} seconds")
+                logger.info(f"API calls this cycle: ~{self.api_calls_this_cycle + posts_processed}")
+                logger.info(f"Estimated QPM: ~{(self.api_calls_this_cycle + posts_processed) / max(elapsed_time / 60, 1):.1f}")
                 
                 # Wait before next cycle
                 logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
@@ -665,16 +722,21 @@ def main():
     parser.add_argument("--comments-only", action="store_true", help="Run comment scraping only")
     parser.add_argument("--metadata-only", action="store_true", help="Update subreddit metadata only")
     parser.add_argument("--posts-limit", type=int, default=1000, help="Number of posts to scrape per cycle")
-    parser.add_argument("--interval", type=int, default=300, help="Seconds between scrape cycles")
-    parser.add_argument("--comment-batch", type=int, default=20, help="Number of posts to process for comments per cycle")
-    
+    parser.add_argument("--interval", type=int, default=60, help="Seconds between scrape cycles")
+    parser.add_argument("--comment-batch", type=int, default=50, help="Number of posts to process for comments per cycle")
+    parser.add_argument("--sorting-methods", type=str, default="new,hot,rising", help="Comma-separated sorting methods (new,hot,rising,top,controversial)")
+
     args = parser.parse_args()
-    
+
+    # Parse sorting methods
+    sorting_methods = [s.strip() for s in args.sorting_methods.split(",")]
+
     # Custom configuration from command line
     config = {
         "posts_limit": args.posts_limit,
         "scrape_interval": args.interval,
         "posts_per_comment_batch": args.comment_batch,
+        "sorting_methods": sorting_methods,
     }
     
     # Create scraper instance
