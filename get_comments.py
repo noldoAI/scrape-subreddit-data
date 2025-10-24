@@ -1,19 +1,33 @@
 import praw
-from datetime import datetime
+from datetime import datetime, UTC
 from dotenv import load_dotenv
 import pymongo
 import os
 import time
+import logging
 from rate_limits import check_rate_limit
 from praw.models import MoreComments
 
+# Import centralized configuration
+from config import DATABASE_NAME, COLLECTIONS, LOGGING_CONFIG
 
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    format=LOGGING_CONFIG["format"],
+    datefmt=LOGGING_CONFIG["date_format"],
+    level=getattr(logging, LOGGING_CONFIG["level"]),
+    force=True
+)
+logger = logging.getLogger("get-comments")
+
+# MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
-db = client["techbro"]
-posts_collection = db["reddit_posts"]
-comments_collection = db["reddit_comments"]
+db = client[DATABASE_NAME]  # Uses "noldo" from config
+posts_collection = db[COLLECTIONS["POSTS"]]
+comments_collection = db[COLLECTIONS["COMMENTS"]]
+errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
 
 
 reddit = praw.Reddit(
@@ -25,10 +39,34 @@ reddit = praw.Reddit(
 )
 
 
-print(f"Authenticated as: {reddit.user.me()}")
+logger.info(f"Authenticated as: {reddit.user.me()}")
 
 
 SCRAPE_INTERVAL = 600  # 10 minutes between comment scrapes
+
+
+def log_scrape_error(post_id, error_type, error_message):
+    """
+    Log scraping errors to MongoDB for tracking and debugging.
+
+    Args:
+        post_id: Post ID that failed
+        error_type: Type of error (e.g., 'scrape_failed', 'save_failed', 'verification_failed')
+        error_message: Error message/details
+    """
+    try:
+        error_doc = {
+            "post_id": post_id,
+            "error_type": error_type,
+            "error_message": str(error_message),
+            "timestamp": datetime.now(UTC),
+            "resolved": False,
+            "script": "get_comments.py"
+        }
+        errors_collection.insert_one(error_doc)
+        logger.info(f"Logged error to database: {error_type}")
+    except Exception as e:
+        logger.error(f"Failed to log error to database: {e}")
 
 
 def get_posts_without_comments():
@@ -46,12 +84,13 @@ def get_posts_without_comments():
                 {"comments_scraped": False}
             ]
         }).limit(50))  # Process 50 posts at a time
-        
-        print(f"Found {len(posts)} posts without comments scraped")
+
+
+        logger.info(f"Found {len(posts)} posts without comments scraped")
         return posts
-        
+
     except Exception as e:
-        print(f"Error fetching posts: {e}")
+        logger.error(f"Error fetching posts: {e}")
         return []
 
 
@@ -66,18 +105,23 @@ def scrape_post_comments(post_id, submission_url=None):
     Returns:
         int: Number of comments scraped
     """
-    print(f"\n--- Scraping comments for post {post_id} ---")
-    
+    logger.info(f"\n--- Scraping comments for post {post_id} ---")
+
     # Check rate limits before making API calls
     check_rate_limit(reddit)
     
     try:
         # Get the submission
         submission = reddit.submission(id=post_id)
-        
-        # Replace "MoreComments" objects with actual comments (limited)
-        submission.comments.replace_more(limit=10)  # Limit to avoid too many API calls
-        
+
+        # Expand ALL MoreComments to get complete thread
+        try:
+            removed_count = submission.comments.replace_more(limit=None)
+            if removed_count:
+                logger.info(f"Expanded {len(removed_count)} MoreComments objects")
+        except Exception as e:
+            logger.warning(f"Error expanding MoreComments: {e}, continuing with partial comment tree")
+
         comments_data = []
         
         def process_comment(comment, parent_id=None, depth=0):
@@ -102,7 +146,7 @@ def scrape_post_comments(post_id, submission_url=None):
                     "stickied": comment.stickied if hasattr(comment, 'stickied') else False,
                     "edited": bool(comment.edited) if hasattr(comment, 'edited') else False,
                     "controversiality": comment.controversiality if hasattr(comment, 'controversiality') else 0,
-                    "scraped_at": datetime.utcnow(),
+                    "scraped_at": datetime.now(UTC),
                     "subreddit": submission.subreddit.display_name,
                     "gilded": comment.gilded if hasattr(comment, 'gilded') else 0,
                     "total_awards_received": comment.total_awards_received if hasattr(comment, 'total_awards_received') else 0
@@ -114,19 +158,20 @@ def scrape_post_comments(post_id, submission_url=None):
                 if hasattr(comment, 'replies') and comment.replies:
                     for reply in comment.replies:
                         process_comment(reply, parent_id=comment.id, depth=depth + 1)
-                        
+
+
             except Exception as e:
-                print(f"Error processing comment {getattr(comment, 'id', 'unknown')}: {e}")
+                logger.error(f"Error processing comment {getattr(comment, 'id', 'unknown')}: {e}")
         
         # Process all top-level comments
         for comment in submission.comments:
             process_comment(comment, parent_id=None, depth=0)
-        
-        print(f"Processed {len(comments_data)} comments for post {post_id}")
+
+        logger.info(f"Processed {len(comments_data)} comments for post {post_id}")
         return comments_data
-        
+
     except Exception as e:
-        print(f"Error scraping comments for post {post_id}: {e}")
+        logger.error(f"Error scraping comments for post {post_id}: {e}")
         return []
 
 
@@ -163,12 +208,12 @@ def save_comments_to_db(comments_list):
             except pymongo.errors.DuplicateKeyError:
                 # Comment already exists, skip
                 continue
-        
-        print(f"Saved {new_comments} new comments to database")
+
+        logger.info(f"Saved {new_comments} new comments to database")
         return new_comments
-        
+
     except Exception as e:
-        print(f"Error saving comments to database: {e}")
+        logger.error(f"Error saving comments to database: {e}")
         return 0
 
 
@@ -184,35 +229,35 @@ def mark_post_comments_scraped(post_id):
             {"post_id": post_id},
             {"$set": {
                 "comments_scraped": True,
-                "comments_scraped_at": datetime.utcnow()
+                "comments_scraped_at": datetime.now(UTC)
             }}
         )
     except Exception as e:
-        print(f"Error marking post {post_id} as scraped: {e}")
+        logger.error(f"Error marking post {post_id} as scraped: {e}")
 
 
 def continuous_comment_scrape():
     """
     Continuously scrape comments for posts that haven't been processed yet.
     """
-    print("Starting continuous comment scraping")
-    print(f"Scrape interval: {SCRAPE_INTERVAL} seconds")
-    print("Press Ctrl+C to stop\n")
-    
+    logger.info("Starting continuous comment scraping")
+    logger.info(f"Scrape interval: {SCRAPE_INTERVAL} seconds")
+    logger.info("Press Ctrl+C to stop\n")
+
     scrape_count = 0
     
     try:
         while True:
             scrape_count += 1
             start_time = time.time()
-            
-            print(f"\n=== Comment Scrape #{scrape_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
-            
+
+            logger.info(f"\n=== Comment Scrape #{scrape_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+
             # Get posts that need comment scraping
             posts = get_posts_without_comments()
-            
+
             if not posts:
-                print("No posts found that need comment scraping. Waiting...")
+                logger.info("No posts found that need comment scraping. Waiting...")
                 time.sleep(SCRAPE_INTERVAL)
                 continue
             
@@ -220,42 +265,65 @@ def continuous_comment_scrape():
             posts_processed = 0
             
             for post in posts:
+                post_id = post["post_id"]
                 try:
-                    post_id = post["post_id"]
-                    print(f"\nProcessing post: {post['title'][:50]}...")
-                    
+                    logger.info(f"\nProcessing post: {post['title'][:50]}...")
+
                     # Scrape comments for this post
                     comments = scrape_post_comments(post_id)
-                    
+
+                    if not comments:
+                        logger.warning(f"No comments found for post {post_id} - NOT marking as scraped")
+                        # Don't mark as scraped - will retry later
+                        continue
+
                     # Save comments to database
                     new_comments = save_comments_to_db(comments)
-                    total_comments += new_comments
-                    
-                    # Mark post as processed
-                    mark_post_comments_scraped(post_id)
-                    posts_processed += 1
-                    
+
+                    if new_comments == 0 and comments:
+                        logger.error(f"Failed to save comments for post {post_id}")
+                        # Log error to database
+                        log_scrape_error(post_id, "save_failed", "Comments scraped but not saved to DB")
+                        continue  # Don't mark as scraped
+
+                    # VERIFICATION: Check comments actually in database
+                    actual_count = comments_collection.count_documents({"post_id": post_id})
+
+                    if actual_count > 0:
+                        # Comments verified in DB, safe to mark as scraped
+                        mark_post_comments_scraped(post_id)
+                        posts_processed += 1
+                        total_comments += new_comments
+                        logger.info(f"✓ Verified {actual_count} comments in DB for post {post_id}")
+                    else:
+                        # Verification failed!
+                        logger.error(f"✗ VERIFICATION FAILED: 0 comments in DB for post {post_id}")
+                        log_scrape_error(post_id, "verification_failed", f"Expected {len(comments)} comments but found 0 in DB")
+                        continue  # Will retry later
+
                     # Small delay between posts to be respectful
                     time.sleep(2)
-                    
+
                 except Exception as e:
-                    print(f"Error processing post {post.get('post_id', 'unknown')}: {e}")
-                    continue
-            
+                    logger.error(f"Error processing post {post_id}: {e}")
+                    log_scrape_error(post_id, "scrape_failed", str(e))
+                    continue  # Don't mark as scraped on error
+
+
             # Calculate time taken
             elapsed_time = time.time() - start_time
-            print(f"\nScrape completed in {elapsed_time:.2f} seconds")
-            print(f"Processed {posts_processed} posts, scraped {total_comments} new comments")
-            
+            logger.info(f"\nScrape completed in {elapsed_time:.2f} seconds")
+            logger.info(f"Processed {posts_processed} posts, scraped {total_comments} new comments")
+
             # Wait before next scrape
-            print(f"Waiting {SCRAPE_INTERVAL} seconds before next scrape...")
+            logger.info(f"Waiting {SCRAPE_INTERVAL} seconds before next scrape...")
             time.sleep(SCRAPE_INTERVAL)
-            
+
     except KeyboardInterrupt:
-        print(f"\n\nComment scraping stopped by user after {scrape_count} scrapes")
+        logger.info(f"\n\nComment scraping stopped by user after {scrape_count} scrapes")
     except Exception as e:
-        print(f"Unexpected error: {e}")
-        print("Restarting in 60 seconds...")
+        logger.error(f"Unexpected error: {e}")
+        logger.info("Restarting in 60 seconds...")
         time.sleep(60)
         continuous_comment_scrape()  # Restart on error
 
@@ -294,9 +362,9 @@ def get_comment_tree(post_id):
                     comment_dict[parent_id]["replies"].append(comment)
         
         return tree
-        
+
     except Exception as e:
-        print(f"Error reconstructing comment tree: {e}")
+        logger.error(f"Error reconstructing comment tree: {e}")
         return []
 
 
