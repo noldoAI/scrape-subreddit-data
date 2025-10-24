@@ -500,18 +500,20 @@ class UnifiedRedditScraper:
 
                 comments = self.scrape_post_comments(post_id)
 
-                # CRITICAL FIX: Only add to tracking lists based on actual results
+                # FIXED: Always mark initial scrapes as done (even 0 comments)
                 if is_initial:
-                    # For initial scrapes, only track if we got comments
+                    # Save any comments we got
                     if comments:
                         all_comments.extend(comments)
-                        initial_scrape_posts.append(post_id)
                         post_comment_map[post_id] = len(comments)
-                        posts_processed += 1
                         logger.info(f"✓ Initial scrape: {len(comments)} new comments")
                     else:
-                        # No comments found - don't mark as scraped, will retry later
-                        logger.warning(f"✗ Initial scrape: 0 comments found - NOT marking as scraped")
+                        post_comment_map[post_id] = 0
+                        logger.info(f"✓ Initial scrape: 0 comments (will check in update cycles)")
+
+                    # ALWAYS mark initial scrapes as done (update cycles will catch new comments)
+                    initial_scrape_posts.append(post_id)
+                    posts_processed += 1
                 else:
                     # For updates, 0 new comments is acceptable (all might be existing)
                     if comments:
@@ -555,21 +557,28 @@ class UnifiedRedditScraper:
             verified_updates = []
 
             for post_id in initial_scrape_posts:
-                actual_count = comments_collection.count_documents({"post_id": post_id})
                 expected_count = post_comment_map.get(post_id, 0)
 
-                if actual_count > 0:
+                if expected_count == 0:
+                    # Post had 0 comments, nothing to verify - mark as done
                     verified_initial.append(post_id)
-                    logger.info(f"  ✓ Post {post_id}: {actual_count} comments verified in DB")
+                    logger.info(f"  ✓ Post {post_id}: 0 comments (post has no comments yet)")
                 else:
-                    logger.error(f"  ✗ Post {post_id}: VERIFICATION FAILED - 0 comments in DB (expected {expected_count})")
-                    log_scrape_error(
-                        subreddit=self.subreddit_name,
-                        post_id=post_id,
-                        error_type="verification_failed",
-                        error_message=f"Expected {expected_count} comments but found 0 in database",
-                        retry_count=0
-                    )
+                    # Post claimed to have comments, verify they're in DB
+                    actual_count = comments_collection.count_documents({"post_id": post_id})
+
+                    if actual_count > 0:
+                        verified_initial.append(post_id)
+                        logger.info(f"  ✓ Post {post_id}: {actual_count} comments verified in DB")
+                    else:
+                        logger.error(f"  ✗ Post {post_id}: VERIFICATION FAILED - 0 comments in DB (expected {expected_count})")
+                        log_scrape_error(
+                            subreddit=self.subreddit_name,
+                            post_id=post_id,
+                            error_type="verification_failed",
+                            error_message=f"Expected {expected_count} comments but found 0 in database",
+                            retry_count=0
+                        )
 
             # For updates, all posts pass verification (0 new comments is OK)
             verified_updates = update_posts
