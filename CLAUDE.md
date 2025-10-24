@@ -189,13 +189,26 @@ python repair_ghost_posts.py --include-incomplete
 
 ### Smart Comment Update Prioritization
 
-The system uses a priority queue for comment updates:
-1. **HIGHEST**: Posts never scraped (initial scrape)
-2. **HIGH**: Recent posts (<24h) - update every 6 hours
-3. **MEDIUM**: Older posts - update every 24 hours
-4. **Deduplication**: Only collects NEW comments, skips existing ones
+The system uses intelligent priority-based comment updates based on post activity:
 
-Query uses `$or` conditions with `initial_comments_scraped`, `last_comment_fetch_time`, and `created_datetime` to determine priority.
+**Priority Tiers:**
+1. **HIGHEST**: Posts never scraped (initial scrape) - immediate priority
+2. **HIGH**: High-activity posts (>100 comments) - update every **2 hours**
+3. **MEDIUM**: Medium-activity posts (20-100 comments) - update every **6 hours**
+4. **LOW**: Low-activity posts (<20 comments) - update every **24 hours**
+
+**Sorting Order:**
+1. Unscraped posts first
+2. Then by comment count (highest first) - prioritizes active discussions
+3. Then by creation time (newest first)
+
+**Benefits:**
+- Hot discussion threads (500+ comments) get checked 3x more frequently
+- Low-activity posts (<20 comments) save API calls by checking less often
+- Automatically adapts to post engagement levels
+- Deduplication: Only collects NEW comments, skips existing ones
+
+Query uses `$or` conditions with `initial_comments_scraped`, `num_comments`, and `last_comment_fetch_time` to determine priority.
 
 ### Container Isolation Strategy
 

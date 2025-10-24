@@ -270,31 +270,58 @@ class UnifiedRedditScraper:
     # ======================= COMMENTS SCRAPING =======================
     
     def get_posts_needing_comment_updates(self, limit=20):
-        """Get posts that need comment scraping or updates."""
+        """
+        Get posts that need comment scraping or updates with smart prioritization.
+
+        Priority system based on comment activity:
+        - High activity (>100 comments): Check every 2 hours
+        - Medium activity (20-100 comments): Check every 6 hours
+        - Low activity (<20 comments): Check every 24 hours
+        """
         try:
             current_time = datetime.now(UTC)
+            two_hours_ago = current_time - timedelta(hours=2)
             six_hours_ago = current_time - timedelta(hours=6)
             twenty_four_hours_ago = current_time - timedelta(hours=24)
-            
-            # Convert to timezone-naive for database comparison (since existing data might be timezone-naive)
+
+            # Convert to timezone-naive for database comparison
             current_time_naive = current_time.replace(tzinfo=None)
+            two_hours_ago_naive = two_hours_ago.replace(tzinfo=None)
             six_hours_ago_naive = six_hours_ago.replace(tzinfo=None)
             twenty_four_hours_ago_naive = twenty_four_hours_ago.replace(tzinfo=None)
-            
-            posts = list(posts_collection.find({
-                "subreddit": self.subreddit_name,  # Only posts from our target subreddit
+
+            # Query for candidate posts (get more than needed, we'll filter)
+            # Priority 1: Never scraped
+            # Priority 2: High activity posts (>100 comments)
+            # Priority 3: Medium activity posts (20-100 comments)
+            # Priority 4: Low activity posts (<20 comments)
+
+            candidates = list(posts_collection.find({
+                "subreddit": self.subreddit_name,
                 "$or": [
+                    # Never scraped - highest priority
                     {"initial_comments_scraped": {"$ne": True}},
+                    # High activity posts - check every 2 hours
                     {
-                        "created_datetime": {"$gte": twenty_four_hours_ago_naive},
+                        "num_comments": {"$gt": 100},
+                        "$or": [
+                            {"last_comment_fetch_time": {"$exists": False}},
+                            {"last_comment_fetch_time": {"$lte": two_hours_ago_naive}},
+                            {"last_comment_fetch_time": None}
+                        ]
+                    },
+                    # Medium activity posts - check every 6 hours
+                    {
+                        "num_comments": {"$gt": 20, "$lte": 100},
                         "$or": [
                             {"last_comment_fetch_time": {"$exists": False}},
                             {"last_comment_fetch_time": {"$lte": six_hours_ago_naive}},
                             {"last_comment_fetch_time": None}
                         ]
                     },
+                    # Low activity posts - check every 24 hours
                     {
-                        "created_datetime": {"$lt": twenty_four_hours_ago_naive},
+                        "num_comments": {"$lte": 20},
                         "$or": [
                             {"last_comment_fetch_time": {"$exists": False}},
                             {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago_naive}},
@@ -303,13 +330,23 @@ class UnifiedRedditScraper:
                     }
                 ]
             }).sort([
-                ("initial_comments_scraped", 1),
-                ("created_utc", -1)
-            ]).limit(limit))
-            
-            logger.info(f"Found {len(posts)} posts needing comment updates")
-            return posts
-            
+                ("initial_comments_scraped", 1),   # Unscraped first
+                ("num_comments", -1),              # Then by comment count (high to low)
+                ("created_utc", -1)                # Then by newest first
+            ]).limit(limit * 2))  # Get extra to account for filtering
+
+            # Log priority breakdown
+            if candidates:
+                unscraped = sum(1 for p in candidates if not p.get("initial_comments_scraped"))
+                high_activity = sum(1 for p in candidates if p.get("num_comments", 0) > 100 and p.get("initial_comments_scraped"))
+                medium_activity = sum(1 for p in candidates if 20 < p.get("num_comments", 0) <= 100 and p.get("initial_comments_scraped"))
+                low_activity = sum(1 for p in candidates if p.get("num_comments", 0) <= 20 and p.get("initial_comments_scraped"))
+
+                logger.info(f"Found {len(candidates)} posts needing updates: {unscraped} unscraped, {high_activity} high-activity (>100), {medium_activity} medium (20-100), {low_activity} low (<20)")
+
+            # Return top N based on priority
+            return candidates[:limit]
+
         except Exception as e:
             logger.error(f"Error fetching posts needing updates: {e}")
             return []
