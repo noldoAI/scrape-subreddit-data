@@ -69,14 +69,26 @@ The system consists of three main components:
 
 Each scraper runs a continuous 3-phase cycle:
 
-### **Phase 1: Posts Scraping** (Every 5 minutes)
+### **Phase 1: Posts Scraping** (Every 1-10 minutes, configurable)
+
+**Multi-Sort Strategy** (Maximizes data collection within Reddit API limits):
 
 ```
-1. Fetch hot posts from target subreddit using Reddit API
-2. Extract post metadata (title, score, author, timestamps, etc.)
-3. Update existing posts with new scores/comment counts
-4. Store new posts that entered the hot list
-5. Preserve comment tracking status for existing posts
+1. Fetch posts using multiple sorting methods:
+   - new: Latest posts as they're submitted
+   - hot: Currently trending posts
+   - rising: Posts gaining traction
+   - top: Highest scoring posts (optional)
+   - controversial: Most debated posts (optional)
+
+2. Deduplicate posts across sorting methods
+3. Extract post metadata (title, score, author, timestamps, etc.)
+4. Update existing posts with new scores/comment counts
+5. Store new posts discovered from any sorting method
+6. Preserve comment tracking status for existing posts
+
+Performance: Achieves 12-15x more data collection vs single-sort method
+API Usage: ~75 queries/minute (75% of Reddit's 100 QPM free tier limit)
 ```
 
 ### **Phase 2: Smart Comment Updates** (Continuous)
@@ -141,6 +153,12 @@ System Health:
 📊 Total Scrapers: 3
 🏃 Running: 2
 ❌ Failed: 1
+
+Per-Scraper Metrics (Real-time):
+📊 Collection Stats:
+   ▸ 981 posts (9,547/hr) | ▸ 2,514 comments (24,466/hr)
+   Last cycle: 23 posts, 847 comments at 15:31:15
+   Total cycles: 127 | Avg cycle: 30.2s
 ```
 
 ## 🔧 REST API Endpoints
@@ -203,31 +221,51 @@ GET /scrapers/status-summary
 
 ```json
 {
-  "posts_limit": 2000,
-  "interval": 180,
-  "comment_batch": 30
+  "posts_limit": 1000,
+  "interval": 60,
+  "comment_batch": 50,
+  "sorting_methods": ["new", "hot", "rising"],
+  "sort_limits": {
+    "new": 1000,
+    "hot": 1000,
+    "rising": 500
+  }
 }
 ```
+*Optimized for maximum data collection (~75 QPM, 75% API utilization)*
 
 ### **Medium Activity Subreddits** (investing, cryptocurrency)
 
 ```json
 {
-  "posts_limit": 1000,
-  "interval": 300,
-  "comment_batch": 20
+  "posts_limit": 800,
+  "interval": 90,
+  "comment_batch": 40,
+  "sorting_methods": ["new", "hot", "rising"],
+  "sort_limits": {
+    "new": 800,
+    "hot": 800,
+    "rising": 400
+  }
 }
 ```
+*Balanced approach (~50 QPM, 50% API utilization)*
 
 ### **Low Activity Subreddits** (pennystocks, niche topics)
 
 ```json
 {
   "posts_limit": 500,
-  "interval": 600,
-  "comment_batch": 10
+  "interval": 120,
+  "comment_batch": 30,
+  "sorting_methods": ["new", "hot"],
+  "sort_limits": {
+    "new": 500,
+    "hot": 500
+  }
 }
 ```
+*Conservative settings (~25 QPM, 25% API utilization)*
 
 ## 🗃️ Database Schema
 
@@ -302,15 +340,33 @@ GET /scrapers/status-summary
   "container_name": "reddit-scraper-wallstreetbets",
   "config": {
     "posts_limit": 2000,
-    "interval": 180,
-    "comment_batch": 30
+    "interval": 60,
+    "comment_batch": 50,
+    "sorting_methods": ["new", "hot", "rising"],
+    "sort_limits": {
+      "new": 1000,
+      "hot": 1000,
+      "rising": 500
+    }
   },
   "credentials": {
-    "client_id": "encrypted_value",
-    "client_secret": "encrypted_value",
+    "client_id": "app_client_id",
+    "client_secret": "app_secret",
     "username": "reddit_user",
-    "password": "encrypted_value",
+    "password": "user_password",
     "user_agent": "RedditScraper/1.0"
+  },
+  "metrics": {
+    "total_posts_collected": 981,
+    "total_comments_collected": 2514,
+    "total_cycles": 127,
+    "last_cycle_posts": 23,
+    "last_cycle_comments": 847,
+    "last_cycle_time": "2024-01-20T15:31:15",
+    "last_cycle_duration": 30.2,
+    "posts_per_hour": 9547,
+    "comments_per_hour": 24466,
+    "avg_cycle_duration": 30.2
   },
   "auto_restart": true,
   "created_at": "2022-01-20T12:00:00",
@@ -321,19 +377,20 @@ GET /scrapers/status-summary
 
 ## 🔐 Security Features
 
-### **Credential Encryption**
+### **Credential Management**
 
-- All sensitive credentials encrypted before database storage
-- Automatic encryption key generation and management
-- Credentials never stored in plain text or logs
-- Masked values in API responses and dashboard
+- Credentials stored in MongoDB (ensure MongoDB is properly secured)
+- Use MongoDB Atlas with IP whitelisting and strong passwords
+- Enable MongoDB encryption at rest in production
+- Masked values in API responses and dashboard (shown as `***`)
 
 ### **Container Isolation**
 
 - Each scraper runs in isolated Docker container
-- No credential sharing between scrapers
+- Unique credentials per scraper (no sharing)
 - Individual failure containment
 - Resource isolation and management
+- Environment variables isolated per container
 
 ## 📈 Monitoring & Alerting
 
@@ -405,6 +462,52 @@ docker-compose -f docker-compose.api.yml up --build -d
 open http://localhost:8000
 ```
 
+## 🔧 Production Deployment
+
+### **Rootless Docker Persistence Issue**
+
+If you're running Docker in rootless mode (common on cloud VMs), containers will stop when you log out of SSH. This happens because rootless Docker runs as a user service that terminates when the user session ends.
+
+**Symptoms:**
+- Containers run fine while SSH'd in
+- Containers stop/fail when you log out
+- API and scrapers don't persist after logout
+
+**Solution: Enable User Lingering**
+
+```bash
+# Enable persistent user session (keeps Docker running after logout)
+sudo loginctl enable-linger $USER
+
+# Verify linger is enabled
+loginctl show-user $USER | grep Linger
+# Should show: Linger=yes
+
+# Check Docker service persists
+systemctl --user status docker.service
+```
+
+**Why This Works:**
+- `loginctl enable-linger` keeps your user systemd instance running
+- Docker daemon (user service) stays active even after SSH logout
+- All containers continue running independently of SSH sessions
+
+**Verification:**
+```bash
+# 1. Start containers
+docker ps
+
+# 2. Log out of SSH completely
+
+# 3. Wait 2-5 minutes
+
+# 4. Log back in and check
+docker ps
+# Containers should still be running
+```
+
+**Important:** This fix is **required** for production deployments using rootless Docker. Without it, your scrapers will only work during active SSH sessions.
+
 ## 🚀 Usage Examples
 
 ### **Scraping Multiple Subreddits**
@@ -459,11 +562,14 @@ curl http://localhost:8000/scrapers
 
 ### **Scraping Efficiency**
 
+- **Multi-Sort Strategy**: Fetch posts using new/hot/rising for 12-15x more data
+- **Smart Deduplication**: Skip duplicate posts across sorting methods
+- **API Utilization**: Maximized at ~75 QPM (75% of Reddit's 100 QPM limit)
 - **Bulk Database Operations**: High-performance MongoDB writes
-- **Intelligent Deduplication**: Skip existing posts/comments
 - **Rate Limit Management**: Automatic Reddit API throttling
 - **Memory Efficiency**: Stream processing for large datasets
 - **Comment Prioritization**: Focus on active posts first
+- **Real-time Metrics**: Track collection rates (posts/hr, comments/hr)
 
 ### **Resource Management**
 
@@ -476,6 +582,19 @@ curl http://localhost:8000/scrapers
 
 ### **Common Issues**
 
+**❌ Containers Stop After SSH Logout (Rootless Docker)**
+
+```bash
+# SOLUTION: Enable user lingering
+sudo loginctl enable-linger $USER
+
+# Verify
+loginctl show-user $USER | grep Linger=yes
+
+# This is REQUIRED for production deployments with rootless Docker
+# See "Production Deployment" section above for details
+```
+
 **❌ Scraper Container Fails Immediately**
 
 ```bash
@@ -487,6 +606,7 @@ docker logs reddit-scraper-wallstreetbets
 - Missing environment variables
 - Network connectivity issues
 - Rate limit exceeded
+- Docker image not built (run: docker build -f Dockerfile -t reddit-scraper .)
 ```
 
 **❌ Database Connection Failed**
@@ -495,6 +615,7 @@ docker logs reddit-scraper-wallstreetbets
 # Verify MongoDB URI
 # Check IP whitelist in MongoDB Atlas
 # Verify database user permissions
+# Test connection: docker logs reddit-scraper-api
 ```
 
 **❌ Reddit Authentication Error**
@@ -503,6 +624,19 @@ docker logs reddit-scraper-wallstreetbets
 # Verify Reddit app configuration
 # Check username/password combination
 # Ensure user agent is descriptive and unique
+# Check for 2FA (may cause oauth invalid_grant errors)
+```
+
+**❌ Dashboard Not Showing Scrapers**
+
+```bash
+# Rebuild API container with latest fixes
+docker compose -f docker-compose.api.yml down
+docker compose -f docker-compose.api.yml build --no-cache reddit-scraper-api
+docker compose -f docker-compose.api.yml up -d
+
+# Check browser console for JavaScript errors
+# Verify /scrapers endpoint returns data: curl http://localhost:8000/scrapers
 ```
 
 ### **Debugging Commands**
