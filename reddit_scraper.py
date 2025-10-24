@@ -515,7 +515,7 @@ class UnifiedRedditScraper:
                 "description": subreddit.description,
                 "url": subreddit.url,
                 "subscribers": subreddit.subscribers,
-                "active_user_count": subreddit.accounts_active,
+                "active_user_count": getattr(subreddit, 'active_user_count', None),
                 "over_18": subreddit.over18,
                 "lang": subreddit.lang,
                 "created_utc": subreddit.created_utc,
