@@ -496,7 +496,10 @@ class UnifiedRedditScraper:
             action = "Initial scrape" if is_initial else "Update"
 
             try:
+                # Use stored reddit_url or construct from subreddit + post_id
+                post_url = post.get('reddit_url', f"https://reddit.com/r/{self.subreddit_name}/comments/{post_id}/")
                 logger.info(f"\n{action} for: {post['title'][:50]}...")
+                logger.info(f"  URL: {post_url}")
 
                 comments = self.scrape_post_comments(post_id)
 
@@ -506,10 +509,10 @@ class UnifiedRedditScraper:
                     if comments:
                         all_comments.extend(comments)
                         post_comment_map[post_id] = len(comments)
-                        logger.info(f"✓ Initial scrape: {len(comments)} new comments")
+                        logger.info(f"✓ Initial scrape: {len(comments)} new comments - {post_url}")
                     else:
                         post_comment_map[post_id] = 0
-                        logger.info(f"✓ Initial scrape: 0 comments (will check in update cycles)")
+                        logger.info(f"✓ Initial scrape: 0 comments (will check in update cycles) - {post_url}")
 
                     # ALWAYS mark initial scrapes as done (update cycles will catch new comments)
                     initial_scrape_posts.append(post_id)
@@ -519,9 +522,9 @@ class UnifiedRedditScraper:
                     if comments:
                         all_comments.extend(comments)
                         post_comment_map[post_id] = len(comments)
-                        logger.info(f"✓ Update: {len(comments)} new comments")
+                        logger.info(f"✓ Update: {len(comments)} new comments - {post_url}")
                     else:
-                        logger.info(f"✓ Update: 0 new comments (already up to date)")
+                        logger.info(f"✓ Update: 0 new comments (already up to date) - {post_url}")
                     update_posts.append(post_id)
                     posts_processed += 1
 
