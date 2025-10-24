@@ -39,6 +39,7 @@ db = client[DATABASE_NAME]
 posts_collection = db[COLLECTIONS["POSTS"]]
 comments_collection = db[COLLECTIONS["COMMENTS"]]
 subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
+errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
 
 # Reddit API setup
 reddit = praw.Reddit(
@@ -48,6 +49,61 @@ reddit = praw.Reddit(
     password=os.getenv("R_PASSWORD"),
     user_agent=os.getenv("R_USER_AGENT")
 )
+
+
+# ======================= UTILITY FUNCTIONS =======================
+
+def retry_with_backoff(max_retries=3, backoff_factor=2):
+    """
+    Decorator to retry function on failure with exponential backoff.
+
+    Args:
+        max_retries: Maximum number of retry attempts
+        backoff_factor: Multiplier for exponential backoff (2 = 2s, 4s, 8s)
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        # Last attempt failed, re-raise exception
+                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+                        raise
+                    wait_time = backoff_factor ** attempt
+                    logger.warning(f"{func.__name__} failed (attempt {attempt+1}/{max_retries}): {e}")
+                    logger.info(f"Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+            return None
+        return wrapper
+    return decorator
+
+
+def log_scrape_error(subreddit, post_id, error_type, error_message, retry_count=0):
+    """
+    Log scraping errors to MongoDB for tracking and debugging.
+
+    Args:
+        subreddit: Name of the subreddit
+        post_id: Post ID that failed
+        error_type: Type of error (e.g., 'comment_scrape', 'save_failure')
+        error_message: Error message/details
+        retry_count: Number of retries attempted
+    """
+    try:
+        error_doc = {
+            "subreddit": subreddit,
+            "post_id": post_id,
+            "error_type": error_type,
+            "error_message": str(error_message),
+            "retry_count": retry_count,
+            "timestamp": datetime.now(UTC),
+            "resolved": False
+        }
+        errors_collection.insert_one(error_doc)
+    except Exception as e:
+        logger.error(f"Failed to log error to database: {e}")
 
 
 class UnifiedRedditScraper:
@@ -273,15 +329,24 @@ class UnifiedRedditScraper:
     def scrape_post_comments(self, post_id):
         """Scrape comments for a post, only collecting new ones."""
         logger.info(f"\n--- Scraping comments for post {post_id} ---")
-        
+
         check_rate_limit(reddit)
-        
+
         try:
             existing_comment_ids = self.get_existing_comment_ids(post_id)
             logger.info(f"Found {len(existing_comment_ids)} existing comments")
-            
+
             submission = reddit.submission(id=post_id)
-            submission.comments.replace_more(limit=10)
+
+            # Expand MoreComments to get all nested comments
+            replace_limit = self.config.get("replace_more_limit", None)
+            try:
+                # None = expand ALL, integer = expand up to that limit
+                removed_count = submission.comments.replace_more(limit=replace_limit)
+                if removed_count:
+                    logger.info(f"Expanded {len(removed_count)} MoreComments objects (limit={replace_limit})")
+            except Exception as e:
+                logger.warning(f"Error expanding MoreComments: {e}, continuing with partial comment tree")
             
             comments_data = []
             new_comments_count = 0
@@ -407,56 +472,132 @@ class UnifiedRedditScraper:
             logger.error(f"Error marking posts as updated: {e}")
     
     def scrape_comments_for_posts(self):
-        """Main comment scraping function."""
+        """Main comment scraping function with improved error handling and verification."""
         logger.info(f"\n{'='*60}")
         logger.info("COMMENT SCRAPING PHASE")
         logger.info(f"{'='*60}")
-        
+
         posts = self.get_posts_needing_comment_updates(self.config["posts_per_comment_batch"])
-        
+
         if not posts:
             logger.info("No posts need comment updates.")
             return 0, 0
-        
+
         total_comments = 0
         posts_processed = 0
         initial_scrape_posts = []
         update_posts = []
         all_comments = []
-        
+        post_comment_map = {}  # Track which comments belong to which post
+
         for post in posts:
+            post_id = post["post_id"]
+            is_initial = not post.get("initial_comments_scraped", False)
+            action = "Initial scrape" if is_initial else "Update"
+
             try:
-                post_id = post["post_id"]
-                is_initial = not post.get("initial_comments_scraped", False)
-                action = "Initial scrape" if is_initial else "Update"
-                
                 logger.info(f"\n{action} for: {post['title'][:50]}...")
-                
+
                 comments = self.scrape_post_comments(post_id)
-                
-                if comments or is_initial:
-                    all_comments.extend(comments)
-                    if is_initial:
+
+                # CRITICAL FIX: Only add to tracking lists based on actual results
+                if is_initial:
+                    # For initial scrapes, only track if we got comments
+                    if comments:
+                        all_comments.extend(comments)
                         initial_scrape_posts.append(post_id)
+                        post_comment_map[post_id] = len(comments)
+                        posts_processed += 1
+                        logger.info(f"✓ Initial scrape: {len(comments)} new comments")
                     else:
-                        update_posts.append(post_id)
+                        # No comments found - don't mark as scraped, will retry later
+                        logger.warning(f"✗ Initial scrape: 0 comments found - NOT marking as scraped")
+                else:
+                    # For updates, 0 new comments is acceptable (all might be existing)
+                    if comments:
+                        all_comments.extend(comments)
+                        post_comment_map[post_id] = len(comments)
+                        logger.info(f"✓ Update: {len(comments)} new comments")
+                    else:
+                        logger.info(f"✓ Update: 0 new comments (already up to date)")
+                    update_posts.append(post_id)
                     posts_processed += 1
-                
+
                 time.sleep(2)  # Be respectful
-                
+
             except Exception as e:
-                logger.error(f"Error processing post: {e}")
+                logger.error(f"✗ Error processing post {post_id}: {e}")
+                # Log error to database for tracking
+                log_scrape_error(
+                    subreddit=self.subreddit_name,
+                    post_id=post_id,
+                    error_type="comment_scrape_failed",
+                    error_message=str(e),
+                    retry_count=0
+                )
+                # Do NOT add to tracking lists - will retry later
                 continue
-        
+
+        # Save comments to database
         if all_comments:
-            total_comments = self.save_comments_to_db(all_comments)
-        
-        if initial_scrape_posts:
-            self.mark_posts_comments_updated(initial_scrape_posts, is_initial_scrape=True)
-        if update_posts:
-            self.mark_posts_comments_updated(update_posts, is_initial_scrape=False)
-        
-        logger.info(f"\nComment scraping completed: {posts_processed} posts ({len(initial_scrape_posts)} initial, {len(update_posts)} updates), {total_comments} new comments")
+            try:
+                total_comments = self.save_comments_to_db(all_comments)
+                logger.info(f"💾 Saved {total_comments} comments to database")
+            except Exception as e:
+                logger.error(f"✗ Failed to save comments to database: {e}")
+                # If save failed, don't mark any posts as scraped
+                return 0, 0
+
+        # VERIFICATION STEP: Verify comments actually made it to the database
+        if self.config.get("verify_before_marking", True):
+            logger.info("\n🔍 Verifying comments saved to database...")
+            verified_initial = []
+            verified_updates = []
+
+            for post_id in initial_scrape_posts:
+                actual_count = comments_collection.count_documents({"post_id": post_id})
+                expected_count = post_comment_map.get(post_id, 0)
+
+                if actual_count > 0:
+                    verified_initial.append(post_id)
+                    logger.info(f"  ✓ Post {post_id}: {actual_count} comments verified in DB")
+                else:
+                    logger.error(f"  ✗ Post {post_id}: VERIFICATION FAILED - 0 comments in DB (expected {expected_count})")
+                    log_scrape_error(
+                        subreddit=self.subreddit_name,
+                        post_id=post_id,
+                        error_type="verification_failed",
+                        error_message=f"Expected {expected_count} comments but found 0 in database",
+                        retry_count=0
+                    )
+
+            # For updates, all posts pass verification (0 new comments is OK)
+            verified_updates = update_posts
+
+            # Only mark verified posts
+            if verified_initial:
+                self.mark_posts_comments_updated(verified_initial, is_initial_scrape=True)
+                logger.info(f"✅ Marked {len(verified_initial)} posts as initially scraped")
+
+            if verified_updates:
+                self.mark_posts_comments_updated(verified_updates, is_initial_scrape=False)
+                logger.info(f"✅ Marked {len(verified_updates)} posts as updated")
+
+            # Report verification failures
+            failed_count = len(initial_scrape_posts) - len(verified_initial)
+            if failed_count > 0:
+                logger.warning(f"⚠️  {failed_count} initial scrapes FAILED verification - will retry later")
+
+        else:
+            # Verification disabled, mark all posts
+            if initial_scrape_posts:
+                self.mark_posts_comments_updated(initial_scrape_posts, is_initial_scrape=True)
+            if update_posts:
+                self.mark_posts_comments_updated(update_posts, is_initial_scrape=False)
+
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Comment scraping completed: {posts_processed} posts ({len(initial_scrape_posts)} initial, {len(update_posts)} updates), {total_comments} new comments")
+        logger.info(f"{'='*60}")
         return posts_processed, total_comments
     
     # ======================= SUBREDDIT METADATA =======================

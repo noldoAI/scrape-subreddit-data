@@ -143,6 +143,50 @@ Container runs reddit_scraper.py with unique credentials
 **`reddit_accounts`**:
 - Stores Reddit account credentials for reuse across scrapers
 
+**`reddit_scrape_errors`**:
+- `subreddit` - subreddit where error occurred
+- `post_id` - post that failed to scrape
+- `error_type` - type of error (comment_scrape_failed, verification_failed, etc.)
+- `error_message` - detailed error message
+- `retry_count` - number of retries attempted
+- `timestamp` - when error occurred
+- `resolved` - whether error has been fixed
+
+### Data Integrity Features (v1.1+)
+
+**Problem Solved**: Earlier versions had a critical bug where posts were marked as `comments_scraped: True` even when comment scraping failed, resulting in "ghost" posts with zero comments in the database.
+
+**Solution Implemented**:
+1. **Verification Before Marking**: Comments are verified in the database before setting `comments_scraped: True`
+2. **Improved Error Handling**: Failed scrapes are logged to `reddit_scrape_errors` collection and NOT marked as complete
+3. **Complete Comment Pagination**: `replace_more(limit=None)` expands ALL nested comment threads (was limited to 10)
+4. **Retry Logic**: Automatic retry with exponential backoff for transient failures
+5. **Repair Script**: `repair_ghost_posts.py` identifies and fixes existing corrupted data
+
+**Configuration Options** (in config.py):
+- `replace_more_limit`: `None` = expand all comments, or set integer limit (default: `None`)
+- `max_retries`: Number of retry attempts for failed operations (default: `3`)
+- `retry_backoff_factor`: Exponential backoff multiplier (default: `2` = 2s, 4s, 8s)
+- `verify_before_marking`: Enable verification step before marking posts scraped (default: `True`)
+
+**Repair Utility** ([repair_ghost_posts.py](repair_ghost_posts.py)):
+```bash
+# Show statistics about data integrity issues
+python repair_ghost_posts.py --stats-only
+
+# Show what would be repaired (dry run)
+python repair_ghost_posts.py --dry-run
+
+# Actually repair ghost posts
+python repair_ghost_posts.py
+
+# Repair specific subreddit
+python repair_ghost_posts.py --subreddit wallstreetbets
+
+# Also repair incomplete posts (missing >10% of comments)
+python repair_ghost_posts.py --include-incomplete
+```
+
 ### Smart Comment Update Prioritization
 
 The system uses a priority queue for comment updates:
@@ -216,6 +260,9 @@ MONGODB_URI=mongodb+srv://...
 - **Preserve tracking fields**: When updating posts in `save_posts_to_db()`, existing comment tracking fields (`comments_scraped`, `initial_comments_scraped`, `last_comment_fetch_time`) MUST be preserved
 - **Update tracking after scraping**: Always call `mark_posts_comments_updated()` after successfully scraping comments
 - **Deduplication is critical**: Use `get_existing_comment_ids()` to avoid re-scraping existing comments
+- **Verify before marking** (v1.1+): Only mark posts as scraped AFTER verifying comments are in the database
+- **Error logging**: Log failures to `reddit_scrape_errors` collection for tracking and debugging
+- **Complete pagination**: Use `replace_more(limit=None)` to capture all nested comments, not just top-level
 
 ### When Adding New Scraper Features
 
@@ -293,6 +340,24 @@ docker stats reddit-scraper-wallstreetbets
 - Verify MongoDB URI is correct
 - Check IP whitelist in MongoDB Atlas
 - Test connection: `python -c "import pymongo; pymongo.MongoClient('YOUR_URI').admin.command('ping')"`
+
+**Ghost posts (marked scraped with zero comments)**:
+- **Symptom**: Posts have `comments_scraped: True` but no comments in database
+- **Cause**: Fixed in v1.1+ - earlier versions had a bug where posts were marked before verifying comments were saved
+- **Solution**: Run `python repair_ghost_posts.py` to identify and fix affected posts
+- **Prevention**: Ensure `verify_before_marking: True` in config (default in v1.1+)
+
+**Incomplete comment data (missing comments)**:
+- **Symptom**: Post has fewer comments in DB than `num_comments` field indicates
+- **Cause**: Earlier versions used `replace_more(limit=10)` which missed deeply nested comments
+- **Solution**: Run `python repair_ghost_posts.py --include-incomplete` to reset affected posts
+- **Prevention**: v1.1+ uses `replace_more(limit=None)` to capture ALL comments
+
+**Verification failures in logs**:
+- **Symptom**: Logs show "VERIFICATION FAILED - 0 comments in DB"
+- **Cause**: Comments failed to save to database (network issue, MongoDB problem)
+- **Action**: Check `reddit_scrape_errors` collection for details
+- **Resolution**: Failed posts will automatically retry on next cycle
 
 ## API Endpoints Reference
 

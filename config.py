@@ -10,10 +10,11 @@ DATABASE_NAME = "noldo"
 # Collection Names
 COLLECTIONS = {
     "POSTS": "reddit_posts",
-    "COMMENTS": "reddit_comments", 
+    "COMMENTS": "reddit_comments",
     "SUBREDDIT_METADATA": "subreddit_metadata",
     "SCRAPERS": "reddit_scrapers",
-    "ACCOUNTS": "reddit_accounts"
+    "ACCOUNTS": "reddit_accounts",
+    "SCRAPE_ERRORS": "reddit_scrape_errors"  # Track scraping failures
 }
 
 # Scraper Configuration Defaults
@@ -30,6 +31,10 @@ DEFAULT_SCRAPER_CONFIG = {
         "controversial": 500       # Controversial posts (optional)
     },
     "subreddit_update_interval": 86400,  # 24 hours for subreddit metadata
+    "replace_more_limit": None,    # None = expand ALL MoreComments (complete thread), or set to int for limit
+    "max_retries": 3,              # Number of retry attempts for failed operations
+    "retry_backoff_factor": 2,     # Exponential backoff multiplier (2 = 2s, 4s, 8s)
+    "verify_before_marking": True, # Verify comments saved to DB before marking posts as scraped
 }
 
 # Monitoring Configuration
