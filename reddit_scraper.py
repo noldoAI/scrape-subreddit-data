@@ -738,8 +738,10 @@ class UnifiedRedditScraper:
                 "scraped_at": datetime.now(UTC),
                 "last_updated": datetime.now(UTC)
             }
-            
-            logger.info(f"Subscribers: {metadata['subscribers']:,}, Active: {metadata['active_user_count']:,}")
+
+            subscribers = metadata['subscribers'] or 0
+            active_users = metadata['active_user_count'] or 0
+            logger.info(f"Subscribers: {subscribers:,}, Active: {active_users:,}")
             return metadata
             
         except Exception as e:
