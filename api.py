@@ -69,6 +69,30 @@ try:
         accounts_collection = db[COLLECTIONS["ACCOUNTS"]]
         mongo_connected = True
         logger.info("Successfully connected to MongoDB")
+
+        # Create performance indexes for statistics queries
+        try:
+            logger.info("Creating database indexes for performance...")
+            # Posts collection indexes (for stats aggregations)
+            posts_collection.create_index([("subreddit", 1), ("created_datetime", -1)])
+            posts_collection.create_index([("subreddit", 1), ("score", -1)])
+            posts_collection.create_index([("subreddit", 1), ("num_comments", -1)])
+            posts_collection.create_index([("subreddit", 1), ("scraped_at", -1)])
+            posts_collection.create_index([("subreddit", 1), ("sort_method", 1)])
+
+            # Comments collection indexes
+            comments_collection.create_index([("subreddit", 1), ("created_datetime", -1)])
+            comments_collection.create_index([("subreddit", 1), ("score", -1)])
+            comments_collection.create_index([("subreddit", 1), ("depth", 1)])
+
+            # Errors collection indexes
+            errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
+            errors_collection.create_index([("subreddit", 1), ("resolved", 1)])
+            errors_collection.create_index([("subreddit", 1), ("timestamp", -1)])
+
+            logger.info("Database indexes created successfully")
+        except Exception as e:
+            logger.warning(f"Error creating indexes (may already exist): {e}")
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {e}")
     mongo_connected = False
@@ -1319,20 +1343,19 @@ async def dashboard():
                             <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
                             <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
                             <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
-                            ${info.metrics ? `
-                            <p style="margin-top: 12px; padding: 10px; background: #0d0d0d; border-radius: 4px;">
-                                <strong>📊 Collection Stats:</strong><br>
-                                <span style="color: #22c55e;">▸ ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts</span>
-                                <span style="color: #737373;">(${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr)</span> |
-                                <span style="color: #3b82f6;">▸ ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments</span>
-                                <span style="color: #737373;">(${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)</span><br>
-                                <small style="color: #737373;">
+                            <div style="margin-top: 12px; padding: 10px; background: #0d0d0d; border-radius: 4px;">
+                                <strong>📊 Database Totals:</strong><br>
+                                <span style="color: #22c55e;">▸ ${(info.database_totals?.total_posts || 0).toLocaleString()} posts</span> |
+                                <span style="color: #3b82f6;">▸ ${(info.database_totals?.total_comments || 0).toLocaleString()} comments</span>
+                                ${info.metrics ? `
+                                <br><small style="color: #737373;">Scraper collected: ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts (${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr), ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments (${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)</small>
+                                <br><small style="color: #737373;">
                                     Last cycle: ${info.metrics.last_cycle_posts || 0} posts, ${info.metrics.last_cycle_comments || 0} comments
                                     ${info.metrics.last_cycle_time ? `at ${new Date(info.metrics.last_cycle_time).toLocaleTimeString()}` : ''}
-                                    ${info.metrics.total_cycles ? ` • ${info.metrics.total_cycles} cycles completed` : ''}
+                                    ${info.metrics.total_cycles ? ` • ${info.metrics.total_cycles} cycles` : ''}
                                 </small>
-                            </p>
-                            ` : ''}
+                                ` : ''}
+                            </div>
                             <p><strong>Restarts:</strong> ${restartCount} | <strong>Auto-restart:</strong> 
                                <label class="toggle">
                                    <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
@@ -1760,7 +1783,11 @@ async def list_scrapers():
                 "password": SECURITY_CONFIG["masked_credential_value"],
                 "user_agent": scraper_doc["credentials"]["user_agent"]
             }
-            
+
+            # Query actual database totals (persist across scraper recreations)
+            db_total_posts = posts_collection.count_documents({"subreddit": subreddit})
+            db_total_comments = comments_collection.count_documents({"subreddit": subreddit})
+
             result[subreddit] = {
                 "status": container_status,
                 "started_at": scraper_doc.get("created_at"),
@@ -1783,6 +1810,10 @@ async def list_scrapers():
                     "last_cycle_comments": 0,
                     "last_cycle_time": None
                 }),
+                "database_totals": {
+                    "total_posts": db_total_posts,
+                    "total_comments": db_total_comments
+                },
                 "last_error": scraper_doc.get("last_error"),
                 "container_id": scraper_doc.get("container_id"),
                 "container_name": scraper_doc.get("container_name"),
@@ -1968,14 +1999,22 @@ async def stop_scraper(subreddit: str):
     return {"message": f"Scraper stopped for r/{subreddit}"}
 
 @app.get("/scrapers/{subreddit}/stats")
-async def get_scraper_stats(subreddit: str):
-    """Get statistics for a specific subreddit"""
+async def get_scraper_stats(subreddit: str, detailed: bool = False):
+    """Get comprehensive statistics for a specific subreddit
+
+    Args:
+        subreddit: Subreddit name
+        detailed: If True, include expensive aggregations (top posts, distributions, etc.)
+    """
     if not mongo_connected:
         raise HTTPException(status_code=500, detail="Database not connected")
-    
+
     try:
-        # Get statistics from database
+        # === BASIC COUNTS ===
         total_posts = posts_collection.count_documents({"subreddit": subreddit})
+        total_comments = comments_collection.count_documents({"subreddit": subreddit})
+
+        # === DATA COVERAGE ===
         posts_with_initial_comments = posts_collection.count_documents({
             "subreddit": subreddit,
             "initial_comments_scraped": True
@@ -1987,22 +2026,240 @@ async def get_scraper_stats(subreddit: str):
                 {"initial_comments_scraped": False}
             ]
         })
-        total_comments = comments_collection.count_documents({"subreddit": subreddit})
-        
-        # Check if subreddit metadata exists
+
+        # Date range
+        date_pipeline = [
+            {"$match": {"subreddit": subreddit}},
+            {"$group": {
+                "_id": None,
+                "oldest": {"$min": "$created_datetime"},
+                "newest": {"$max": "$created_datetime"}
+            }}
+        ]
+        date_result = list(posts_collection.aggregate(date_pipeline))
+        date_range = None
+        if date_result and date_result[0].get("oldest"):
+            oldest = date_result[0]["oldest"]
+            newest = date_result[0]["newest"]
+            span_days = (newest - oldest).days if newest and oldest else 0
+            date_range = {
+                "oldest_post": oldest,
+                "newest_post": newest,
+                "span_days": span_days
+            }
+
+        # Recent activity (24h)
+        from datetime import timedelta
+        now = datetime.now(UTC)
+        day_ago = now - timedelta(hours=24)
+        posts_scraped_24h = posts_collection.count_documents({
+            "subreddit": subreddit,
+            "scraped_at": {"$gte": day_ago}
+        })
+        comments_scraped_24h = comments_collection.count_documents({
+            "subreddit": subreddit,
+            "scraped_at": {"$gte": day_ago}
+        })
+        posts_updated_24h = posts_collection.count_documents({
+            "subreddit": subreddit,
+            "last_comment_fetch_time": {"$gte": day_ago}
+        })
+
+        # === CONTENT STATISTICS ===
+        content_pipeline = [
+            {"$match": {"subreddit": subreddit}},
+            {"$group": {
+                "_id": None,
+                "avg_comments": {"$avg": "$num_comments"},
+                "avg_score": {"$avg": "$score"},
+                "avg_upvote_ratio": {"$avg": "$upvote_ratio"},
+                "self_posts": {"$sum": {"$cond": ["$is_self", 1, 0]}},
+                "link_posts": {"$sum": {"$cond": ["$is_self", 0, 1]}},
+                "nsfw_posts": {"$sum": {"$cond": ["$over_18", 1, 0]}},
+                "locked_posts": {"$sum": {"$cond": ["$locked", 1, 0]}},
+                "stickied_posts": {"$sum": {"$cond": ["$stickied", 1, 0]}}
+            }}
+        ]
+        content_result = list(posts_collection.aggregate(content_pipeline))
+        content_stats = content_result[0] if content_result else {}
+
+        # Posts by sort method
+        sort_method_pipeline = [
+            {"$match": {"subreddit": subreddit}},
+            {"$group": {"_id": "$sort_method", "count": {"$sum": 1}}}
+        ]
+        sort_method_result = list(posts_collection.aggregate(sort_method_pipeline))
+        posts_by_sort_method = {item["_id"]: item["count"] for item in sort_method_result if item["_id"]}
+
+        # === COMMENT STATISTICS ===
+        comment_pipeline = [
+            {"$match": {"subreddit": subreddit}},
+            {"$group": {
+                "_id": None,
+                "avg_score": {"$avg": "$score"},
+                "max_depth": {"$max": "$depth"},
+                "gilded_count": {"$sum": {"$cond": [{"$gt": ["$gilded", 0]}, 1, 0]}},
+                "awarded_count": {"$sum": {"$cond": [{"$gt": ["$total_awards_received", 0]}, 1, 0]}},
+                "top_level": {"$sum": {"$cond": [{"$eq": ["$depth", 0]}, 1, 0]}},
+                "replies": {"$sum": {"$cond": [{"$gt": ["$depth", 0]}, 1, 0]}}
+            }}
+        ]
+        comment_result = list(comments_collection.aggregate(comment_pipeline))
+        comment_stats = comment_result[0] if comment_result else {}
+
+        # === SCRAPER PERFORMANCE ===
+        scraper_doc = scrapers_collection.find_one({"subreddit": subreddit})
+        scraper_metrics = {}
+        if scraper_doc:
+            created_at = scraper_doc.get("created_at")
+            uptime_hours = 0
+            if created_at:
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=UTC)
+                uptime_hours = (now - created_at).total_seconds() / 3600
+
+            metrics = scraper_doc.get("metrics", {})
+            scraper_metrics = {
+                "uptime_hours": round(uptime_hours, 2),
+                "total_cycles": metrics.get("total_cycles", 0),
+                "total_posts_collected": metrics.get("total_posts_collected", 0),
+                "total_comments_collected": metrics.get("total_comments_collected", 0),
+                "posts_per_hour": metrics.get("posts_per_hour", 0),
+                "comments_per_hour": metrics.get("comments_per_hour", 0),
+                "last_cycle": {
+                    "time": metrics.get("last_cycle_time"),
+                    "posts": metrics.get("last_cycle_posts", 0),
+                    "comments": metrics.get("last_cycle_comments", 0),
+                    "duration_seconds": metrics.get("last_cycle_duration", 0)
+                },
+                "avg_cycle_duration": metrics.get("avg_cycle_duration", 0),
+                "container_status": scraper_doc.get("status"),
+                "restart_count": scraper_doc.get("restart_count", 0),
+                "last_error": scraper_doc.get("last_error")
+            }
+
+        # === ERROR TRACKING ===
+        errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
+        total_errors = errors_collection.count_documents({"subreddit": subreddit})
+        unresolved_errors = errors_collection.count_documents({"subreddit": subreddit, "resolved": False})
+        recent_errors_24h = errors_collection.count_documents({
+            "subreddit": subreddit,
+            "timestamp": {"$gte": day_ago}
+        })
+
+        error_type_pipeline = [
+            {"$match": {"subreddit": subreddit}},
+            {"$group": {"_id": "$error_type", "count": {"$sum": 1}}}
+        ]
+        error_type_result = list(errors_collection.aggregate(error_type_pipeline))
+        error_types = {item["_id"]: item["count"] for item in error_type_result if item["_id"]}
+
+        # === SUBREDDIT METADATA ===
         subreddit_metadata = subreddit_collection.find_one({"subreddit_name": subreddit})
-        
-        return {
+        metadata_info = {
+            "exists": subreddit_metadata is not None,
+            "last_updated": subreddit_metadata.get("last_updated") if subreddit_metadata else None,
+            "subscribers": subreddit_metadata.get("subscribers") if subreddit_metadata else None,
+            "active_users": subreddit_metadata.get("active_user_count") if subreddit_metadata else None,
+            "created_utc": subreddit_metadata.get("created_utc") if subreddit_metadata else None,
+            "age_days": None,
+            "over_18": subreddit_metadata.get("over_18") if subreddit_metadata else None,
+            "language": subreddit_metadata.get("lang") if subreddit_metadata else None
+        }
+        if subreddit_metadata and subreddit_metadata.get("created_utc"):
+            created = datetime.fromtimestamp(subreddit_metadata["created_utc"], UTC)
+            metadata_info["age_days"] = (now - created).days
+
+        # Build base response
+        response = {
             "subreddit": subreddit,
             "total_posts": total_posts,
-            "posts_with_initial_comments": posts_with_initial_comments,
-            "posts_without_initial_comments": posts_without_initial_comments,
             "total_comments": total_comments,
-            "initial_completion_rate": (posts_with_initial_comments / total_posts * 100) if total_posts > 0 else 0,
-            "subreddit_metadata_exists": subreddit_metadata is not None,
-            "subreddit_last_updated": subreddit_metadata.get("last_updated") if subreddit_metadata else None
+            "coverage": {
+                "posts_with_initial_comments": posts_with_initial_comments,
+                "posts_without_initial_comments": posts_without_initial_comments,
+                "initial_completion_rate": (posts_with_initial_comments / total_posts * 100) if total_posts > 0 else 0,
+                "date_range": date_range
+            },
+            "recent_activity_24h": {
+                "posts_scraped": posts_scraped_24h,
+                "comments_scraped": comments_scraped_24h,
+                "posts_updated": posts_updated_24h
+            },
+            "content_stats": {
+                "avg_comments_per_post": content_stats.get("avg_comments", 0),
+                "avg_score_per_post": content_stats.get("avg_score", 0),
+                "avg_upvote_ratio": content_stats.get("avg_upvote_ratio", 0),
+                "self_posts": content_stats.get("self_posts", 0),
+                "link_posts": content_stats.get("link_posts", 0),
+                "nsfw_posts": content_stats.get("nsfw_posts", 0),
+                "locked_posts": content_stats.get("locked_posts", 0),
+                "stickied_posts": content_stats.get("stickied_posts", 0),
+                "posts_by_sort_method": posts_by_sort_method
+            },
+            "comment_stats": {
+                "avg_comment_score": comment_stats.get("avg_score", 0),
+                "max_comment_depth": comment_stats.get("max_depth", 0),
+                "gilded_comments": comment_stats.get("gilded_count", 0),
+                "awarded_comments": comment_stats.get("awarded_count", 0),
+                "top_level_comments": comment_stats.get("top_level", 0),
+                "reply_comments": comment_stats.get("replies", 0)
+            },
+            "scraper_metrics": scraper_metrics,
+            "errors": {
+                "total_errors": total_errors,
+                "unresolved_errors": unresolved_errors,
+                "error_types": error_types,
+                "recent_errors_24h": recent_errors_24h
+            },
+            "subreddit_metadata": metadata_info
         }
+
+        # === DETAILED ANALYTICS (Optional, expensive) ===
+        if detailed:
+            # Top posts by score
+            top_posts = list(posts_collection.find(
+                {"subreddit": subreddit},
+                {"post_id": 1, "title": 1, "score": 1, "num_comments": 1, "_id": 0}
+            ).sort("score", -1).limit(10))
+
+            # Most commented posts
+            most_commented = list(posts_collection.find(
+                {"subreddit": subreddit},
+                {"post_id": 1, "title": 1, "score": 1, "num_comments": 1, "_id": 0}
+            ).sort("num_comments", -1).limit(10))
+
+            # Top authors
+            author_pipeline = [
+                {"$match": {"subreddit": subreddit}},
+                {"$group": {
+                    "_id": "$author",
+                    "post_count": {"$sum": 1},
+                    "total_score": {"$sum": "$score"}
+                }},
+                {"$sort": {"post_count": -1}},
+                {"$limit": 10}
+            ]
+            top_authors_result = list(posts_collection.aggregate(author_pipeline))
+            top_authors = [
+                {
+                    "author": item["_id"],
+                    "post_count": item["post_count"],
+                    "total_score": item["total_score"]
+                }
+                for item in top_authors_result if item["_id"]
+            ]
+
+            response["detailed"] = {
+                "top_posts_by_score": top_posts,
+                "most_commented_posts": most_commented,
+                "top_authors": top_authors
+            }
+
+        return response
+
     except Exception as e:
+        logger.error(f"Error getting stats for r/{subreddit}: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")
 
 @app.get("/scrapers/{subreddit}/status")
@@ -2137,6 +2394,71 @@ async def remove_scraper(subreddit: str):
         return {"message": f"Scraper removed for r/{subreddit}"}
     else:
         raise HTTPException(status_code=500, detail="Failed to remove scraper")
+
+@app.get("/stats/global")
+async def get_global_stats():
+    """Get cross-subreddit statistics for all scrapers"""
+    if not mongo_connected:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        # Get all scrapers
+        all_scrapers = list(scrapers_collection.find({}))
+        total_scrapers = len(all_scrapers)
+        active_scrapers = sum(1 for s in all_scrapers if s.get("status") == "running")
+        failed_scrapers = sum(1 for s in all_scrapers if s.get("status") == "failed")
+
+        # Get total posts and comments across all subreddits
+        total_posts_all = posts_collection.count_documents({})
+        total_comments_all = comments_collection.count_documents({})
+
+        # Get per-subreddit breakdown
+        subreddit_breakdown = []
+        for scraper in all_scrapers:
+            subreddit = scraper["subreddit"]
+            posts_count = posts_collection.count_documents({"subreddit": subreddit})
+            comments_count = comments_collection.count_documents({"subreddit": subreddit})
+
+            subreddit_breakdown.append({
+                "subreddit": subreddit,
+                "status": scraper.get("status"),
+                "total_posts": posts_count,
+                "total_comments": comments_count,
+                "container_name": scraper.get("container_name")
+            })
+
+        # Sort by total posts descending
+        subreddit_breakdown.sort(key=lambda x: x["total_posts"], reverse=True)
+
+        # Get unresolved errors across all subreddits
+        errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
+        total_errors_unresolved = errors_collection.count_documents({"resolved": False})
+
+        # Get total unique authors
+        unique_authors_pipeline = [
+            {"$group": {"_id": "$author"}},
+            {"$count": "total"}
+        ]
+        authors_result = list(posts_collection.aggregate(unique_authors_pipeline))
+        total_unique_authors = authors_result[0]["total"] if authors_result else 0
+
+        return {
+            "summary": {
+                "total_subreddits": total_scrapers,
+                "active_scrapers": active_scrapers,
+                "failed_scrapers": failed_scrapers,
+                "total_posts_all": total_posts_all,
+                "total_comments_all": total_comments_all,
+                "total_unique_authors": total_unique_authors,
+                "total_errors_unresolved": total_errors_unresolved
+            },
+            "subreddit_breakdown": subreddit_breakdown,
+            "timestamp": datetime.now(UTC)
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting global stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting global stats: {str(e)}")
 
 @app.get("/health")
 async def health_check():

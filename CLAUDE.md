@@ -444,13 +444,29 @@ sudo reboot
 
 ### Scraper Management
 - `POST /scrapers/start` - Start new scraper container
-- `GET /scrapers` - List all scrapers
+- `GET /scrapers` - List all scrapers (includes database totals + scraper metrics)
 - `GET /scrapers/{subreddit}/status` - Container status
 - `POST /scrapers/{subreddit}/stop` - Stop container
 - `POST /scrapers/{subreddit}/restart` - Restart container
 - `DELETE /scrapers/{subreddit}` - Remove scraper and config
-- `GET /scrapers/{subreddit}/stats` - Scraping statistics
 - `GET /scrapers/{subreddit}/logs?lines=100` - Container logs
+
+### Statistics & Analytics
+- `GET /scrapers/{subreddit}/stats` - Comprehensive subreddit statistics
+  - Returns: posts/comments counts, date ranges, averages, content breakdown
+  - Add `?detailed=true` for top posts, top authors, and distributions
+- `GET /stats/global` - Cross-subreddit statistics
+  - Returns: total posts/comments across all subreddits, per-subreddit breakdown, system-wide metrics
+
+**Statistics Include:**
+- **Basic Counts**: Total posts, total comments, database totals
+- **Data Coverage**: Completion rates, date ranges, recent activity (24h)
+- **Content Stats**: Averages (comments/post, scores, upvote ratios), self vs link posts, NSFW/locked counts, posts by sorting method
+- **Comment Stats**: Average scores, max depth, gilded/awarded counts, top-level vs reply breakdown
+- **Scraper Metrics**: Uptime, collection rates, cycle statistics, restart counts
+- **Error Tracking**: Total errors, unresolved errors, error types, recent errors
+- **Subreddit Metadata**: Subscribers, active users, subreddit age, NSFW status
+- **Detailed Analytics** (with `?detailed=true`): Top 10 posts by score, most commented posts, top authors
 
 ### System Monitoring
 - `GET /health` - System health (database + Docker status)
