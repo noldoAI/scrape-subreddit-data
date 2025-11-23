@@ -372,6 +372,74 @@ docker stats reddit-scraper-wallstreetbets
 - **Action**: Check `reddit_scrape_errors` collection for details
 - **Resolution**: Failed posts will automatically retry on next cycle
 
+## Azure VM Deployment
+
+### Connecting to Azure VM from Local Machine
+
+The production system runs on an Azure VM (`noldo-data-server`) in the West US 2 region.
+
+**VM Details:**
+- **Resource Group**: `noldo-data-server`
+- **VM Name**: `noldo-data-server`
+- **Public IP**: `20.64.246.60`
+- **Username**: `azureuser`
+- **SSH Key**: `~/.ssh/noldo-data-server-key.pem` (created during VM setup)
+
+**Connect via SSH:**
+
+```bash
+# Direct SSH connection (recommended)
+ssh -i ~/.ssh/noldo-data-server-key.pem azureuser@20.64.246.60
+
+# Or create SSH config for easier access
+# Add to ~/.ssh/config:
+Host noldo-azure
+    HostName 20.64.246.60
+    User azureuser
+    IdentityFile ~/.ssh/noldo-data-server-key.pem
+
+# Then connect with:
+ssh noldo-azure
+```
+
+**Using Azure CLI:**
+
+```bash
+# Install Azure CLI (if not installed)
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+# Login to Azure
+az login
+
+# Connect using Azure CLI (alternative method)
+az ssh vm --resource-group noldo-data-server --name noldo-data-server
+
+# Get VM status
+az vm show --resource-group noldo-data-server --name noldo-data-server --query "powerState" -o tsv
+
+# Start/stop VM
+az vm start --resource-group noldo-data-server --name noldo-data-server
+az vm stop --resource-group noldo-data-server --name noldo-data-server
+```
+
+**Common VM Operations:**
+
+```bash
+# After connecting, check system status
+htop                    # Monitor CPU/memory
+docker ps               # List running containers
+docker stats            # Container resource usage
+df -h                   # Disk usage
+systemctl status docker # Docker daemon status
+
+# Update system packages
+sudo apt update
+sudo apt upgrade
+
+# Reboot if system updates require it
+sudo reboot
+```
+
 ## API Endpoints Reference
 
 ### Scraper Management
