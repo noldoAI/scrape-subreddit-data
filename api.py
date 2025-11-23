@@ -2795,6 +2795,218 @@ async def get_status_summary():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting status summary: {str(e)}")
 
+# ======================= SEMANTIC SEARCH ENDPOINTS =======================
+
+# Lazy loading of embedding model (only when needed)
+_embedding_model = None
+
+def get_embedding_model():
+    """Lazy load the embedding model to avoid startup delay."""
+    global _embedding_model
+    if _embedding_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v2', trust_remote_code=True)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load embedding model: {str(e)}")
+    return _embedding_model
+
+@app.post("/search/subreddits")
+async def semantic_search_subreddits(
+    query: str,
+    limit: int = 10,
+    min_subscribers: int = 1000,
+    exclude_nsfw: bool = True,
+    language: str = None,
+    subreddit_type: str = "public"
+):
+    """
+    Semantic search for subreddits using natural language queries.
+
+    Args:
+        query: Natural language search query (e.g., "building b2b saas")
+        limit: Number of results to return (default: 10)
+        min_subscribers: Minimum subscriber count (default: 1000, use 0 for no filter)
+        exclude_nsfw: Filter out NSFW subreddits (default: True)
+        language: Language filter (e.g., "en", optional)
+        subreddit_type: Filter by type (public/private/restricted, default: public)
+
+    Returns:
+        JSON with query and ranked results
+
+    Example:
+        POST /search/subreddits?query=building%20b2b%20saas&limit=10
+    """
+    try:
+        # Get embedding model
+        model = get_embedding_model()
+
+        # Generate query embedding
+        query_embedding = model.encode(query, convert_to_numpy=True).tolist()
+
+        # Build MongoDB filters
+        filters = {}
+        if subreddit_type and subreddit_type != "all":
+            filters["subreddit_type"] = subreddit_type
+        if exclude_nsfw:
+            filters["over_18"] = False
+        if language:
+            filters["lang"] = language
+
+        # Subscriber filter
+        subscriber_filter = {}
+        if min_subscribers > 0:
+            subscriber_filter["$gte"] = min_subscribers
+
+        # Build aggregation pipeline
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "subreddit_vector_index",
+                    "path": "embeddings.combined_embedding",
+                    "queryVector": query_embedding,
+                    "numCandidates": 100,
+                    "limit": limit,
+                    "filter": filters
+                }
+            },
+            {
+                "$project": {
+                    "subreddit_name": 1,
+                    "title": 1,
+                    "public_description": 1,
+                    "subscribers": 1,
+                    "active_user_count": 1,
+                    "advertiser_category": 1,
+                    "over_18": 1,
+                    "subreddit_type": 1,
+                    "lang": 1,
+                    "url": 1,
+                    "score": {"$meta": "vectorSearchScore"}
+                }
+            }
+        ]
+
+        # Add subscriber filter if needed
+        if subscriber_filter:
+            pipeline.insert(1, {"$match": {"subscribers": subscriber_filter}})
+
+        # Execute search
+        subreddit_discovery = db.subreddit_discovery
+        results = list(subreddit_discovery.aggregate(pipeline))
+
+        return {
+            "query": query,
+            "filters": {
+                "min_subscribers": min_subscribers,
+                "exclude_nsfw": exclude_nsfw,
+                "language": language,
+                "subreddit_type": subreddit_type
+            },
+            "count": len(results),
+            "results": results
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Semantic search failed: {str(e)}")
+
+@app.post("/discover/subreddits")
+async def discover_subreddits_endpoint(query: str, limit: int = 50):
+    """
+    Discover new subreddits by topic and scrape comprehensive metadata.
+
+    Args:
+        query: Search query (e.g., "saas", "startup")
+        limit: Maximum number of results per query (default: 50)
+
+    Returns:
+        JSON with discovered subreddits count and status
+
+    Example:
+        POST /discover/subreddits?query=saas&limit=50
+    """
+    try:
+        import praw
+
+        # Reddit API authentication
+        reddit = praw.Reddit(
+            client_id=os.getenv('R_CLIENT_ID'),
+            client_secret=os.getenv('R_CLIENT_SECRET'),
+            username=os.getenv('R_USERNAME'),
+            password=os.getenv('R_PASSWORD'),
+            user_agent=os.getenv('R_USER_AGENT')
+        )
+
+        # Search subreddits
+        search_results = list(reddit.subreddits.search(query, limit=limit))
+
+        discovered_count = 0
+        errors = []
+
+        for subreddit in search_results:
+            try:
+                # Import scraping function
+                from reddit_scraper import UnifiedRedditScraper
+                scraper = UnifiedRedditScraper(subreddit.display_name, {})
+                metadata = scraper.scrape_subreddit_metadata()
+
+                if metadata:
+                    # Store in subreddit_discovery collection
+                    db.subreddit_discovery.update_one(
+                        {"subreddit_name": metadata["subreddit_name"]},
+                        {"$set": metadata},
+                        upsert=True
+                    )
+                    discovered_count += 1
+            except Exception as e:
+                errors.append({"subreddit": subreddit.display_name, "error": str(e)})
+
+        return {
+            "query": query,
+            "found": len(search_results),
+            "discovered": discovered_count,
+            "errors": errors[:10]  # Limit error list
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Discovery failed: {str(e)}")
+
+@app.get("/embeddings/stats")
+async def get_embedding_stats():
+    """Get statistics about embeddings in the database."""
+    try:
+        subreddit_discovery = db.subreddit_discovery
+
+        total = subreddit_discovery.count_documents({})
+        with_embeddings = subreddit_discovery.count_documents(
+            {"embeddings.combined_embedding": {"$exists": True}}
+        )
+        without_embeddings = total - with_embeddings
+
+        # Sample document to check dimensions
+        sample = subreddit_discovery.find_one(
+            {"embeddings.combined_embedding": {"$exists": True}}
+        )
+
+        model_info = {}
+        if sample and 'embeddings' in sample:
+            model_info = {
+                "dimensions": len(sample['embeddings']['combined_embedding']),
+                "model": sample['embeddings'].get('model', 'unknown'),
+                "context_window": sample['embeddings'].get('context_window', 'unknown')
+            }
+
+        return {
+            "total_subreddits": total,
+            "with_embeddings": with_embeddings,
+            "without_embeddings": without_embeddings,
+            "completion_rate": round(with_embeddings / total * 100, 1) if total > 0 else 0,
+            "model_info": model_info
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=API_CONFIG["host"], port=API_CONFIG["port"])

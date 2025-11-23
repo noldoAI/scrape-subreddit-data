@@ -758,9 +758,70 @@ class UnifiedRedditScraper:
                 "last_updated": datetime.now(UTC)
             }
 
+            # ===== ENHANCED METADATA FOR SEMANTIC SEARCH =====
+
+            # 1. Collect community rules (context-rich topic indicators)
+            rules = []
+            rules_text_parts = []
+            try:
+                for rule in subreddit.rules:
+                    rule_dict = {
+                        "short_name": rule.short_name,
+                        "description": rule.description,
+                        "kind": rule.kind,
+                        "violation_reason": getattr(rule, 'violation_reason', None)
+                    }
+                    rules.append(rule_dict)
+                    rules_text_parts.append(f"{rule.short_name}: {rule.description}")
+                logger.info(f"Collected {len(rules)} rules")
+            except Exception as e:
+                logger.warning(f"Could not fetch rules: {e}")
+
+            metadata["rules"] = rules
+            metadata["rules_text"] = " | ".join(rules_text_parts) if rules_text_parts else ""
+
+            # 2. Collect post guidelines (detailed topic context)
+            try:
+                post_reqs = subreddit.post_requirements()
+                metadata["guidelines_text"] = post_reqs.get("guidelines_text", "")
+                metadata["guidelines_display_policy"] = post_reqs.get("guidelines_display_policy", None)
+                if metadata["guidelines_text"]:
+                    logger.info(f"Collected post guidelines ({len(metadata['guidelines_text'])} chars)")
+            except Exception as e:
+                logger.warning(f"Could not fetch post requirements: {e}")
+                metadata["guidelines_text"] = ""
+                metadata["guidelines_display_policy"] = None
+
+            # 3. Collect sample posts (real discussion topics for semantic understanding)
+            sample_posts = []
+            sample_titles = []
+            try:
+                for post in subreddit.top(time_filter="month", limit=20):
+                    sample_post = {
+                        "title": post.title,
+                        "selftext_excerpt": post.selftext[:200] if post.selftext else "",
+                        "score": post.score,
+                        "num_comments": post.num_comments,
+                        "created_utc": post.created_utc
+                    }
+                    sample_posts.append(sample_post)
+                    sample_titles.append(post.title)
+                logger.info(f"Collected {len(sample_posts)} sample posts")
+            except Exception as e:
+                logger.warning(f"Could not fetch sample posts: {e}")
+
+            metadata["sample_posts"] = sample_posts
+            metadata["sample_posts_titles"] = " | ".join(sample_titles) if sample_titles else ""
+
+            # 4. Additional metadata fields
+            metadata["subreddit_type"] = subreddit.subreddit_type  # public/private/restricted
+            metadata["description_html"] = getattr(subreddit, "description_html", None)
+            metadata["header_title"] = getattr(subreddit, "header_title", None)
+
             subscribers = metadata['subscribers'] or 0
             active_users = metadata['active_user_count'] or 0
             logger.info(f"Subscribers: {subscribers:,}, Active: {active_users:,}")
+            logger.info(f"Enhanced metadata collected: {len(rules)} rules, {len(sample_posts)} posts, guidelines: {bool(metadata['guidelines_text'])}")
             return metadata
             
         except Exception as e:

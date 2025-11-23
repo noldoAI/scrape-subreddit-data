@@ -76,4 +76,25 @@ LOGGING_CONFIG = {
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     "date_format": "%Y-%m-%d %H:%M:%S",
     "level": "INFO"
+}
+
+# Semantic Search & Embedding Configuration
+EMBEDDING_CONFIG = {
+    "model_name": "nomic-ai/nomic-embed-text-v2",  # Open source embedding model
+    "dimensions": 768,                              # nomic-embed-text-v2 output dimensions
+    "context_window": 8192,                         # Maximum tokens per text
+    "batch_size": 32,                               # Batch size for embedding generation
+    "similarity_metric": "cosine",                  # Distance metric for vector search
+    "trust_remote_code": True                       # Required for nomic-embed-text-v2
+}
+
+# Subreddit Discovery Configuration
+DISCOVERY_CONFIG = {
+    "collection_name": "subreddit_discovery",       # MongoDB collection for discovered subreddits
+    "vector_index_name": "subreddit_vector_index",  # Vector search index name
+    "default_search_limit": 10,                     # Default number of search results
+    "default_min_subscribers": 1000,                # Default minimum subscriber filter
+    "num_candidates": 100,                          # Number of candidates for vector search
+    "sample_posts_limit": 20,                       # Number of sample posts to collect
+    "sample_posts_time_filter": "month"             # Time filter for sample posts (month/week/year)
 } 
