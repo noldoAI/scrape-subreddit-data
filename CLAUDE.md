@@ -516,9 +516,9 @@ sudo reboot
 
 The system includes presets optimized for **5 scrapers per Reddit account** (v1.2+ with depth limiting):
 
-- **High Activity** (wallstreetbets, stocks): posts_limit=150, interval=60s, comment_batch=12, sorting=["top", "rising"]
-- **Medium Activity** (investing, crypto): posts_limit=100, interval=60s, comment_batch=12, sorting=["top", "rising"]
-- **Low Activity** (pennystocks, niche): posts_limit=80, interval=60s, comment_batch=10, sorting=["top", "rising"]
+- **High Activity** (wallstreetbets, stocks): posts_limit=150, interval=60s, comment_batch=12, sorting=["new", "top", "rising"]
+- **Medium Activity** (investing, crypto): posts_limit=100, interval=60s, comment_batch=12, sorting=["new", "top", "rising"]
+- **Low Activity** (pennystocks, niche): posts_limit=80, interval=60s, comment_batch=10, sorting=["new", "top", "rising"]
 
 These are defined in api.py and accessible via `GET /presets` endpoint.
 
@@ -531,21 +531,22 @@ These are defined in api.py and accessible via `GET /presets` endpoint.
 **Design Philosophy**: System is optimized to allow **5 subreddit scrapers per Reddit account**, maximizing efficiency while staying within Reddit's rate limits.
 
 **Sorting Focus**:
+- **"new"**: Captures ALL posts chronologically (100% coverage)
 - **"top" (day)**: Captures proven quality content from the last 24 hours
 - **"rising"**: Catches early trending posts before they peak
-- This combination prioritizes quality over quantity
+- This combination ensures complete coverage with quality indicators
 
 **API Usage per Scraper** (with default config):
-- Post scraping: ~6 API calls (2 sorting methods × 3 calls each)
+- Post scraping: ~9 API calls (3 sorting methods × 3 calls each)
 - Comment scraping: ~12 API calls (6 posts × 2 calls)
-- **Total: ~18 API calls per minute**
-- **5 scrapers = ~90 calls/min** (leaves 30 req/min buffer for rate limit checks)
+- **Total: ~21 API calls per minute**
+- **5 scrapers = ~105 calls/min** (stays within 600/10min limit with buffer)
 
 **Key Configuration Options**:
-- `sorting_methods`: `["top", "rising"]` - Focus on quality posts
+- `sorting_methods`: `["new", "top", "rising"]` - Complete coverage + quality indicators
 - `top_time_filter`: `"day"` - Time window for "top" sorting (hour/day/week/month/year/all)
 - `posts_limit`: `100` - Default limit (can override per sorting method)
-- `sort_limits`: Per-method overrides (`{"top": 150, "rising": 100}`)
+- `sort_limits`: Per-method overrides (`{"new": 500, "top": 150, "rising": 100}`)
 - `posts_per_comment_batch`: `6` - Comments processed per cycle
 
 **To customize** (via dashboard or command line):
@@ -553,5 +554,5 @@ These are defined in api.py and accessible via `GET /presets` endpoint.
 python reddit_scraper.py subreddit \
   --posts-limit 150 \
   --comment-batch 8 \
-  --sorting-methods "top,rising"
+  --sorting-methods "new,top,rising"
 ```

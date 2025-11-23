@@ -1265,19 +1265,19 @@ async def dashboard():
                     posts_limit: 150,
                     interval: 60,
                     comment_batch: 12,
-                    sorting_methods: ['top', 'rising']
+                    sorting_methods: ['new', 'top', 'rising']
                 },
                 medium: {
                     posts_limit: 100,
                     interval: 60,
                     comment_batch: 12,
-                    sorting_methods: ['top', 'rising']
+                    sorting_methods: ['new', 'top', 'rising']
                 },
                 low: {
                     posts_limit: 80,
                     interval: 60,
                     comment_batch: 10,
-                    sorting_methods: ['top', 'rising']
+                    sorting_methods: ['new', 'top', 'rising']
                 }
             };
             
@@ -2645,21 +2645,21 @@ async def get_presets():
             "posts_limit": 150,
             "interval": 60,
             "comment_batch": 12,
-            "sorting_methods": ["top", "rising"]
+            "sorting_methods": ["new", "top", "rising"]
         },
         "medium_activity": {
             "description": "For moderately active subreddits (investing, cryptocurrency)",
             "posts_limit": 100,
             "interval": 60,
             "comment_batch": 12,
-            "sorting_methods": ["top", "rising"]
+            "sorting_methods": ["new", "top", "rising"]
         },
         "low_activity": {
             "description": "For smaller subreddits (pennystocks, niche topics)",
             "posts_limit": 80,
             "interval": 60,
             "comment_batch": 10,
-            "sorting_methods": ["top", "rising"]
+            "sorting_methods": ["new", "top", "rising"]
         }
     }
 

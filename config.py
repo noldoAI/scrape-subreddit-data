@@ -22,11 +22,11 @@ DEFAULT_SCRAPER_CONFIG = {
     "scrape_interval": 60,         # 1 minute between cycles
     "posts_limit": 100,            # Default posts limit (optimized for 5 scrapers per account)
     "posts_per_comment_batch": 12, # Comments batch size (increased due to faster depth-limited processing)
-    "sorting_methods": ["top", "rising"],  # Focus on quality and early trending posts
+    "sorting_methods": ["new", "top", "rising"],  # Complete coverage + quality indicators
     "sort_limits": {               # Limits per sorting method
         "top": 150,                # Top posts from last 24 hours (proven quality)
         "rising": 100,             # Early trending detection
-        "new": 500,                # Captures all new posts (optional, not in default)
+        "new": 500,                # Captures all new posts chronologically
         "hot": 500,                # Popular/trending posts (optional, not in default)
         "controversial": 500       # Controversial posts (optional, not in default)
     },
