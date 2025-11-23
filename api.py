@@ -1180,22 +1180,22 @@ async def dashboard():
         <script>
             const presets = {
                 high: {
-                    posts_limit: 1000,
+                    posts_limit: 150,
                     interval: 60,
-                    comment_batch: 50,
-                    sorting_methods: ['new', 'hot', 'rising']
+                    comment_batch: 8,
+                    sorting_methods: ['top', 'rising']
                 },
                 medium: {
-                    posts_limit: 1000,
-                    interval: 90,
-                    comment_batch: 40,
-                    sorting_methods: ['new', 'hot']
+                    posts_limit: 100,
+                    interval: 60,
+                    comment_batch: 6,
+                    sorting_methods: ['top', 'rising']
                 },
                 low: {
-                    posts_limit: 500,
-                    interval: 120,
-                    comment_batch: 30,
-                    sorting_methods: ['new', 'hot']
+                    posts_limit: 80,
+                    interval: 60,
+                    comment_batch: 4,
+                    sorting_methods: ['top', 'rising']
                 }
             };
             
@@ -2189,25 +2189,28 @@ async def health_check():
 
 @app.get("/presets")
 async def get_presets():
-    """Get predefined configuration presets"""
+    """Get predefined configuration presets (optimized for 5 scrapers per account)"""
     return {
         "high_activity": {
             "description": "For very active subreddits (wallstreetbets, stocks)",
-            "posts_limit": 2000,
-            "interval": 180,
-            "comment_batch": 30
+            "posts_limit": 150,
+            "interval": 60,
+            "comment_batch": 8,
+            "sorting_methods": ["top", "rising"]
         },
         "medium_activity": {
             "description": "For moderately active subreddits (investing, cryptocurrency)",
-            "posts_limit": 1000,
-            "interval": 300,
-            "comment_batch": 20
+            "posts_limit": 100,
+            "interval": 60,
+            "comment_batch": 6,
+            "sorting_methods": ["top", "rising"]
         },
         "low_activity": {
             "description": "For smaller subreddits (pennystocks, niche topics)",
-            "posts_limit": 500,
-            "interval": 600,
-            "comment_batch": 10
+            "posts_limit": 80,
+            "interval": 60,
+            "comment_batch": 4,
+            "sorting_methods": ["top", "rising"]
         }
     }
 

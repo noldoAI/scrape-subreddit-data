@@ -19,17 +19,19 @@ COLLECTIONS = {
 
 # Scraper Configuration Defaults
 DEFAULT_SCRAPER_CONFIG = {
-    "scrape_interval": 60,         # 1 minute between cycles (optimized for max data collection)
-    "posts_limit": 1000,           # Posts per scrape per sorting method
-    "posts_per_comment_batch": 50, # Comments batch size (increased from 20)
-    "sorting_methods": ["new", "hot", "rising"],  # Multiple sorting methods to capture more posts
+    "scrape_interval": 60,         # 1 minute between cycles
+    "posts_limit": 100,            # Default posts limit (optimized for 5 scrapers per account)
+    "posts_per_comment_batch": 6,  # Comments batch size (reduced for API efficiency)
+    "sorting_methods": ["top", "rising"],  # Focus on quality and early trending posts
     "sort_limits": {               # Limits per sorting method
-        "new": 1000,               # Captures all new posts
-        "hot": 1000,               # Popular/trending posts
-        "rising": 500,             # Early trending detection
-        "top": 500,                # Top posts (optional)
-        "controversial": 500       # Controversial posts (optional)
+        "top": 150,                # Top posts from last 24 hours (proven quality)
+        "rising": 100,             # Early trending detection
+        "new": 500,                # Captures all new posts (optional, not in default)
+        "hot": 500,                # Popular/trending posts (optional, not in default)
+        "controversial": 500       # Controversial posts (optional, not in default)
     },
+    "top_time_filter": "day",      # Time filter for "top" sorting: hour, day, week, month, year, all
+    "controversial_time_filter": "day",  # Time filter for "controversial" sorting
     "subreddit_update_interval": 86400,  # 24 hours for subreddit metadata
     "replace_more_limit": None,    # None = expand ALL MoreComments (complete thread), or set to int for limit
     "max_retries": 3,              # Number of retry attempts for failed operations

@@ -138,9 +138,11 @@ class UnifiedRedditScraper:
             elif sort_method == "rising":
                 posts = subreddit.rising(limit=limit)
             elif sort_method == "top":
-                posts = subreddit.top(time_filter="day", limit=limit)
+                time_filter = self.config.get("top_time_filter", "day")
+                posts = subreddit.top(time_filter=time_filter, limit=limit)
             elif sort_method == "controversial":
-                posts = subreddit.controversial(time_filter="day", limit=limit)
+                time_filter = self.config.get("controversial_time_filter", "day")
+                posts = subreddit.controversial(time_filter=time_filter, limit=limit)
             else:
                 logger.error(f"Unknown sort method: {sort_method}, defaulting to hot")
                 posts = subreddit.hot(limit=limit)

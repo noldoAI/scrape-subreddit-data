@@ -459,10 +459,42 @@ sudo reboot
 
 ## Configuration Presets
 
-The system includes presets for different subreddit activity levels:
+The system includes presets optimized for **5 scrapers per Reddit account**:
 
-- **High Activity** (wallstreetbets, stocks): posts_limit=2000, interval=180s, comment_batch=30
-- **Medium Activity** (investing, crypto): posts_limit=1000, interval=300s, comment_batch=20
-- **Low Activity** (pennystocks, niche): posts_limit=500, interval=600s, comment_batch=10
+- **High Activity** (wallstreetbets, stocks): posts_limit=150, interval=60s, comment_batch=8, sorting=["top", "rising"]
+- **Medium Activity** (investing, crypto): posts_limit=100, interval=60s, comment_batch=6, sorting=["top", "rising"]
+- **Low Activity** (pennystocks, niche): posts_limit=80, interval=60s, comment_batch=4, sorting=["top", "rising"]
 
 These are defined in api.py and accessible via `GET /presets` endpoint.
+
+## Rate Limit Optimization Strategy
+
+**Reddit API Limits**: ~600 requests per 10 minutes per OAuth app (~60 requests/minute)
+
+**Design Philosophy**: System is optimized to allow **5 subreddit scrapers per Reddit account**, maximizing efficiency while staying within Reddit's rate limits.
+
+**Sorting Focus**:
+- **"top" (day)**: Captures proven quality content from the last 24 hours
+- **"rising"**: Catches early trending posts before they peak
+- This combination prioritizes quality over quantity
+
+**API Usage per Scraper** (with default config):
+- Post scraping: ~6 API calls (2 sorting methods × 3 calls each)
+- Comment scraping: ~12 API calls (6 posts × 2 calls)
+- **Total: ~18 API calls per minute**
+- **5 scrapers = ~90 calls/min** (leaves 30 req/min buffer for rate limit checks)
+
+**Key Configuration Options**:
+- `sorting_methods`: `["top", "rising"]` - Focus on quality posts
+- `top_time_filter`: `"day"` - Time window for "top" sorting (hour/day/week/month/year/all)
+- `posts_limit`: `100` - Default limit (can override per sorting method)
+- `sort_limits`: Per-method overrides (`{"top": 150, "rising": 100}`)
+- `posts_per_comment_batch`: `6` - Comments processed per cycle
+
+**To customize** (via dashboard or command line):
+```bash
+python reddit_scraper.py subreddit \
+  --posts-limit 150 \
+  --comment-batch 8 \
+  --sorting-methods "top,rising"
+```
