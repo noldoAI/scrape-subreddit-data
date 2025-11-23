@@ -486,13 +486,15 @@ sudo reboot
 
 ## Configuration Presets
 
-The system includes presets optimized for **5 scrapers per Reddit account**:
+The system includes presets optimized for **5 scrapers per Reddit account** (v1.2+ with depth limiting):
 
-- **High Activity** (wallstreetbets, stocks): posts_limit=150, interval=60s, comment_batch=8, sorting=["top", "rising"]
-- **Medium Activity** (investing, crypto): posts_limit=100, interval=60s, comment_batch=6, sorting=["top", "rising"]
-- **Low Activity** (pennystocks, niche): posts_limit=80, interval=60s, comment_batch=4, sorting=["top", "rising"]
+- **High Activity** (wallstreetbets, stocks): posts_limit=150, interval=60s, comment_batch=12, sorting=["top", "rising"]
+- **Medium Activity** (investing, crypto): posts_limit=100, interval=60s, comment_batch=12, sorting=["top", "rising"]
+- **Low Activity** (pennystocks, niche): posts_limit=80, interval=60s, comment_batch=10, sorting=["top", "rising"]
 
 These are defined in api.py and accessible via `GET /presets` endpoint.
+
+**Note**: Comment batch sizes increased in v1.2 due to 10-15x faster processing with depth limiting.
 
 ## Rate Limit Optimization Strategy
 

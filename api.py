@@ -2644,21 +2644,21 @@ async def get_presets():
             "description": "For very active subreddits (wallstreetbets, stocks)",
             "posts_limit": 150,
             "interval": 60,
-            "comment_batch": 8,
+            "comment_batch": 12,
             "sorting_methods": ["top", "rising"]
         },
         "medium_activity": {
             "description": "For moderately active subreddits (investing, cryptocurrency)",
             "posts_limit": 100,
             "interval": 60,
-            "comment_batch": 6,
+            "comment_batch": 12,
             "sorting_methods": ["top", "rising"]
         },
         "low_activity": {
             "description": "For smaller subreddits (pennystocks, niche topics)",
             "posts_limit": 80,
             "interval": 60,
-            "comment_batch": 4,
+            "comment_batch": 10,
             "sorting_methods": ["top", "rising"]
         }
     }
