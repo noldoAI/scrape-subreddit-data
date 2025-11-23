@@ -768,14 +768,13 @@ async def dashboard():
             .scraper {
                 background: #0a0a0a;
                 border: 1px solid #1f1f1f;
-                padding: 24px;
-                margin: 12px 0;
+                margin: 8px 0;
                 border-radius: 6px;
                 transition: all 0.2s ease;
+                overflow: hidden;
             }
             .scraper:hover {
                 border-color: #2a2a2a;
-                background: #0d0d0d;
             }
             .running {
                 border-left: 3px solid #22c55e;
@@ -788,6 +787,65 @@ async def dashboard():
             }
             .failed {
                 border-left: 3px solid #dc2626;
+            }
+
+            .scraper-header {
+                padding: 16px 20px;
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                user-select: none;
+                transition: background 0.2s;
+            }
+            .scraper-header:hover {
+                background: #0d0d0d;
+            }
+            .scraper-title {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                flex: 1;
+            }
+            .scraper-title h3 {
+                margin: 0;
+                font-size: 1.1em;
+                color: #e5e5e5;
+            }
+            .scraper-summary {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                font-size: 0.9em;
+                color: #737373;
+                flex-wrap: wrap;
+            }
+            .scraper-stat {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+            }
+            .expand-icon {
+                font-size: 1.2em;
+                transition: transform 0.2s;
+                color: #737373;
+            }
+            .expanded .expand-icon {
+                transform: rotate(180deg);
+            }
+
+            .scraper-details {
+                max-height: 0;
+                overflow: hidden;
+                transition: max-height 0.3s ease-out;
+                border-top: 1px solid #1f1f1f;
+            }
+            .scraper-details.show {
+                max-height: 2000px;
+                transition: max-height 0.5s ease-in;
+            }
+            .scraper-content {
+                padding: 20px;
             }
 
             button {
@@ -1315,14 +1373,56 @@ async def dashboard():
                 }
             }
             
+            function toggleScraper(header) {
+                const scraper = header.closest('.scraper');
+                const details = scraper.querySelector('.scraper-details');
+                const isExpanded = details.classList.contains('show');
+
+                if (isExpanded) {
+                    details.classList.remove('show');
+                    scraper.classList.remove('expanded');
+                } else {
+                    details.classList.add('show');
+                    scraper.classList.add('expanded');
+                }
+            }
+
+            function expandAllScrapers() {
+                document.querySelectorAll('.scraper').forEach(scraper => {
+                    const details = scraper.querySelector('.scraper-details');
+                    details.classList.add('show');
+                    scraper.classList.add('expanded');
+                });
+            }
+
+            function collapseAllScrapers() {
+                document.querySelectorAll('.scraper').forEach(scraper => {
+                    const details = scraper.querySelector('.scraper-details');
+                    details.classList.remove('show');
+                    scraper.classList.remove('expanded');
+                });
+            }
+
             async function loadScrapers() {
                 try {
                     const response = await fetch('/scrapers');
                     const scrapers = await response.json();
                     const container = document.getElementById('scrapers');
-                    container.innerHTML = '<h2>Active Scrapers</h2>';
-                    
-                    if (Object.keys(scrapers).length === 0) {
+                    const scraperCount = Object.keys(scrapers).length;
+
+                    container.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h2 style="margin: 0;">Active Scrapers (${scraperCount})</h2>
+                            ${scraperCount > 0 ? `
+                                <div>
+                                    <button onclick="expandAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Expand All</button>
+                                    <button onclick="collapseAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Collapse All</button>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+
+                    if (scraperCount === 0) {
                         container.innerHTML += '<p>No active scrapers. Start one above!</p>';
                         return;
                     }
@@ -1332,45 +1432,72 @@ async def dashboard():
                         const badgeClass = `badge-${statusClass}`;
                         const restartCount = info.restart_count || 0;
                         const autoRestart = info.config?.auto_restart !== false;
-                        
+
+                        const totalPosts = (info.database_totals?.total_posts || 0).toLocaleString();
+                        const totalComments = (info.database_totals?.total_comments || 0).toLocaleString();
+                        const collectionRate = info.metrics ? `${(info.metrics.posts_per_hour || 0).toFixed(1)} posts/hr` : 'N/A';
+
                         const div = document.createElement('div');
                         div.className = `scraper ${statusClass}`;
                         div.innerHTML = `
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <h3>r/${subreddit}</h3>
-                                <span class="status-badge ${badgeClass}">${info.status?.toUpperCase() || 'UNKNOWN'}</span>
+                            <div class="scraper-header" onclick="toggleScraper(this)">
+                                <div class="scraper-title">
+                                    <h3>r/${subreddit}</h3>
+                                    <span class="status-badge ${badgeClass}">${info.status?.toUpperCase() || 'UNKNOWN'}</span>
+                                </div>
+                                <div class="scraper-summary">
+                                    <div class="scraper-stat">
+                                        <span style="color: #22c55e;">📊 ${totalPosts}</span>
+                                        <span>posts</span>
+                                    </div>
+                                    <div class="scraper-stat">
+                                        <span style="color: #3b82f6;">${totalComments}</span>
+                                        <span>comments</span>
+                                    </div>
+                                    <div class="scraper-stat">
+                                        <span>⚡ ${collectionRate}</span>
+                                    </div>
+                                    <span class="expand-icon">▼</span>
+                                </div>
                             </div>
-                            <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
-                            <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
-                            <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
-                            <div style="margin-top: 12px; padding: 10px; background: #0d0d0d; border-radius: 4px;">
-                                <strong>📊 Database Totals:</strong><br>
-                                <span style="color: #22c55e;">▸ ${(info.database_totals?.total_posts || 0).toLocaleString()} posts</span> |
-                                <span style="color: #3b82f6;">▸ ${(info.database_totals?.total_comments || 0).toLocaleString()} comments</span>
-                                ${info.metrics ? `
-                                <br><small style="color: #737373;">Scraper collected: ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts (${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr), ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments (${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)</small>
-                                <br><small style="color: #737373;">
-                                    Last cycle: ${info.metrics.last_cycle_posts || 0} posts, ${info.metrics.last_cycle_comments || 0} comments
-                                    ${info.metrics.last_cycle_time ? `at ${new Date(info.metrics.last_cycle_time).toLocaleTimeString()}` : ''}
-                                    ${info.metrics.total_cycles ? ` • ${info.metrics.total_cycles} cycles` : ''}
-                                </small>
-                                ` : ''}
-                            </div>
-                            <p><strong>Restarts:</strong> ${restartCount} | <strong>Auto-restart:</strong> 
-                               <label class="toggle">
-                                   <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
-                                   <span class="slider"></span>
-                               </label>
-                            </p>
-                            ${info.started_at ? `<p><strong>Started:</strong> ${new Date(info.started_at).toLocaleString()}</p>` : ''}
-                            ${info.last_updated ? `<p><strong>Last Updated:</strong> ${new Date(info.last_updated).toLocaleString()}</p>` : ''}
-                            ${info.last_error ? `<p><strong>Error:</strong> ${info.last_error}</p>` : ''}
-                            <div>
-                                <button onclick="stopScraper(this, '${subreddit}')" class="stop">Stop</button>
-                                <button onclick="restartScraper(this, '${subreddit}')" class="restart">Restart</button>
-                                <button onclick="getStats(this, '${subreddit}')" class="stats">Stats</button>
-                                <button onclick="getLogs(this, '${subreddit}')" class="stats">Logs</button>
-                                <button onclick="deleteScraper(this, '${subreddit}')" class="delete">Delete</button>
+                            <div class="scraper-details">
+                                <div class="scraper-content">
+                                    <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
+                                    <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
+                                    <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
+
+                                    <div style="margin-top: 12px; padding: 10px; background: #0d0d0d; border-radius: 4px;">
+                                        <strong>📊 Database Totals:</strong><br>
+                                        <span style="color: #22c55e;">▸ ${totalPosts} posts</span> |
+                                        <span style="color: #3b82f6;">▸ ${totalComments} comments</span>
+                                        ${info.metrics ? `
+                                        <br><small style="color: #737373;">Scraper collected: ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts (${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr), ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments (${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)</small>
+                                        <br><small style="color: #737373;">
+                                            Last cycle: ${info.metrics.last_cycle_posts || 0} posts, ${info.metrics.last_cycle_comments || 0} comments
+                                            ${info.metrics.last_cycle_time ? `at ${new Date(info.metrics.last_cycle_time).toLocaleTimeString()}` : ''}
+                                            ${info.metrics.total_cycles ? ` • ${info.metrics.total_cycles} cycles` : ''}
+                                        </small>
+                                        ` : ''}
+                                    </div>
+
+                                    <p><strong>Restarts:</strong> ${restartCount} | <strong>Auto-restart:</strong>
+                                       <label class="toggle">
+                                           <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
+                                           <span class="slider"></span>
+                                       </label>
+                                    </p>
+                                    ${info.started_at ? `<p><strong>Started:</strong> ${new Date(info.started_at).toLocaleString()}</p>` : ''}
+                                    ${info.last_updated ? `<p><strong>Last Updated:</strong> ${new Date(info.last_updated).toLocaleString()}</p>` : ''}
+                                    ${info.last_error ? `<p><strong>Error:</strong> ${info.last_error}</p>` : ''}
+
+                                    <div style="margin-top: 16px;">
+                                        <button onclick="event.stopPropagation(); stopScraper(this, '${subreddit}')" class="stop">Stop</button>
+                                        <button onclick="event.stopPropagation(); restartScraper(this, '${subreddit}')" class="restart">Restart</button>
+                                        <button onclick="event.stopPropagation(); getStats(this, '${subreddit}')" class="stats">Stats</button>
+                                        <button onclick="event.stopPropagation(); getLogs(this, '${subreddit}')" class="stats">Logs</button>
+                                        <button onclick="event.stopPropagation(); deleteScraper(this, '${subreddit}')" class="delete">Delete</button>
+                                    </div>
+                                </div>
                             </div>
                         `;
                         container.appendChild(div);
