@@ -31,6 +31,7 @@ DEFAULT_SCRAPER_CONFIG = {
         "controversial": 500       # Controversial posts (optional, not in default)
     },
     "top_time_filter": "day",      # Time filter for "top" sorting: hour, day, week, month, year, all
+    "initial_top_time_filter": "month",  # Time filter for first run to get historical data
     "controversial_time_filter": "day",  # Time filter for "controversial" sorting
     "subreddit_update_interval": 86400,  # 24 hours for subreddit metadata
     "replace_more_limit": 0,       # 0 = skip MoreComments entirely (faster), None = expand all (slower)

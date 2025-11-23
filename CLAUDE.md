@@ -167,6 +167,8 @@ Container runs reddit_scraper.py with unique credentials
 - `replace_more_limit`: `0` = skip MoreComments (fastest), `None` = expand all (slowest), or set integer limit (default: `0`)
 - `max_comment_depth`: Maximum nesting level to fetch, 0-indexed (default: `3` = levels 0,1,2,3 = top 4 levels)
 - `posts_per_comment_batch`: Number of posts to process per cycle (default: `12`, increased due to faster depth-limited processing)
+- `top_time_filter`: Time filter for regular "top" scraping (default: `"day"`)
+- `initial_top_time_filter`: Time filter for first run to get historical data (default: `"month"`)
 - `max_retries`: Number of retry attempts for failed operations (default: `3`)
 - `retry_backoff_factor`: Exponential backoff multiplier (default: `2` = 2s, 4s, 8s)
 - `verify_before_marking`: Enable verification step before marking posts scraped (default: `True`)
@@ -187,6 +189,32 @@ python repair_ghost_posts.py --subreddit wallstreetbets
 
 # Also repair incomplete posts (missing >10% of comments)
 python repair_ghost_posts.py --include-incomplete
+```
+
+### First-Run Historical Fetch (v1.2+)
+
+**Automatic Historical Data Collection**: When scraping a subreddit for the first time, the system automatically fetches historical posts to build a comprehensive dataset.
+
+**How It Works:**
+1. **First Run Detection**: System checks if subreddit has any posts in database
+2. **Initial Fetch**: Uses `initial_top_time_filter: "month"` to get top posts from last 30 days
+3. **Subsequent Runs**: Switches to `top_time_filter: "day"` for daily updates
+
+**Timeline:**
+- **Posts appear**: 1-2 minutes (immediately visible in database)
+- **Full comment scraping**: 1-3 hours (gradual, prioritized by engagement)
+- **Result**: 1000+ historical posts with complete data
+
+**Benefits:**
+- ✅ Comprehensive coverage from day one
+- ✅ No API spike (gradual comment scraping)
+- ✅ Prioritizes high-engagement posts first
+- ✅ Seamless transition to daily updates
+
+**Example:**
+```
+First cycle:  "Using 'month' time filter for historical data" → 1000+ posts
+Second cycle: "Using 'day' time filter" → ~25 new daily posts
 ```
 
 ### Smart Comment Update Prioritization

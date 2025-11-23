@@ -117,7 +117,16 @@ class UnifiedRedditScraper:
         logger.info(f"🎯 Target subreddit: r/{self.subreddit_name}")
         logger.info(f"⚙️  Configuration: {self.config}")
         logger.info(f"📊 Sorting methods: {', '.join(self.config.get('sorting_methods', ['hot']))}")
-    
+
+    def is_first_run(self):
+        """Check if this is the first run for this subreddit (no posts in database)."""
+        try:
+            post_count = posts_collection.count_documents({"subreddit": self.subreddit_name})
+            return post_count == 0
+        except Exception as e:
+            logger.error(f"Error checking first run status: {e}")
+            return False  # Default to regular operation if check fails
+
     # ======================= POSTS SCRAPING =======================
 
     def scrape_posts_by_sort(self, sort_method="hot", limit=1000):
@@ -138,7 +147,13 @@ class UnifiedRedditScraper:
             elif sort_method == "rising":
                 posts = subreddit.rising(limit=limit)
             elif sort_method == "top":
-                time_filter = self.config.get("top_time_filter", "day")
+                # Use initial_top_time_filter on first run for historical data
+                is_first_run = self.is_first_run()
+                if is_first_run:
+                    time_filter = self.config.get("initial_top_time_filter", "month")
+                    logger.info(f"First run detected - using '{time_filter}' time filter for historical data")
+                else:
+                    time_filter = self.config.get("top_time_filter", "day")
                 posts = subreddit.top(time_filter=time_filter, limit=limit)
             elif sort_method == "controversial":
                 time_filter = self.config.get("controversial_time_filter", "day")
