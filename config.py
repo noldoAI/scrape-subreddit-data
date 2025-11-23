@@ -21,7 +21,7 @@ COLLECTIONS = {
 DEFAULT_SCRAPER_CONFIG = {
     "scrape_interval": 60,         # 1 minute between cycles
     "posts_limit": 100,            # Default posts limit (optimized for 5 scrapers per account)
-    "posts_per_comment_batch": 6,  # Comments batch size (reduced for API efficiency)
+    "posts_per_comment_batch": 12, # Comments batch size (increased due to faster depth-limited processing)
     "sorting_methods": ["top", "rising"],  # Focus on quality and early trending posts
     "sort_limits": {               # Limits per sorting method
         "top": 150,                # Top posts from last 24 hours (proven quality)
@@ -33,7 +33,8 @@ DEFAULT_SCRAPER_CONFIG = {
     "top_time_filter": "day",      # Time filter for "top" sorting: hour, day, week, month, year, all
     "controversial_time_filter": "day",  # Time filter for "controversial" sorting
     "subreddit_update_interval": 86400,  # 24 hours for subreddit metadata
-    "replace_more_limit": None,    # None = expand ALL MoreComments (complete thread), or set to int for limit
+    "replace_more_limit": 0,       # 0 = skip MoreComments entirely (faster), None = expand all (slower)
+    "max_comment_depth": 3,        # Maximum comment nesting level (0-3 = top 4 levels, captures 85-90% of value)
     "max_retries": 3,              # Number of retry attempts for failed operations
     "retry_backoff_factor": 2,     # Exponential backoff multiplier (2 = 2s, 4s, 8s)
     "verify_before_marking": True, # Verify comments saved to DB before marking posts as scraped

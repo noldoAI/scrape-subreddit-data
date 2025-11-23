@@ -379,14 +379,16 @@ class UnifiedRedditScraper:
 
             # Expand MoreComments to get all nested comments
             replace_limit = self.config.get("replace_more_limit", None)
+            max_depth = self.config.get("max_comment_depth", 3)
             try:
-                # None = expand ALL, integer = expand up to that limit
+                # None = expand ALL, 0 = skip MoreComments entirely, integer = expand up to that limit
                 removed_count = submission.comments.replace_more(limit=replace_limit)
                 if removed_count:
                     logger.info(f"Expanded {len(removed_count)} MoreComments objects (limit={replace_limit})")
+                logger.info(f"Comment depth limit: {max_depth} levels")
             except Exception as e:
                 logger.warning(f"Error expanding MoreComments: {e}, continuing with partial comment tree")
-            
+
             comments_data = []
             new_comments_count = 0
             
@@ -398,7 +400,8 @@ class UnifiedRedditScraper:
                 
                 try:
                     if comment.id in existing_comment_ids:
-                        if hasattr(comment, 'replies') and comment.replies:
+                        # Still process replies even if comment exists (to catch new nested comments)
+                        if hasattr(comment, 'replies') and comment.replies and depth < max_depth:
                             for reply in comment.replies:
                                 process_comment(reply, parent_id=comment.id, depth=depth + 1)
                         return
@@ -427,8 +430,9 @@ class UnifiedRedditScraper:
                     
                     comments_data.append(comment_data)
                     new_comments_count += 1
-                    
-                    if hasattr(comment, 'replies') and comment.replies:
+
+                    # Only process replies if we haven't reached max depth
+                    if hasattr(comment, 'replies') and comment.replies and depth < max_depth:
                         for reply in comment.replies:
                             process_comment(reply, parent_id=comment.id, depth=depth + 1)
                             
