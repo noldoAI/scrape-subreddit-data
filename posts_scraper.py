@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Unified Reddit Scraper
+Reddit Posts Scraper
 
-Continuously scrapes posts, comments, and subreddit metadata for a specified subreddit.
-Combines all scraping functionality into one unified system.
+Continuously scrapes posts and subreddit metadata for a specified subreddit.
+Comments are handled by a separate comments_scraper.py script.
 """
 
 import praw
@@ -15,7 +15,6 @@ import time
 import sys
 import argparse
 from rate_limits import check_rate_limit
-from praw.models import MoreComments
 import logging
 
 # Import centralized configuration
@@ -31,13 +30,12 @@ logging.basicConfig(
     level=getattr(logging, LOGGING_CONFIG["level"]),
     force=True  # Override any existing logging configuration
 )
-logger = logging.getLogger("reddit-scraper")
+logger = logging.getLogger("posts-scraper")
 
 # MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
 db = client[DATABASE_NAME]
 posts_collection = db[COLLECTIONS["POSTS"]]
-comments_collection = db[COLLECTIONS["COMMENTS"]]
 subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
 errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
 
@@ -106,7 +104,7 @@ def log_scrape_error(subreddit, post_id, error_type, error_message, retry_count=
         logger.error(f"Failed to log error to database: {e}")
 
 
-class UnifiedRedditScraper:
+class RedditPostsScraper:
     def __init__(self, subreddit_name, config=None):
         self.subreddit_name = subreddit_name
         self.config = {**DEFAULT_SCRAPER_CONFIG, **(config or {})}
@@ -279,397 +277,11 @@ class UnifiedRedditScraper:
                 return result.upserted_count
             
             return 0
-            
+
         except Exception as e:
             logger.error(f"Error saving posts: {e}")
             return 0
-    
-    # ======================= COMMENTS SCRAPING =======================
-    
-    def get_posts_needing_comment_updates(self, limit=20):
-        """
-        Get posts that need comment scraping or updates with smart prioritization.
 
-        Priority system based on comment activity:
-        - High activity (>100 comments): Check every 2 hours
-        - Medium activity (20-100 comments): Check every 6 hours
-        - Low activity (<20 comments): Check every 24 hours
-        """
-        try:
-            current_time = datetime.now(UTC)
-            two_hours_ago = current_time - timedelta(hours=2)
-            six_hours_ago = current_time - timedelta(hours=6)
-            twenty_four_hours_ago = current_time - timedelta(hours=24)
-
-            # Convert to timezone-naive for database comparison
-            current_time_naive = current_time.replace(tzinfo=None)
-            two_hours_ago_naive = two_hours_ago.replace(tzinfo=None)
-            six_hours_ago_naive = six_hours_ago.replace(tzinfo=None)
-            twenty_four_hours_ago_naive = twenty_four_hours_ago.replace(tzinfo=None)
-
-            # Query for candidate posts (get more than needed, we'll filter)
-            # Priority 1: Never scraped
-            # Priority 2: High activity posts (>100 comments)
-            # Priority 3: Medium activity posts (20-100 comments)
-            # Priority 4: Low activity posts (<20 comments)
-
-            candidates = list(posts_collection.find({
-                "subreddit": self.subreddit_name,
-                "$or": [
-                    # Never scraped - highest priority
-                    {"initial_comments_scraped": {"$ne": True}},
-                    # High activity posts - check every 2 hours
-                    {
-                        "num_comments": {"$gt": 100},
-                        "$or": [
-                            {"last_comment_fetch_time": {"$exists": False}},
-                            {"last_comment_fetch_time": {"$lte": two_hours_ago_naive}},
-                            {"last_comment_fetch_time": None}
-                        ]
-                    },
-                    # Medium activity posts - check every 6 hours
-                    {
-                        "num_comments": {"$gt": 20, "$lte": 100},
-                        "$or": [
-                            {"last_comment_fetch_time": {"$exists": False}},
-                            {"last_comment_fetch_time": {"$lte": six_hours_ago_naive}},
-                            {"last_comment_fetch_time": None}
-                        ]
-                    },
-                    # Low activity posts - check every 24 hours
-                    {
-                        "num_comments": {"$lte": 20},
-                        "$or": [
-                            {"last_comment_fetch_time": {"$exists": False}},
-                            {"last_comment_fetch_time": {"$lte": twenty_four_hours_ago_naive}},
-                            {"last_comment_fetch_time": None}
-                        ]
-                    }
-                ]
-            }).sort([
-                ("initial_comments_scraped", 1),   # Unscraped first
-                ("num_comments", -1),              # Then by comment count (high to low)
-                ("created_utc", -1)                # Then by newest first
-            ]).limit(limit * 2))  # Get extra to account for filtering
-
-            # Log priority breakdown
-            if candidates:
-                unscraped = sum(1 for p in candidates if not p.get("initial_comments_scraped"))
-                high_activity = sum(1 for p in candidates if p.get("num_comments", 0) > 100 and p.get("initial_comments_scraped"))
-                medium_activity = sum(1 for p in candidates if 20 < p.get("num_comments", 0) <= 100 and p.get("initial_comments_scraped"))
-                low_activity = sum(1 for p in candidates if p.get("num_comments", 0) <= 20 and p.get("initial_comments_scraped"))
-
-                logger.info(f"Found {len(candidates)} posts needing updates: {unscraped} unscraped, {high_activity} high-activity (>100), {medium_activity} medium (20-100), {low_activity} low (<20)")
-
-            # Return top N based on priority
-            return candidates[:limit]
-
-        except Exception as e:
-            logger.error(f"Error fetching posts needing updates: {e}")
-            return []
-    
-    def get_existing_comment_ids(self, post_id):
-        """Get existing comment IDs for a post to avoid duplicates."""
-        try:
-            existing_comments = comments_collection.find(
-                {"post_id": post_id}, 
-                {"comment_id": 1}
-            )
-            return {doc["comment_id"] for doc in existing_comments}
-        except Exception as e:
-            logger.error(f"Error getting existing comment IDs: {e}")
-            return set()
-    
-    def scrape_post_comments(self, post_id):
-        """Scrape comments for a post, only collecting new ones."""
-        logger.info(f"\n--- Scraping comments for post {post_id} ---")
-
-        check_rate_limit(reddit)
-
-        try:
-            existing_comment_ids = self.get_existing_comment_ids(post_id)
-            logger.info(f"Found {len(existing_comment_ids)} existing comments")
-
-            submission = reddit.submission(id=post_id)
-
-            # Expand MoreComments to get all nested comments
-            replace_limit = self.config.get("replace_more_limit", None)
-            max_depth = self.config.get("max_comment_depth", 3)
-            try:
-                # None = expand ALL, 0 = skip MoreComments entirely, integer = expand up to that limit
-                removed_count = submission.comments.replace_more(limit=replace_limit)
-                if removed_count:
-                    logger.info(f"Expanded {len(removed_count)} MoreComments objects (limit={replace_limit})")
-                logger.info(f"Comment depth limit: {max_depth} levels")
-            except Exception as e:
-                logger.warning(f"Error expanding MoreComments: {e}, continuing with partial comment tree")
-
-            comments_data = []
-            new_comments_count = 0
-            
-            def process_comment(comment, parent_id=None, depth=0):
-                nonlocal new_comments_count
-                
-                if isinstance(comment, MoreComments):
-                    return
-                
-                try:
-                    if comment.id in existing_comment_ids:
-                        # Still process replies even if comment exists (to catch new nested comments)
-                        if hasattr(comment, 'replies') and comment.replies and depth < max_depth:
-                            for reply in comment.replies:
-                                process_comment(reply, parent_id=comment.id, depth=depth + 1)
-                        return
-                    
-                    comment_data = {
-                        "comment_id": comment.id,
-                        "post_id": post_id,
-                        "parent_id": parent_id,
-                        "parent_type": "post" if parent_id is None else "comment",
-                        "author": str(comment.author) if comment.author else "[deleted]",
-                        "body": comment.body if hasattr(comment, 'body') else "",
-                        "score": comment.score if hasattr(comment, 'score') else 0,
-                        "created_utc": comment.created_utc if hasattr(comment, 'created_utc') else 0,
-                        "created_datetime": datetime.fromtimestamp(comment.created_utc) if hasattr(comment, 'created_utc') else None,
-                        "depth": depth,
-                        "is_submitter": comment.is_submitter if hasattr(comment, 'is_submitter') else False,
-                        "distinguished": comment.distinguished if hasattr(comment, 'distinguished') else None,
-                        "stickied": comment.stickied if hasattr(comment, 'stickied') else False,
-                        "edited": bool(comment.edited) if hasattr(comment, 'edited') else False,
-                        "controversiality": comment.controversiality if hasattr(comment, 'controversiality') else 0,
-                        "scraped_at": datetime.now(UTC),
-                        "subreddit": self.subreddit_name,
-                        "gilded": comment.gilded if hasattr(comment, 'gilded') else 0,
-                        "total_awards_received": comment.total_awards_received if hasattr(comment, 'total_awards_received') else 0
-                    }
-                    
-                    comments_data.append(comment_data)
-                    new_comments_count += 1
-
-                    # Only process replies if we haven't reached max depth
-                    if hasattr(comment, 'replies') and comment.replies and depth < max_depth:
-                        for reply in comment.replies:
-                            process_comment(reply, parent_id=comment.id, depth=depth + 1)
-                            
-                except Exception as e:
-                    logger.error(f"Error processing comment: {e}")
-            
-            for comment in submission.comments:
-                process_comment(comment, parent_id=None, depth=0)
-            
-            logger.info(f"Found {new_comments_count} new comments")
-            return comments_data
-            
-        except Exception as e:
-            logger.error(f"Error scraping comments: {e}")
-            return []
-    
-    def save_comments_to_db(self, comments_list):
-        """Save comments to MongoDB."""
-        if not comments_list:
-            return 0
-        
-        try:
-            comments_collection.create_index("comment_id", unique=True)
-            comments_collection.create_index("post_id")
-            comments_collection.create_index("parent_id")
-            
-            bulk_operations = []
-            for comment in comments_list:
-                bulk_operations.append(
-                    pymongo.UpdateOne(
-                        {"comment_id": comment["comment_id"]},
-                        {"$set": comment},
-                        upsert=True
-                    )
-                )
-            
-            if bulk_operations:
-                result = comments_collection.bulk_write(bulk_operations, ordered=False)
-                logger.info(f"Saved {result.upserted_count} new comments, updated {result.modified_count}")
-                return result.upserted_count
-            
-            return 0
-            
-        except Exception as e:
-            logger.error(f"Error saving comments: {e}")
-            return 0
-    
-    def mark_posts_comments_updated(self, post_ids, is_initial_scrape=False):
-        """Mark posts as having their comments updated."""
-        if not post_ids:
-            return
-        
-        try:
-            bulk_operations = []
-            update_time = datetime.now(UTC)
-            
-            for post_id in post_ids:
-                update_data = {
-                    "comments_scraped": True,
-                    "last_comment_fetch_time": update_time
-                }
-                
-                if is_initial_scrape:
-                    update_data["initial_comments_scraped"] = True
-                    update_data["comments_scraped_at"] = update_time
-                
-                bulk_operations.append(
-                    pymongo.UpdateOne(
-                        {"post_id": post_id},
-                        {"$set": update_data}
-                    )
-                )
-            
-            if bulk_operations:
-                result = posts_collection.bulk_write(bulk_operations, ordered=False)
-                action = "initially scraped" if is_initial_scrape else "updated"
-                logger.info(f"Marked {result.modified_count} posts as {action}")
-                
-        except Exception as e:
-            logger.error(f"Error marking posts as updated: {e}")
-    
-    def scrape_comments_for_posts(self):
-        """Main comment scraping function with improved error handling and verification."""
-        logger.info(f"\n{'='*60}")
-        logger.info("COMMENT SCRAPING PHASE")
-        logger.info(f"{'='*60}")
-
-        posts = self.get_posts_needing_comment_updates(self.config["posts_per_comment_batch"])
-
-        if not posts:
-            logger.info("No posts need comment updates.")
-            return 0, 0
-
-        total_comments = 0
-        posts_processed = 0
-        initial_scrape_posts = []
-        update_posts = []
-        all_comments = []
-        post_comment_map = {}  # Track which comments belong to which post
-
-        for post in posts:
-            post_id = post["post_id"]
-            is_initial = not post.get("initial_comments_scraped", False)
-            action = "Initial scrape" if is_initial else "Update"
-
-            try:
-                # Use stored reddit_url or construct from subreddit + post_id
-                post_url = post.get('reddit_url', f"https://reddit.com/r/{self.subreddit_name}/comments/{post_id}/")
-                logger.info(f"\n{action} for: {post['title'][:50]}...")
-                logger.info(f"  URL: {post_url}")
-
-                comments = self.scrape_post_comments(post_id)
-
-                # FIXED: Always mark initial scrapes as done (even 0 comments)
-                if is_initial:
-                    # Save any comments we got
-                    if comments:
-                        all_comments.extend(comments)
-                        post_comment_map[post_id] = len(comments)
-                        logger.info(f"✓ Initial scrape: {len(comments)} new comments - {post_url}")
-                    else:
-                        post_comment_map[post_id] = 0
-                        logger.info(f"✓ Initial scrape: 0 comments (will check in update cycles) - {post_url}")
-
-                    # ALWAYS mark initial scrapes as done (update cycles will catch new comments)
-                    initial_scrape_posts.append(post_id)
-                    posts_processed += 1
-                else:
-                    # For updates, 0 new comments is acceptable (all might be existing)
-                    if comments:
-                        all_comments.extend(comments)
-                        post_comment_map[post_id] = len(comments)
-                        logger.info(f"✓ Update: {len(comments)} new comments - {post_url}")
-                    else:
-                        logger.info(f"✓ Update: 0 new comments (already up to date) - {post_url}")
-                    update_posts.append(post_id)
-                    posts_processed += 1
-
-                time.sleep(2)  # Be respectful
-
-            except Exception as e:
-                logger.error(f"✗ Error processing post {post_id}: {e}")
-                # Log error to database for tracking
-                log_scrape_error(
-                    subreddit=self.subreddit_name,
-                    post_id=post_id,
-                    error_type="comment_scrape_failed",
-                    error_message=str(e),
-                    retry_count=0
-                )
-                # Do NOT add to tracking lists - will retry later
-                continue
-
-        # Save comments to database
-        if all_comments:
-            try:
-                total_comments = self.save_comments_to_db(all_comments)
-                logger.info(f"💾 Saved {total_comments} comments to database")
-            except Exception as e:
-                logger.error(f"✗ Failed to save comments to database: {e}")
-                # If save failed, don't mark any posts as scraped
-                return 0, 0
-
-        # VERIFICATION STEP: Verify comments actually made it to the database
-        if self.config.get("verify_before_marking", True):
-            logger.info("\n🔍 Verifying comments saved to database...")
-            verified_initial = []
-            verified_updates = []
-
-            for post_id in initial_scrape_posts:
-                expected_count = post_comment_map.get(post_id, 0)
-
-                if expected_count == 0:
-                    # Post had 0 comments, nothing to verify - mark as done
-                    verified_initial.append(post_id)
-                    logger.info(f"  ✓ Post {post_id}: 0 comments (post has no comments yet)")
-                else:
-                    # Post claimed to have comments, verify they're in DB
-                    actual_count = comments_collection.count_documents({"post_id": post_id})
-
-                    if actual_count > 0:
-                        verified_initial.append(post_id)
-                        logger.info(f"  ✓ Post {post_id}: {actual_count} comments verified in DB")
-                    else:
-                        logger.error(f"  ✗ Post {post_id}: VERIFICATION FAILED - 0 comments in DB (expected {expected_count})")
-                        log_scrape_error(
-                            subreddit=self.subreddit_name,
-                            post_id=post_id,
-                            error_type="verification_failed",
-                            error_message=f"Expected {expected_count} comments but found 0 in database",
-                            retry_count=0
-                        )
-
-            # For updates, all posts pass verification (0 new comments is OK)
-            verified_updates = update_posts
-
-            # Only mark verified posts
-            if verified_initial:
-                self.mark_posts_comments_updated(verified_initial, is_initial_scrape=True)
-                logger.info(f"✅ Marked {len(verified_initial)} posts as initially scraped")
-
-            if verified_updates:
-                self.mark_posts_comments_updated(verified_updates, is_initial_scrape=False)
-                logger.info(f"✅ Marked {len(verified_updates)} posts as updated")
-
-            # Report verification failures
-            failed_count = len(initial_scrape_posts) - len(verified_initial)
-            if failed_count > 0:
-                logger.warning(f"⚠️  {failed_count} initial scrapes FAILED verification - will retry later")
-
-        else:
-            # Verification disabled, mark all posts
-            if initial_scrape_posts:
-                self.mark_posts_comments_updated(initial_scrape_posts, is_initial_scrape=True)
-            if update_posts:
-                self.mark_posts_comments_updated(update_posts, is_initial_scrape=False)
-
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Comment scraping completed: {posts_processed} posts ({len(initial_scrape_posts)} initial, {len(update_posts)} updates), {total_comments} new comments")
-        logger.info(f"{'='*60}")
-        return posts_processed, total_comments
-    
     # ======================= SUBREDDIT METADATA =======================
     
     def should_update_subreddit_metadata(self):
@@ -758,9 +370,70 @@ class UnifiedRedditScraper:
                 "last_updated": datetime.now(UTC)
             }
 
+            # ===== ENHANCED METADATA FOR SEMANTIC SEARCH =====
+
+            # 1. Collect community rules (context-rich topic indicators)
+            rules = []
+            rules_text_parts = []
+            try:
+                for rule in subreddit.rules:
+                    rule_dict = {
+                        "short_name": rule.short_name,
+                        "description": rule.description,
+                        "kind": rule.kind,
+                        "violation_reason": getattr(rule, 'violation_reason', None)
+                    }
+                    rules.append(rule_dict)
+                    rules_text_parts.append(f"{rule.short_name}: {rule.description}")
+                logger.info(f"Collected {len(rules)} rules")
+            except Exception as e:
+                logger.warning(f"Could not fetch rules: {e}")
+
+            metadata["rules"] = rules
+            metadata["rules_text"] = " | ".join(rules_text_parts) if rules_text_parts else ""
+
+            # 2. Collect post guidelines (detailed topic context)
+            try:
+                post_reqs = subreddit.post_requirements()
+                metadata["guidelines_text"] = post_reqs.get("guidelines_text", "")
+                metadata["guidelines_display_policy"] = post_reqs.get("guidelines_display_policy", None)
+                if metadata["guidelines_text"]:
+                    logger.info(f"Collected post guidelines ({len(metadata['guidelines_text'])} chars)")
+            except Exception as e:
+                logger.warning(f"Could not fetch post requirements: {e}")
+                metadata["guidelines_text"] = ""
+                metadata["guidelines_display_policy"] = None
+
+            # 3. Collect sample posts (real discussion topics for semantic understanding)
+            sample_posts = []
+            sample_titles = []
+            try:
+                for post in subreddit.top(time_filter="month", limit=20):
+                    sample_post = {
+                        "title": post.title,
+                        "selftext_excerpt": post.selftext[:200] if post.selftext else "",
+                        "score": post.score,
+                        "num_comments": post.num_comments,
+                        "created_utc": post.created_utc
+                    }
+                    sample_posts.append(sample_post)
+                    sample_titles.append(post.title)
+                logger.info(f"Collected {len(sample_posts)} sample posts")
+            except Exception as e:
+                logger.warning(f"Could not fetch sample posts: {e}")
+
+            metadata["sample_posts"] = sample_posts
+            metadata["sample_posts_titles"] = " | ".join(sample_titles) if sample_titles else ""
+
+            # 4. Additional metadata fields
+            metadata["subreddit_type"] = subreddit.subreddit_type  # public/private/restricted
+            metadata["description_html"] = getattr(subreddit, "description_html", None)
+            metadata["header_title"] = getattr(subreddit, "header_title", None)
+
             subscribers = metadata['subscribers'] or 0
             active_users = metadata['active_user_count'] or 0
             logger.info(f"Subscribers: {subscribers:,}, Active: {active_users:,}")
+            logger.info(f"Enhanced metadata collected: {len(rules)} rules, {len(sample_posts)} posts, guidelines: {bool(metadata['guidelines_text'])}")
             return metadata
             
         except Exception as e:
@@ -768,26 +441,64 @@ class UnifiedRedditScraper:
             return None
     
     def save_subreddit_metadata(self, metadata):
-        """Save subreddit metadata to MongoDB."""
+        """Save subreddit metadata to MongoDB with embedding status flag.
+
+        Only sets embedding_status to 'pending' if text fields used for
+        embedding generation have changed (avoids unnecessary re-embedding).
+        """
         if not metadata:
             return False
-        
+
         try:
             subreddit_collection.create_index("subreddit_name", unique=True)
-            
+
+            # Fields used for embedding generation
+            embedding_fields = [
+                'title', 'public_description', 'description',
+                'guidelines_text', 'rules_text', 'sample_posts_titles',
+                'advertiser_category'
+            ]
+
+            # Check if embedding-relevant fields have changed
+            existing = subreddit_collection.find_one(
+                {"subreddit_name": metadata["subreddit_name"]},
+                {field: 1 for field in embedding_fields}
+            )
+
+            needs_embedding = False
+            if not existing:
+                # New document - needs embedding
+                needs_embedding = True
+            else:
+                # Check if any embedding field changed
+                for field in embedding_fields:
+                    old_val = existing.get(field, '')
+                    new_val = metadata.get(field, '')
+                    if old_val != new_val:
+                        needs_embedding = True
+                        logger.debug(f"Embedding field '{field}' changed")
+                        break
+
+            # Only set pending if content changed
+            if needs_embedding:
+                metadata["embedding_status"] = "pending"
+                metadata["embedding_requested_at"] = datetime.now(UTC)
+
             result = subreddit_collection.update_one(
                 {"subreddit_name": metadata["subreddit_name"]},
                 {"$set": metadata},
                 upsert=True
             )
-            
+
             if result.upserted_id:
-                logger.info(f"Inserted new subreddit metadata")
+                logger.info(f"Inserted new subreddit metadata (embedding: pending)")
+            elif needs_embedding:
+                logger.info(f"Updated subreddit metadata - content changed (embedding: pending)")
             else:
-                logger.info(f"Updated existing subreddit metadata")
-            
+                logger.info(f"Updated subreddit metadata - no content change (embedding: skipped)")
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error saving subreddit metadata: {e}")
             return False
@@ -802,7 +513,7 @@ class UnifiedRedditScraper:
 
     # ======================= METRICS TRACKING =======================
 
-    def update_scraper_metrics(self, posts_count, new_posts_count, comments_count, cycle_duration):
+    def update_scraper_metrics(self, posts_count, new_posts_count, cycle_duration):
         """Update scraper metrics in MongoDB after each cycle"""
         try:
             # Get current scraper document
@@ -815,12 +526,10 @@ class UnifiedRedditScraper:
 
             # Update cumulative totals
             total_posts = metrics.get("total_posts_collected", 0) + new_posts_count
-            total_comments = metrics.get("total_comments_collected", 0) + comments_count
             total_cycles = metrics.get("total_cycles", 0) + 1
 
             # Calculate rates (based on scraper lifetime)
             posts_per_hour = 0
-            comments_per_hour = 0
             if scraper_doc.get("created_at"):
                 created_at = scraper_doc["created_at"]
                 # Handle both timezone-aware and naive datetimes
@@ -829,7 +538,6 @@ class UnifiedRedditScraper:
                 runtime_hours = (datetime.now(UTC) - created_at).total_seconds() / 3600
                 if runtime_hours > 0:
                     posts_per_hour = total_posts / runtime_hours
-                    comments_per_hour = total_comments / runtime_hours
 
             # Calculate average cycle duration
             prev_avg = metrics.get("avg_cycle_duration", 0)
@@ -840,19 +548,16 @@ class UnifiedRedditScraper:
                 {"subreddit": self.subreddit_name},
                 {"$set": {
                     "metrics.total_posts_collected": total_posts,
-                    "metrics.total_comments_collected": total_comments,
                     "metrics.total_cycles": total_cycles,
                     "metrics.last_cycle_posts": posts_count,
-                    "metrics.last_cycle_comments": comments_count,
                     "metrics.last_cycle_time": datetime.now(UTC),
                     "metrics.last_cycle_duration": round(cycle_duration, 1),
                     "metrics.posts_per_hour": round(posts_per_hour, 1),
-                    "metrics.comments_per_hour": round(comments_per_hour, 1),
                     "metrics.avg_cycle_duration": round(avg_cycle_duration, 1)
                 }}
             )
 
-            logger.info(f"✅ Metrics updated: {total_posts:,} posts ({posts_per_hour:.1f}/hr), {total_comments:,} comments ({comments_per_hour:.1f}/hr), {total_cycles} cycles")
+            logger.info(f"✅ Metrics updated: {total_posts:,} posts ({posts_per_hour:.1f}/hr), {total_cycles} cycles")
 
         except Exception as e:
             logger.error(f"Error updating scraper metrics: {e}")
@@ -925,10 +630,9 @@ class UnifiedRedditScraper:
     
     def run_continuous_scraping(self):
         """Main continuous scraping loop."""
-        logger.info(f"\n🚀 Starting unified Reddit scraping for r/{self.subreddit_name}")
+        logger.info(f"\n🚀 Starting posts scraping for r/{self.subreddit_name}")
         logger.info(f"⏰ Scrape interval: {self.config['scrape_interval']} seconds")
         logger.info(f"📊 Posts per scrape: {self.config['posts_limit']}")
-        logger.info(f"💬 Comments batch size: {self.config['posts_per_comment_batch']} posts")
         logger.info(f"🏢 Subreddit metadata interval: {self.config['subreddit_update_interval']/3600:.1f} hours")
         logger.info("Press Ctrl+C to stop\n")
         
@@ -951,11 +655,8 @@ class UnifiedRedditScraper:
 
                 posts = self.scrape_all_posts()  # Use new multi-sort method
                 new_posts = self.save_posts_to_db(posts)
-                
-                # PHASE 2: Scrape Comments for existing posts
-                posts_processed, total_comments = self.scrape_comments_for_posts()
-                
-                # PHASE 3: Update subreddit metadata (every 24 hours)
+
+                # PHASE 2: Update subreddit metadata (every 24 hours)
                 subreddit_updated = self.update_subreddit_metadata_if_needed()
                 
                 # Calculate time taken
@@ -966,17 +667,15 @@ class UnifiedRedditScraper:
                 logger.info("CYCLE SUMMARY")
                 logger.info(f"{'='*60}")
                 logger.info(f"Posts scraped: {len(posts)} unique ({new_posts} new)")
-                logger.info(f"Comments processed: {posts_processed} posts, {total_comments} new comments")
                 logger.info(f"Subreddit metadata: {'Updated' if subreddit_updated else 'No update needed'}")
                 logger.info(f"Cycle completed in {elapsed_time:.2f} seconds")
-                logger.info(f"API calls this cycle: ~{self.api_calls_this_cycle + posts_processed}")
-                logger.info(f"Estimated QPM: ~{(self.api_calls_this_cycle + posts_processed) / max(elapsed_time / 60, 1):.1f}")
+                logger.info(f"API calls this cycle: ~{self.api_calls_this_cycle}")
+                logger.info(f"Estimated QPM: ~{self.api_calls_this_cycle / max(elapsed_time / 60, 1):.1f}")
 
                 # Update metrics in database
                 self.update_scraper_metrics(
                     posts_count=len(posts),
                     new_posts_count=new_posts,
-                    comments_count=total_comments,
                     cycle_duration=elapsed_time
                 )
 
@@ -994,14 +693,12 @@ class UnifiedRedditScraper:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Unified Reddit Scraper")
+    parser = argparse.ArgumentParser(description="Reddit Posts Scraper")
     parser.add_argument("subreddit", help="Subreddit name to scrape (without r/)")
     parser.add_argument("--stats", action="store_true", help="Show statistics only")
-    parser.add_argument("--comments-only", action="store_true", help="Run comment scraping only")
     parser.add_argument("--metadata-only", action="store_true", help="Update subreddit metadata only")
     parser.add_argument("--posts-limit", type=int, default=1000, help="Number of posts to scrape per cycle")
     parser.add_argument("--interval", type=int, default=60, help="Seconds between scrape cycles")
-    parser.add_argument("--comment-batch", type=int, default=50, help="Number of posts to process for comments per cycle")
     parser.add_argument("--sorting-methods", type=str, default="new,hot,rising", help="Comma-separated sorting methods (new,hot,rising,top,controversial)")
 
     args = parser.parse_args()
@@ -1013,19 +710,14 @@ def main():
     config = {
         "posts_limit": args.posts_limit,
         "scrape_interval": args.interval,
-        "posts_per_comment_batch": args.comment_batch,
         "sorting_methods": sorting_methods,
     }
-    
+
     # Create scraper instance
-    scraper = UnifiedRedditScraper(args.subreddit, config)
-    
+    scraper = RedditPostsScraper(args.subreddit, config)
+
     if args.stats:
         scraper.print_stats()
-    elif args.comments_only:
-        logger.info(f"Running comment scraping only for r/{args.subreddit}...")
-        posts_processed, total_comments = scraper.scrape_comments_for_posts()
-        logger.info(f"Completed: {posts_processed} posts, {total_comments} comments")
     elif args.metadata_only:
         logger.info(f"Updating subreddit metadata for r/{args.subreddit}...")
         updated = scraper.update_subreddit_metadata_if_needed()

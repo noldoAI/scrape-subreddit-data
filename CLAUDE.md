@@ -10,6 +10,37 @@ This is a **Reddit scraping system** with two deployment modes:
 
 **Key Architecture**: Each subreddit scraper runs in its own Docker container with isolated Reddit API credentials to avoid rate limit conflicts. All scrapers share a MongoDB database.
 
+## Project Structure
+
+```
+scrape-subreddit-data/
+├── api.py                    # FastAPI management server (main entry point)
+├── posts_scraper.py          # Posts scraping engine (runs in Docker containers)
+├── comments_scraper.py       # Comments scraping engine (runs in Docker containers)
+├── config.py                 # Centralized configuration
+├── rate_limits.py            # Reddit API rate limiting utility
+├── embedding_worker.py       # Background embedding worker
+│
+├── api/                      # API module helpers (partial extraction)
+│   ├── models.py             # Pydantic models
+│   └── services/
+│       └── encryption.py     # Credential encryption
+│
+├── discovery/                # Semantic search & subreddit discovery
+│   ├── discover_subreddits.py    # Search Reddit for subreddits
+│   ├── generate_embeddings.py    # Generate semantic embeddings
+│   ├── semantic_search.py        # CLI semantic search tool
+│   └── setup_vector_index.py     # MongoDB vector index setup
+│
+├── tools/                    # Maintenance utilities
+│   └── repair_ghost_posts.py # Data integrity repair
+│
+├── docs/                     # Documentation
+├── Dockerfile               # Scraper container image
+├── Dockerfile.api           # API server container image
+└── docker-compose*.yml      # Container orchestration
+```
+
 ## Common Commands
 
 ### API Management Mode (Recommended)
@@ -31,13 +62,16 @@ docker-compose -f docker-compose.api.yml down
 # http://localhost:8000 (or port 80 if using the default docker-compose config)
 
 # List all scraper containers
-docker ps --filter "name=reddit-scraper-"
+docker ps --filter "name=reddit-posts-scraper-"
+docker ps --filter "name=reddit-comments-scraper-"
 
 # View logs from a specific scraper container
-docker logs reddit-scraper-wallstreetbets
+docker logs reddit-posts-scraper-wallstreetbets
+docker logs reddit-comments-scraper-wallstreetbets
 
 # Stop all scraper containers
-docker stop $(docker ps --filter "name=reddit-scraper-" -q)
+docker stop $(docker ps --filter "name=reddit-posts-scraper-" -q)
+docker stop $(docker ps --filter "name=reddit-comments-scraper-" -q)
 ```
 
 ### Standalone Mode (Alternative)
@@ -46,20 +80,21 @@ docker stop $(docker ps --filter "name=reddit-scraper-" -q)
 # Install dependencies
 pip install -r requirements.txt
 
-# Run scraper for a specific subreddit
-python reddit_scraper.py SUBREDDIT_NAME --posts-limit 1000 --interval 300 --comment-batch 20
+# Run POSTS scraper for a specific subreddit
+python posts_scraper.py SUBREDDIT_NAME --posts-limit 1000 --interval 300
+
+# Run COMMENTS scraper for a specific subreddit
+python comments_scraper.py SUBREDDIT_NAME --interval 300 --comment-batch 12
 
 # Show statistics only
-python reddit_scraper.py SUBREDDIT_NAME --stats
-
-# Run comment scraping only
-python reddit_scraper.py SUBREDDIT_NAME --comments-only
+python posts_scraper.py SUBREDDIT_NAME --stats
+python comments_scraper.py SUBREDDIT_NAME --stats
 
 # Update subreddit metadata only
-python reddit_scraper.py SUBREDDIT_NAME --metadata-only
+python posts_scraper.py SUBREDDIT_NAME --metadata-only
 
-# Using Docker Compose with standalone mode
-docker-compose --env-file .env.wallstreetbets up -d
+# Using Docker Compose with standalone mode (runs both scrapers)
+docker-compose --env-file .env up -d
 docker-compose logs -f
 docker-compose down
 ```
@@ -69,27 +104,35 @@ docker-compose down
 ### Core Components
 
 1. **`api.py`** - FastAPI management server
-   - Creates/manages Docker containers for each subreddit scraper
+   - Creates/manages Docker containers for posts and comments scrapers
    - Stores scraper configurations and encrypted credentials in MongoDB (`reddit_scrapers` collection)
    - Provides REST API endpoints and web dashboard
    - Monitors container health and auto-restarts failed scrapers
-   - Each API endpoint manages containers via Docker commands
+   - Supports `scraper_type` field: "posts" or "comments"
 
-2. **`reddit_scraper.py`** - Unified scraping engine (runs in containers)
-   - Single Python process handles all three scraping phases in a continuous loop:
-     - **Phase 1**: Posts scraping (every N seconds based on config)
-     - **Phase 2**: Smart comment updates (prioritized queue system)
-     - **Phase 3**: Subreddit metadata (every 24 hours)
+2. **`posts_scraper.py`** - Posts scraping engine (runs in containers)
+   - Continuous loop handling two phases:
+     - **Phase 1**: Posts scraping (multi-sort: new, top, rising)
+     - **Phase 2**: Subreddit metadata (every 24 hours)
    - Uses PRAW library to interact with Reddit API
-   - Implements intelligent comment update prioritization
+   - First-run historical fetch (month of top posts)
 
-3. **`config.py`** - Centralized configuration
+3. **`comments_scraper.py`** - Comments scraping engine (runs in containers)
+   - Continuous loop for comment scraping with intelligent prioritization:
+     - **HIGHEST**: Posts never scraped (initial scrape)
+     - **HIGH**: High-activity posts (>100 comments) - every 2 hours
+     - **MEDIUM**: Medium-activity posts (20-100 comments) - every 6 hours
+     - **LOW**: Low-activity posts (<20 comments) - every 24 hours
+   - Depth-limited scraping (top 3 levels for efficiency)
+   - Deduplication to avoid re-scraping existing comments
+
+4. **`config.py`** - Centralized configuration
    - Database name: `"noldo"`
    - Collection names: `reddit_posts`, `reddit_comments`, `subreddit_metadata`, `reddit_scrapers`, `reddit_accounts`
-   - Default scraper settings (interval, limits, batch sizes)
+   - Separate configs: `DEFAULT_POSTS_SCRAPER_CONFIG` and `DEFAULT_COMMENTS_SCRAPER_CONFIG`
    - Docker, API, monitoring, and security configurations
 
-4. **`rate_limits.py`** - Reddit API rate limiting
+5. **`rate_limits.py`** - Reddit API rate limiting
    - Monitors Reddit API quota (remaining/used requests)
    - Automatically pauses when rate limit is low
    - Waits for rate limit reset when necessary
@@ -99,14 +142,22 @@ docker-compose down
 ```
 Web Dashboard/API Request
          ↓
-    api.py creates Docker container
+    api.py creates Docker container(s)
          ↓
-Container runs reddit_scraper.py with unique credentials
-         ↓
-    Continuous 3-phase loop:
-    1. Scrape hot posts → Update MongoDB (reddit_posts)
-    2. Smart comment updates → Update MongoDB (reddit_comments)
-    3. Metadata scraping → Update MongoDB (subreddit_metadata)
+   ┌──────────────────────────────────────────────────┐
+   │   POSTS SCRAPER CONTAINER                         │
+   │   (reddit-posts-scraper-{subreddit})              │
+   │   └── posts_scraper.py                            │
+   │       1. Scrape posts → MongoDB (reddit_posts)    │
+   │       2. Update metadata → MongoDB (subreddit_*)  │
+   └──────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────┐
+   │   COMMENTS SCRAPER CONTAINER                      │
+   │   (reddit-comments-scraper-{subreddit})           │
+   │   └── comments_scraper.py                         │
+   │       Priority-based comment scraping             │
+   │       → MongoDB (reddit_comments)                 │
+   └──────────────────────────────────────────────────┘
          ↓
     Container status tracked in MongoDB (reddit_scrapers)
          ↓
@@ -173,22 +224,22 @@ Container runs reddit_scraper.py with unique credentials
 - `retry_backoff_factor`: Exponential backoff multiplier (default: `2` = 2s, 4s, 8s)
 - `verify_before_marking`: Enable verification step before marking posts scraped (default: `True`)
 
-**Repair Utility** ([repair_ghost_posts.py](repair_ghost_posts.py)):
+**Repair Utility** ([tools/repair_ghost_posts.py](tools/repair_ghost_posts.py)):
 ```bash
 # Show statistics about data integrity issues
-python repair_ghost_posts.py --stats-only
+python tools/repair_ghost_posts.py --stats-only
 
 # Show what would be repaired (dry run)
-python repair_ghost_posts.py --dry-run
+python tools/repair_ghost_posts.py --dry-run
 
 # Actually repair ghost posts
-python repair_ghost_posts.py
+python tools/repair_ghost_posts.py
 
 # Repair specific subreddit
-python repair_ghost_posts.py --subreddit wallstreetbets
+python tools/repair_ghost_posts.py --subreddit wallstreetbets
 
 # Also repair incomplete posts (missing >10% of comments)
-python repair_ghost_posts.py --include-incomplete
+python tools/repair_ghost_posts.py --include-incomplete
 ```
 
 ### First-Run Historical Fetch (v1.2+)
@@ -250,7 +301,9 @@ Query uses `$or` conditions with `initial_comments_scraped`, `num_comments`, and
 
 ### Container Isolation Strategy
 
-- Each subreddit runs in its own Docker container (named `reddit-scraper-{subreddit}`)
+- Each subreddit can have two Docker containers:
+  - Posts: `reddit-posts-scraper-{subreddit}`
+  - Comments: `reddit-comments-scraper-{subreddit}`
 - Containers have unique Reddit API credentials (stored encrypted in MongoDB)
 - Prevents rate limit conflicts between scrapers
 - API server mounts Docker socket (`/var/run/docker.sock`) to manage containers
@@ -318,7 +371,7 @@ MONGODB_URI=mongodb+srv://...
 ### When Adding New Scraper Features
 
 - **Update config.py first**: Add new configuration options to `DEFAULT_SCRAPER_CONFIG` or other relevant config dictionaries
-- **Container restart required**: Changes to reddit_scraper.py require rebuilding Docker image and restarting containers
+- **Container restart required**: Changes to posts_scraper.py or comments_scraper.py require rebuilding Docker image and restarting containers
 - **API changes**: If modifying API endpoints, update both the endpoint handler and the HTML dashboard in api.py
 
 ### Rate Limiting Best Practices
@@ -332,7 +385,7 @@ MONGODB_URI=mongodb+srv://...
 1. API receives start request with credentials
 2. Credentials encrypted and stored in MongoDB
 3. Container created with environment variables (decrypted credentials)
-4. Container runs `reddit_scraper.py` with command-line args
+4. Container runs `posts_scraper.py` or `comments_scraper.py` with command-line args
 5. Health check monitors container every 30 seconds
 6. If failed and `auto_restart=True`, API restarts container after cooldown
 7. Container logs accessible via `docker logs {container_name}` or API endpoint
@@ -351,33 +404,38 @@ export R_USER_AGENT=...
 export MONGODB_URI=...
 
 # Run scraper directly
-python reddit_scraper.py wallstreetbets --stats
-python reddit_scraper.py wallstreetbets --posts-limit 100 --interval 60 --comment-batch 5
+python posts_scraper.py wallstreetbets --stats
+python posts_scraper.py wallstreetbets --posts-limit 100 --interval 60
+
+python comments_scraper.py wallstreetbets --stats
+python comments_scraper.py wallstreetbets --interval 60 --comment-batch 5
 ```
 
 ### Debugging Container Issues
 
 ```bash
 # Check if container is running
-docker ps -a --filter "name=reddit-scraper-wallstreetbets"
+docker ps -a --filter "name=reddit-posts-scraper-wallstreetbets"
+docker ps -a --filter "name=reddit-comments-scraper-wallstreetbets"
 
 # View container logs
-docker logs reddit-scraper-wallstreetbets --tail 100
+docker logs reddit-posts-scraper-wallstreetbets --tail 100
+docker logs reddit-comments-scraper-wallstreetbets --tail 100
 
 # Inspect container details
-docker inspect reddit-scraper-wallstreetbets
+docker inspect reddit-posts-scraper-wallstreetbets
 
 # Enter running container for debugging
-docker exec -it reddit-scraper-wallstreetbets bash
+docker exec -it reddit-posts-scraper-wallstreetbets bash
 
 # Check resource usage
-docker stats reddit-scraper-wallstreetbets
+docker stats reddit-posts-scraper-wallstreetbets
 ```
 
 ### Common Issues
 
 **Container exits immediately**:
-- Check logs: `docker logs reddit-scraper-{subreddit}`
+- Check logs: `docker logs reddit-posts-scraper-{subreddit}` or `docker logs reddit-comments-scraper-{subreddit}`
 - Verify credentials are correct
 - Check MongoDB connection string
 - Ensure `reddit-scraper` image exists: `docker images | grep reddit-scraper`
@@ -395,14 +453,14 @@ docker stats reddit-scraper-wallstreetbets
 **Ghost posts (marked scraped with zero comments)**:
 - **Symptom**: Posts have `comments_scraped: True` but no comments in database
 - **Cause**: Fixed in v1.1+ - earlier versions had a bug where posts were marked before verifying comments were saved
-- **Solution**: Run `python repair_ghost_posts.py` to identify and fix affected posts
+- **Solution**: Run `python tools/repair_ghost_posts.py` to identify and fix affected posts
 - **Prevention**: Ensure `verify_before_marking: True` in config (default in v1.1+)
 
 **Incomplete comment data (missing comments)**:
 - **Symptom**: Post has fewer comments in DB than `num_comments` field indicates
 - **Cause (v1.2+)**: Intentional depth limiting (`max_comment_depth: 3`) - captures top 3 levels only for speed
 - **Cause (v1.1)**: Earlier versions used `replace_more(limit=10)` which missed deeply nested comments
-- **Solution**: This is expected behavior in v1.2+ (breadth over depth strategy). For v1.1 data: `python repair_ghost_posts.py --include-incomplete`
+- **Solution**: This is expected behavior in v1.2+ (breadth over depth strategy). For v1.1 data: `python tools/repair_ghost_posts.py --include-incomplete`
 - **Note**: v1.2+ prioritizes covering more posts with meaningful comments over capturing every deeply nested reply
 
 **Verification failures in logs**:
@@ -551,8 +609,384 @@ These are defined in api.py and accessible via `GET /presets` endpoint.
 
 **To customize** (via dashboard or command line):
 ```bash
-python reddit_scraper.py subreddit \
+python posts_scraper.py subreddit \
   --posts-limit 150 \
   --comment-batch 8 \
   --sorting-methods "new,top,rising"
+```
+
+## Semantic Subreddit Search (v1.3+)
+
+The system includes a **semantic search engine** for discovering relevant subreddits using natural language queries rather than keyword matching.
+
+### **Overview**
+
+Search for subreddits by meaning: `"building b2b saas"` → finds r/SaaS, r/startups, r/Entrepreneur
+
+**Technology Stack**:
+- **Embedding Model**: `nomic-ai/nomic-embed-text-v2` (768 dimensions, trained on Reddit data)
+- **Vector Storage**: MongoDB Atlas Vector Search (HNSW indexing)
+- **Library**: `sentence-transformers` (100% open source)
+- **Cost**: $0 (local CPU inference, no API fees)
+
+### **Key Features**
+
+1. **Semantic Understanding**: Finds relevant subreddits even without exact keyword matches
+2. **Context-Rich Embeddings**: Uses rules, guidelines, descriptions, and sample posts
+3. **Hybrid Search**: Combines semantic similarity with metadata filters (subscribers, NSFW, language)
+4. **100% Open Source**: No API costs, full control, runs on your infrastructure
+
+### **Usage**
+
+#### **1. Discover Subreddits by Topic**
+
+```bash
+# Search Reddit and scrape comprehensive metadata
+python discovery/discover_subreddits.py --query "saas" --limit 50
+
+# Multiple queries at once
+python discovery/discover_subreddits.py --query "startup,entrepreneur,business" --limit 50
+```
+
+**What it collects**:
+- Basic metadata (title, description, subscribers, etc.)
+- Community rules (topic indicators)
+- Post guidelines (detailed context)
+- Sample posts (top 20 from last month)
+
+#### **2. Generate Embeddings**
+
+```bash
+# Generate embeddings for all discovered subreddits
+python discovery/generate_embeddings.py --batch-size 32
+
+# Force regenerate embeddings
+python discovery/generate_embeddings.py --force
+
+# Check embedding statistics
+python discovery/generate_embeddings.py --stats
+```
+
+**Performance** (CPU):
+- 10 subreddits: ~30 seconds
+- 100 subreddits: ~5 minutes
+- 1000 subreddits: ~45 minutes
+
+#### **3. Setup Vector Search Index**
+
+```bash
+# Create MongoDB Atlas vector search index (one-time setup)
+python discovery/setup_vector_index.py
+
+# Verify index is working
+python discovery/setup_vector_index.py --verify-only
+
+# Recreate index
+python discovery/setup_vector_index.py --drop
+```
+
+**Index creation** takes 1-5 minutes. Requires MongoDB Atlas (M0+ free tier supported).
+
+#### **4. Semantic Search**
+
+```bash
+# Search by natural language query
+python discovery/semantic_search.py --query "building b2b saas" --limit 10
+
+# With filters
+python discovery/semantic_search.py --query "crypto trading" \
+  --limit 20 \
+  --min-subscribers 10000 \
+  --include-nsfw
+
+# Interactive mode
+python discovery/semantic_search.py --interactive
+```
+
+**Search Filters**:
+- `--min-subscribers`: Minimum subscriber count (default: 1000)
+- `--max-subscribers`: Maximum subscriber count
+- `--include-nsfw`: Include NSFW subreddits
+- `--language`: Language filter (e.g., "en")
+- `--type`: Subreddit type (public/private/restricted)
+
+### **REST API Endpoints**
+
+#### **Semantic Search**
+```bash
+POST /search/subreddits?query=building%20b2b%20saas&limit=10
+```
+
+**Response**:
+```json
+{
+  "query": "building b2b saas",
+  "count": 10,
+  "filters": {
+    "min_subscribers": 1000,
+    "exclude_nsfw": true
+  },
+  "results": [
+    {
+      "subreddit_name": "SaaS",
+      "title": "Software As a Service Companies...",
+      "public_description": "Discussions and useful links...",
+      "subscribers": 459668,
+      "score": 0.857
+    }
+  ]
+}
+```
+
+#### **Discover Subreddits**
+```bash
+POST /discover/subreddits?query=saas&limit=50
+```
+
+Searches Reddit, scrapes metadata, and stores in database.
+
+#### **Embedding Statistics**
+```bash
+GET /embeddings/stats
+```
+
+Shows embedding coverage and model information.
+
+### **Database Schema**
+
+**Collection**: `subreddit_discovery`
+
+```javascript
+{
+  // Identifiers
+  "subreddit_name": "SaaS",
+  "display_name": "SaaS",
+
+  // Text fields (for embeddings)
+  "title": "Software As a Service...",
+  "public_description": "Discussions and useful links...",
+  "description": "Full markdown description...",
+  "guidelines_text": "Posting guidelines...",
+  "rules_text": "Rule 1: ... | Rule 2: ...",
+  "sample_posts_titles": "Title 1 | Title 2 | ...",
+
+  // Structured data
+  "rules": [
+    {"short_name": "...", "description": "..."},
+    // ... more rules
+  ],
+  "sample_posts": [
+    {"title": "...", "score": 604, "num_comments": 234},
+    // ... top 20 posts
+  ],
+
+  // Metadata (for filtering)
+  "subscribers": 459668,
+  "active_user_count": 1234,
+  "subreddit_type": "public",
+  "over_18": false,
+  "lang": "en",
+  "advertiser_category": "Business / Finance",
+
+  // Embeddings (768 dimensions)
+  "embeddings": {
+    "combined_embedding": [0.123, -0.456, ...],  // 768 floats
+    "model": "nomic-embed-text-v2",
+    "dimensions": 768,
+    "generated_at": ISODate("2025-11-23...")
+  }
+}
+```
+
+### **How It Works**
+
+1. **Discovery**: Search Reddit for subreddits matching topics
+2. **Metadata Collection**: Scrape comprehensive data (rules, guidelines, sample posts)
+3. **Embedding Generation**: Combine all text fields into rich semantic representation
+4. **Vector Indexing**: Create MongoDB Atlas vector search index (HNSW algorithm)
+5. **Semantic Search**: Query embeddings using natural language, rank by cosine similarity
+
+### **Embedding Model Details**
+
+**nomic-embed-text-v2**:
+- **Parameters**: 475M (MoE architecture)
+- **Dimensions**: 768
+- **Context Window**: 8,192 tokens
+- **Training Data**: 1.6B contrastive pairs including **Reddit posts/comments**
+- **MTEB Score**: 81.2% (excellent accuracy)
+- **Performance**: ~2-3 embeddings/second on CPU
+- **Advantage**: Explicitly trained on Reddit data, optimized for social media text
+
+### **Example Queries**
+
+| Query | Top Results |
+|-------|-------------|
+| "building b2b saas" | r/SaaS, r/startups, r/Entrepreneur, r/B2B |
+| "cryptocurrency trading strategies" | r/CryptoCurrency, r/CryptoMarkets, r/BitcoinMarkets |
+| "indie game development tips" | r/gamedev, r/IndieDev, r/Unity3D |
+| "machine learning projects" | r/MachineLearning, r/learnmachinelearning, r/datascience |
+| "stock market investing advice" | r/stocks, r/investing, r/wallstreetbets |
+
+### **Cost Analysis**
+
+**One-Time Setup**:
+- Model download: ~1.8 GB (cached locally)
+- PyTorch dependencies: ~6.9 GB total disk space
+
+**Ongoing Costs**:
+- **Embedding generation**: $0 (CPU inference)
+- **Storage**: ~3 KB per subreddit (768 floats × 4 bytes)
+- **API calls**: $0 (no external APIs)
+- **Total**: Effectively **free** after initial setup
+
+**Compare to OpenAI Embeddings**:
+- OpenAI: $0.0001 per 1K tokens
+- For 1000 subreddits × 2K tokens: ~$0.20/month
+- **Open source: $0** (infinite times cheaper)
+
+### **Performance Expectations**
+
+**Embedding Generation** (CPU, batch_size=32):
+- 10 subreddits: ~30 seconds
+- 100 subreddits: ~5 minutes
+- 1000 subreddits: ~45 minutes
+
+**Search Latency**:
+- Query embedding: ~20-50ms
+- Vector search (10K docs): <100ms
+- **Total**: <150ms per query
+
+**Accuracy**:
+- MTEB score: 81.2%
+- Trained on Reddit data
+- Captures semantic meaning effectively
+
+### **Troubleshooting**
+
+**"Failed to load model"**:
+```bash
+pip install sentence-transformers
+# Model will download automatically (~1.8GB)
+```
+
+**"Vector search failed"**:
+- Ensure MongoDB Atlas (not self-hosted MongoDB)
+- Create vector index: `python discovery/setup_vector_index.py`
+- Verify embeddings exist: `python discovery/generate_embeddings.py --stats`
+
+**"No results found"**:
+- Relax filters: `--min-subscribers 0`
+- Discover more subreddits: `python discovery/discover_subreddits.py`
+- Check embeddings: `python discovery/generate_embeddings.py --stats`
+
+### **Configuration**
+
+**config.py** settings:
+
+```python
+EMBEDDING_CONFIG = {
+    "model_name": "nomic-ai/nomic-embed-text-v2",
+    "dimensions": 768,
+    "context_window": 8192,
+    "batch_size": 32,
+    "similarity_metric": "cosine"
+}
+
+DISCOVERY_CONFIG = {
+    "collection_name": "subreddit_discovery",
+    "vector_index_name": "subreddit_vector_index",
+    "default_search_limit": 10,
+    "default_min_subscribers": 1000,
+    "sample_posts_limit": 20
+}
+
+EMBEDDING_WORKER_CONFIG = {
+    "enabled": True,
+    "check_interval": 60,           # Seconds between checks
+    "batch_size": 10,               # Max subreddits per batch
+    "metadata_vector_index_name": "metadata_vector_index"
+}
+```
+
+### **Files**
+
+| File | Purpose |
+|------|---------|
+| `discovery/discover_subreddits.py` | Search Reddit and scrape subreddit metadata |
+| `discovery/generate_embeddings.py` | Generate semantic embeddings for discovery collection |
+| `discovery/setup_vector_index.py` | Create MongoDB vector search index |
+| `discovery/semantic_search.py` | CLI semantic search tool |
+| `embedding_worker.py` | Background worker for metadata collection embeddings |
+| `tools/repair_ghost_posts.py` | Data integrity repair utility |
+| `api.py` | REST API endpoints for search & discovery |
+| `config.py` | Embedding and discovery configuration |
+
+### **Automatic Embeddings for Active Scrapers (v1.4+)**
+
+Subreddits being actively scraped now automatically get embeddings generated, making them searchable via semantic search.
+
+**How It Works:**
+1. When `posts_scraper.py` saves subreddit metadata, it sets `embedding_status: "pending"`
+2. Background worker in the API server processes pending embeddings every 60 seconds
+3. Embeddings are stored in the `subreddit_metadata` collection
+4. Both collections (discovery + metadata) can be searched
+
+**Data Flow:**
+```
+Scraper Container              API Server                    MongoDB
+┌─────────────────┐          ┌───────────────────┐         ┌──────────────────┐
+│ reddit_scraper  │          │ Background Worker │         │ subreddit_       │
+│                 │          │ (every 60s)       │         │ metadata         │
+│ Saves metadata  │─────────>│                   │         │                  │
+│ + sets:         │          │ 1. Query pending  │<────────│ embedding_status │
+│ embedding_      │          │ 2. Generate       │         │ : "pending"      │
+│ status:pending  │          │ 3. Save embedding │────────>│ embeddings.      │
+└─────────────────┘          └───────────────────┘         │ combined_        │
+                                                           │ embedding        │
+                                                           └──────────────────┘
+```
+
+**API Endpoints:**
+- `GET /embeddings/worker/status` - Worker status and statistics
+- `POST /embeddings/worker/process` - Manually trigger processing
+- `POST /embeddings/worker/process?subreddit=X` - Process specific subreddit
+
+**CLI Search Sources:**
+```bash
+# Search discovered subreddits (default)
+python discovery/semantic_search.py --query "stocks" --source discovery
+
+# Search actively scraped subreddits
+python discovery/semantic_search.py --query "stocks" --source active
+
+# Search both collections (deduplicates)
+python discovery/semantic_search.py --query "stocks" --source all
+```
+
+**Setup Vector Index for Metadata:**
+```bash
+# Create index on metadata collection
+python discovery/setup_vector_index.py --collection metadata
+
+# Create indexes on both collections
+python discovery/setup_vector_index.py --collection both
+```
+
+**Database Schema (subreddit_metadata):**
+```javascript
+{
+  // ... existing fields ...
+
+  // Embedding tracking
+  "embedding_status": "pending" | "complete" | "failed",
+  "embedding_requested_at": ISODate("..."),
+
+  // Embeddings (same structure as subreddit_discovery)
+  "embeddings": {
+    "combined_embedding": [/* 768 floats */],
+    "model": "nomic-embed-text-v2",
+    "dimensions": 768,
+    "generated_at": ISODate("...")
+  }
+}
 ```

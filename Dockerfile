@@ -18,7 +18,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY reddit_scraper.py .
+COPY posts_scraper.py .
+COPY comments_scraper.py .
 COPY config.py .
 COPY rate_limits.py .
 COPY .env* ./
@@ -29,7 +30,7 @@ USER appuser
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import reddit_scraper; print('OK')" || exit 1
+    CMD python -c "import posts_scraper; print('OK')" || exit 1
 
-# Default command - scrape wallstreetbets
-CMD ["python", "reddit_scraper.py", "wallstreetbets"] 
+# Default command - scrape posts from wallstreetbets
+CMD ["python", "posts_scraper.py", "wallstreetbets"]

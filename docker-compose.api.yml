@@ -25,7 +25,7 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      # Mount the current directory so the API can access reddit_scraper.py
+      # Mount the current directory so the API can access posts_scraper.py and comments_scraper.py
       - .:/app
       # Mount Docker socket to allow API to manage other containers
       - /var/run/docker.sock:/var/run/docker.sock
@@ -35,7 +35,7 @@ services:
     depends_on:
       - reddit-scraper-builder
 
-  # Build the reddit-scraper image that the API will use to create scraper containers
+  # Build the reddit-scraper image that the API will use to create posts/comments scraper containers
   reddit-scraper-builder:
     build:
       context: .

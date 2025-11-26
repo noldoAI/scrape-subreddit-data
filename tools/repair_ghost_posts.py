@@ -7,7 +7,7 @@ comments in the database. This addresses the data inconsistency bug where posts
 were marked as comments_scraped: True even though no comments were saved.
 
 Usage:
-    python repair_ghost_posts.py [--subreddit SUBREDDIT] [--dry-run] [--stats-only]
+    python tools/repair_ghost_posts.py [--subreddit SUBREDDIT] [--dry-run] [--stats-only]
 
 Options:
     --subreddit SUBREDDIT  Only repair posts from specific subreddit
@@ -17,9 +17,13 @@ Options:
 
 import pymongo
 import os
+import sys
 import argparse
 from datetime import datetime, UTC
 from dotenv import load_dotenv
+
+# Add parent directory to path for imports when run from tools/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DATABASE_NAME, COLLECTIONS
 
 # Load environment

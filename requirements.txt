@@ -4,4 +4,5 @@ python-dotenv==1.0.0
 fastapi
 uvicorn[standard]
 pydantic
-cryptography 
+cryptography
+sentence-transformers>=3.0.0 
