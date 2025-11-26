@@ -199,7 +199,7 @@ class EmbeddingWorker:
         cursor = self.collection.find(query).sort("embedding_requested_at", 1).limit(limit)
         return list(cursor)
 
-    def generate_embedding(self, metadata: Dict) -> Optional[List[float]]:
+    def generate_embedding(self, metadata: Dict) -> tuple[Optional[List[float]], Optional[str]]:
         """
         Generate embedding vector for a subreddit.
 
@@ -207,19 +207,27 @@ class EmbeddingWorker:
             metadata: Subreddit metadata document
 
         Returns:
-            768-dimensional embedding vector, or None if generation fails
+            Tuple of (embedding_vector, error_message)
+            - (embedding, None) on success
+            - (None, error_message) on failure
         """
         model = get_embedding_model()
         if model is None:
-            return None
+            return None, "Embedding model not loaded (check sentence-transformers installation)"
 
         try:
             combined_text = combine_text_fields(metadata)
+            if not combined_text or not combined_text.strip():
+                return None, "No text content available for embedding"
+
             embedding = model.encode(combined_text, convert_to_numpy=True)
-            return embedding.tolist()
+            if embedding is None:
+                return None, "Model encode() returned None"
+            return embedding.tolist(), None
         except Exception as e:
+            error_msg = f"Encoding failed: {str(e)}"
             logger.error(f"Embedding generation failed for r/{metadata.get('subreddit_name')}: {e}")
-            return None
+            return None, error_msg
 
     def process_one(self, metadata: Dict) -> bool:
         """
@@ -237,7 +245,7 @@ class EmbeddingWorker:
         try:
             logger.info(f"Generating embedding for r/{subreddit_name}...")
 
-            embedding = self.generate_embedding(metadata)
+            embedding, error_msg = self.generate_embedding(metadata)
 
             if embedding:
                 # Success - save embedding and mark complete
@@ -262,17 +270,17 @@ class EmbeddingWorker:
                 self._stats["processed"] += 1
                 return True
             else:
-                # Failed - increment retry count
+                # Failed - increment retry count with specific error
                 retry_count = metadata.get("embedding_retry_count", 0) + 1
                 self.collection.update_one(
                     {"_id": doc_id},
                     {"$set": {
                         "embedding_status": "failed",
-                        "embedding_error": "Model returned None",
+                        "embedding_error": error_msg or "Unknown error",
                         "embedding_retry_count": retry_count
                     }}
                 )
-                logger.warning(f"✗ Embedding failed for r/{subreddit_name} (retry {retry_count})")
+                logger.warning(f"✗ Embedding failed for r/{subreddit_name}: {error_msg} (retry {retry_count})")
                 self._stats["failed"] += 1
                 return False
 
@@ -452,6 +460,11 @@ def main():
         action='store_true',
         help='Run as continuous daemon (for testing)'
     )
+    parser.add_argument(
+        '--reset-failed',
+        action='store_true',
+        help='Reset all failed embeddings to pending for retry'
+    )
 
     args = parser.parse_args()
 
@@ -471,14 +484,28 @@ def main():
 
     if args.stats:
         stats = worker.get_stats()
+        failed_count = worker.collection.count_documents({"embedding_status": "failed"})
         print("\n📊 Embedding Worker Statistics")
         print("=" * 50)
         print(f"Model loaded: {stats['model_loaded']}")
         print(f"Pending: {stats['pending_count']}")
+        print(f"Failed: {failed_count}")
         print(f"Complete: {stats['complete_count']}")
         print(f"Total processed: {stats['total_processed']}")
         print(f"Total failed: {stats['total_failed']}")
         print("=" * 50)
+        return
+
+    if args.reset_failed:
+        # Reset all failed embeddings to pending
+        result = worker.collection.update_many(
+            {"embedding_status": "failed"},
+            {
+                "$set": {"embedding_status": "pending"},
+                "$unset": {"embedding_error": "", "embedding_retry_count": ""}
+            }
+        )
+        print(f"\n✅ Reset {result.modified_count} failed embeddings to pending")
         return
 
     if args.subreddit:

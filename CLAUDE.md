@@ -268,6 +268,80 @@ First cycle:  "Using 'month' time filter for historical data" → 1000+ posts
 Second cycle: "Using 'day' time filter" → ~25 new daily posts
 ```
 
+### Multi-Subreddit Mode (v1.5+)
+
+Scrape up to **10 subreddits with 1 Reddit account** in a single container using rotation.
+
+**Key Features:**
+- 1 container handles multiple subreddits in rotation
+- First run: fetches maximum historical posts (month of top posts)
+- Subsequent runs: only new posts (upsert deduplication)
+- Dashboard support with mode selector
+
+**CLI Usage:**
+```bash
+# Single subreddit (backwards compatible)
+python posts_scraper.py wallstreetbets --posts-limit 100 --interval 60
+
+# Multi-subreddit rotation (NEW)
+python posts_scraper.py stocks,investing,wallstreetbets --posts-limit 50 --interval 300
+
+# Show stats for multiple subreddits
+python posts_scraper.py stocks,investing --stats
+```
+
+**API Usage:**
+```bash
+POST /scrapers/start-flexible
+{
+    "subreddits": ["stocks", "investing", "wallstreetbets", "options", "stockmarket"],
+    "scraper_type": "posts",
+    "posts_limit": 50,
+    "interval": 300,
+    "saved_account_name": "my_account"
+}
+```
+
+**Dashboard:**
+- Select "Multi-Subreddit (up to 10)" from Mode dropdown
+- Enter comma-separated subreddit names
+- Container named: `reddit-posts-scraper-multi-5subs-stocks`
+
+**Recommended Config for 10 Subreddits:**
+- `posts_limit`: 50 per subreddit
+- `interval`: 300 seconds (5 min between full rotations)
+- `sorting_methods`: ["new", "top"] (reduce from 3 to 2)
+
+**Rate Limit Analysis:**
+
+| Mode | Subreddits | API Calls/Cycle | Safe? |
+|------|------------|-----------------|-------|
+| Single | 1 | ~12 calls | Yes |
+| Multi | 10 | ~70-100 calls | Yes (well under 600/10min) |
+
+**How Rotation Works:**
+1. Process subreddit 1: scrape posts, save to DB, update metadata
+2. Brief pause (2 seconds)
+3. Process subreddit 2: scrape posts, save to DB, update metadata
+4. ... repeat for all subreddits
+5. Wait for interval (e.g., 300 seconds)
+6. Start next rotation cycle
+
+**Error Handling:**
+- If one subreddit fails, continues with next (try/catch per subreddit)
+- Errors logged but don't stop the rotation
+- Cycle summary shows processed/total and error count
+
+**Configuration** (config.py):
+```python
+MULTI_SCRAPER_CONFIG = {
+    "max_subreddits_per_container": 10,
+    "rotation_delay": 2,              # Seconds between subreddits
+    "recommended_posts_limit": 50,
+    "recommended_interval": 300,
+}
+```
+
 ### Smart Comment Update Prioritization
 
 The system uses intelligent priority-based comment updates based on post activity:
