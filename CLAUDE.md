@@ -10,6 +10,36 @@ This is a **Reddit scraping system** with two deployment modes:
 
 **Key Architecture**: Each subreddit scraper runs in its own Docker container with isolated Reddit API credentials to avoid rate limit conflicts. All scrapers share a MongoDB database.
 
+## Project Structure
+
+```
+scrape-subreddit-data/
+├── api.py                    # FastAPI management server (main entry point)
+├── reddit_scraper.py         # Unified scraping engine (runs in Docker containers)
+├── config.py                 # Centralized configuration
+├── rate_limits.py            # Reddit API rate limiting utility
+├── embedding_worker.py       # Background embedding worker
+│
+├── api/                      # API module helpers (partial extraction)
+│   ├── models.py             # Pydantic models
+│   └── services/
+│       └── encryption.py     # Credential encryption
+│
+├── discovery/                # Semantic search & subreddit discovery
+│   ├── discover_subreddits.py    # Search Reddit for subreddits
+│   ├── generate_embeddings.py    # Generate semantic embeddings
+│   ├── semantic_search.py        # CLI semantic search tool
+│   └── setup_vector_index.py     # MongoDB vector index setup
+│
+├── tools/                    # Maintenance utilities
+│   └── repair_ghost_posts.py # Data integrity repair
+│
+├── docs/                     # Documentation
+├── Dockerfile               # Scraper container image
+├── Dockerfile.api           # API server container image
+└── docker-compose*.yml      # Container orchestration
+```
+
 ## Common Commands
 
 ### API Management Mode (Recommended)
@@ -173,22 +203,22 @@ Container runs reddit_scraper.py with unique credentials
 - `retry_backoff_factor`: Exponential backoff multiplier (default: `2` = 2s, 4s, 8s)
 - `verify_before_marking`: Enable verification step before marking posts scraped (default: `True`)
 
-**Repair Utility** ([repair_ghost_posts.py](repair_ghost_posts.py)):
+**Repair Utility** ([tools/repair_ghost_posts.py](tools/repair_ghost_posts.py)):
 ```bash
 # Show statistics about data integrity issues
-python repair_ghost_posts.py --stats-only
+python tools/repair_ghost_posts.py --stats-only
 
 # Show what would be repaired (dry run)
-python repair_ghost_posts.py --dry-run
+python tools/repair_ghost_posts.py --dry-run
 
 # Actually repair ghost posts
-python repair_ghost_posts.py
+python tools/repair_ghost_posts.py
 
 # Repair specific subreddit
-python repair_ghost_posts.py --subreddit wallstreetbets
+python tools/repair_ghost_posts.py --subreddit wallstreetbets
 
 # Also repair incomplete posts (missing >10% of comments)
-python repair_ghost_posts.py --include-incomplete
+python tools/repair_ghost_posts.py --include-incomplete
 ```
 
 ### First-Run Historical Fetch (v1.2+)
@@ -395,14 +425,14 @@ docker stats reddit-scraper-wallstreetbets
 **Ghost posts (marked scraped with zero comments)**:
 - **Symptom**: Posts have `comments_scraped: True` but no comments in database
 - **Cause**: Fixed in v1.1+ - earlier versions had a bug where posts were marked before verifying comments were saved
-- **Solution**: Run `python repair_ghost_posts.py` to identify and fix affected posts
+- **Solution**: Run `python tools/repair_ghost_posts.py` to identify and fix affected posts
 - **Prevention**: Ensure `verify_before_marking: True` in config (default in v1.1+)
 
 **Incomplete comment data (missing comments)**:
 - **Symptom**: Post has fewer comments in DB than `num_comments` field indicates
 - **Cause (v1.2+)**: Intentional depth limiting (`max_comment_depth: 3`) - captures top 3 levels only for speed
 - **Cause (v1.1)**: Earlier versions used `replace_more(limit=10)` which missed deeply nested comments
-- **Solution**: This is expected behavior in v1.2+ (breadth over depth strategy). For v1.1 data: `python repair_ghost_posts.py --include-incomplete`
+- **Solution**: This is expected behavior in v1.2+ (breadth over depth strategy). For v1.1 data: `python tools/repair_ghost_posts.py --include-incomplete`
 - **Note**: v1.2+ prioritizes covering more posts with meaningful comments over capturing every deeply nested reply
 
 **Verification failures in logs**:
@@ -584,10 +614,10 @@ Search for subreddits by meaning: `"building b2b saas"` → finds r/SaaS, r/star
 
 ```bash
 # Search Reddit and scrape comprehensive metadata
-python discover_subreddits.py --query "saas" --limit 50
+python discovery/discover_subreddits.py --query "saas" --limit 50
 
 # Multiple queries at once
-python discover_subreddits.py --query "startup,entrepreneur,business" --limit 50
+python discovery/discover_subreddits.py --query "startup,entrepreneur,business" --limit 50
 ```
 
 **What it collects**:
@@ -600,13 +630,13 @@ python discover_subreddits.py --query "startup,entrepreneur,business" --limit 50
 
 ```bash
 # Generate embeddings for all discovered subreddits
-python generate_embeddings.py --batch-size 32
+python discovery/generate_embeddings.py --batch-size 32
 
 # Force regenerate embeddings
-python generate_embeddings.py --force
+python discovery/generate_embeddings.py --force
 
 # Check embedding statistics
-python generate_embeddings.py --stats
+python discovery/generate_embeddings.py --stats
 ```
 
 **Performance** (CPU):
@@ -618,13 +648,13 @@ python generate_embeddings.py --stats
 
 ```bash
 # Create MongoDB Atlas vector search index (one-time setup)
-python setup_vector_index.py
+python discovery/setup_vector_index.py
 
 # Verify index is working
-python setup_vector_index.py --verify-only
+python discovery/setup_vector_index.py --verify-only
 
 # Recreate index
-python setup_vector_index.py --drop
+python discovery/setup_vector_index.py --drop
 ```
 
 **Index creation** takes 1-5 minutes. Requires MongoDB Atlas (M0+ free tier supported).
@@ -633,16 +663,16 @@ python setup_vector_index.py --drop
 
 ```bash
 # Search by natural language query
-python semantic_search_subreddits.py --query "building b2b saas" --limit 10
+python discovery/semantic_search.py --query "building b2b saas" --limit 10
 
 # With filters
-python semantic_search_subreddits.py --query "crypto trading" \
+python discovery/semantic_search.py --query "crypto trading" \
   --limit 20 \
   --min-subscribers 10000 \
   --include-nsfw
 
 # Interactive mode
-python semantic_search_subreddits.py --interactive
+python discovery/semantic_search.py --interactive
 ```
 
 **Search Filters**:
@@ -813,13 +843,13 @@ pip install sentence-transformers
 
 **"Vector search failed"**:
 - Ensure MongoDB Atlas (not self-hosted MongoDB)
-- Create vector index: `python setup_vector_index.py`
-- Verify embeddings exist: `python generate_embeddings.py --stats`
+- Create vector index: `python discovery/setup_vector_index.py`
+- Verify embeddings exist: `python discovery/generate_embeddings.py --stats`
 
 **"No results found"**:
 - Relax filters: `--min-subscribers 0`
-- Discover more subreddits: `python discover_subreddits.py`
-- Check embeddings: `python generate_embeddings.py --stats`
+- Discover more subreddits: `python discovery/discover_subreddits.py`
+- Check embeddings: `python discovery/generate_embeddings.py --stats`
 
 ### **Configuration**
 
@@ -854,11 +884,12 @@ EMBEDDING_WORKER_CONFIG = {
 
 | File | Purpose |
 |------|---------|
-| `discover_subreddits.py` | Search Reddit and scrape subreddit metadata |
-| `generate_embeddings.py` | Generate semantic embeddings for discovery collection |
+| `discovery/discover_subreddits.py` | Search Reddit and scrape subreddit metadata |
+| `discovery/generate_embeddings.py` | Generate semantic embeddings for discovery collection |
+| `discovery/setup_vector_index.py` | Create MongoDB vector search index |
+| `discovery/semantic_search.py` | CLI semantic search tool |
 | `embedding_worker.py` | Background worker for metadata collection embeddings |
-| `setup_vector_index.py` | Create MongoDB vector search index |
-| `semantic_search_subreddits.py` | CLI semantic search tool |
+| `tools/repair_ghost_posts.py` | Data integrity repair utility |
 | `api.py` | REST API endpoints for search & discovery |
 | `config.py` | Embedding and discovery configuration |
 
@@ -895,22 +926,22 @@ Scraper Container              API Server                    MongoDB
 **CLI Search Sources:**
 ```bash
 # Search discovered subreddits (default)
-python semantic_search_subreddits.py --query "stocks" --source discovery
+python discovery/semantic_search.py --query "stocks" --source discovery
 
 # Search actively scraped subreddits
-python semantic_search_subreddits.py --query "stocks" --source active
+python discovery/semantic_search.py --query "stocks" --source active
 
 # Search both collections (deduplicates)
-python semantic_search_subreddits.py --query "stocks" --source all
+python discovery/semantic_search.py --query "stocks" --source all
 ```
 
 **Setup Vector Index for Metadata:**
 ```bash
 # Create index on metadata collection
-python setup_vector_index.py --collection metadata
+python discovery/setup_vector_index.py --collection metadata
 
 # Create indexes on both collections
-python setup_vector_index.py --collection both
+python discovery/setup_vector_index.py --collection both
 ```
 
 **Database Schema (subreddit_metadata):**

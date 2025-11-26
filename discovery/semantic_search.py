@@ -3,13 +3,13 @@
 Semantic Subreddit Search Engine
 
 Search for subreddits by semantic meaning rather than keywords.
-Uses nomic-embed-text-v2 embeddings and MongoDB Atlas Vector Search.
+Uses nomic-embed-text-v1.5 embeddings and MongoDB Atlas Vector Search.
 
 Usage:
-    python semantic_search_subreddits.py --query "building b2b saas"
-    python semantic_search_subreddits.py --query "cryptocurrency trading" --limit 20
-    python semantic_search_subreddits.py --query "indie game dev" --min-subscribers 10000
-    python semantic_search_subreddits.py --query "stocks" --source all  # Search both collections
+    python discovery/semantic_search.py --query "building b2b saas"
+    python discovery/semantic_search.py --query "cryptocurrency trading" --limit 20
+    python discovery/semantic_search.py --query "indie game dev" --min-subscribers 10000
+    python discovery/semantic_search.py --query "stocks" --source all  # Search both collections
 """
 
 import os
@@ -20,6 +20,8 @@ from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
+# Add parent directory to path for imports when run from discovery/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, EMBEDDING_CONFIG, COLLECTIONS
 
 # Setup logging

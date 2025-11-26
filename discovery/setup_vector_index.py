@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
 
+# Add parent directory to path for imports when run from discovery/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS
 
 # Setup logging
