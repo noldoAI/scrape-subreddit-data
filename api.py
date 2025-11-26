@@ -284,7 +284,8 @@ def delete_reddit_account(account_name: str):
 
 def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting",
                        container_id: str = None, container_name: str = None,
-                       last_error: str = None, scraper_type: str = "posts"):
+                       last_error: str = None, scraper_type: str = "posts",
+                       subreddits: list = None):
     """Save scraper configuration to database"""
     try:
         # Store credentials directly (no encryption - MongoDB already secured)
@@ -312,7 +313,8 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "auto_restart": config.auto_restart,
             "last_updated": datetime.now(UTC),
             "last_error": last_error,
-            "restart_count": 0
+            "restart_count": 0,
+            "subreddits": subreddits if subreddits else [subreddit]  # Store all subreddits for multi-mode
         }
 
         # Initialize metrics on first insert only
@@ -717,7 +719,7 @@ def run_scraper(config: ScraperConfig):
 
         # Save to database first (use first subreddit as primary key for multi-mode)
         primary_subreddit = subreddits[0] if is_multi else config.subreddit
-        save_scraper_to_db(primary_subreddit, config, "starting", container_name=container_name, scraper_type=scraper_type)
+        save_scraper_to_db(primary_subreddit, config, "starting", container_name=container_name, scraper_type=scraper_type, subreddits=subreddits)
 
         # Prepare environment variables for the container
         env_vars = [
@@ -1691,7 +1693,21 @@ async def dashboard():
                             </div>
                             <div class="scraper-details">
                                 <div class="scraper-content">
-                                    ${subredditList ? `<p><strong>Subreddits (${allSubreddits.length}):</strong> <span style="color: #a78bfa;">${subredditList}</span></p>` : ''}
+                                    ${isMulti ? `
+                                    <div style="margin-bottom: 12px;">
+                                        <strong>Subreddits (${allSubreddits.length}):</strong>
+                                        <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px;">
+                                            ${allSubreddits.map(s => {
+                                                const stats = info.subreddit_stats?.[s] || { posts: 0, comments: 0 };
+                                                return `<div style="background: #1a1a1a; padding: 6px 10px; border-radius: 4px; font-size: 13px;">
+                                                    <span style="color: #a78bfa;">r/${s}</span>
+                                                    <span style="color: #666; margin-left: 6px;">${stats.posts} / ${stats.comments}</span>
+                                                </div>`;
+                                            }).join('')}
+                                        </div>
+                                        <small style="color: #666; display: block; margin-top: 4px;">posts / comments</small>
+                                    </div>
+                                ` : ''}
                                     <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
                                     <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
                                     <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
@@ -2214,9 +2230,19 @@ async def list_scrapers():
             if len(all_subreddits) > 1:
                 db_total_posts = posts_collection.count_documents({"subreddit": {"$in": all_subreddits}})
                 db_total_comments = comments_collection.count_documents({"subreddit": {"$in": all_subreddits}})
+                # Get per-subreddit breakdown
+                subreddit_stats = {}
+                for sub in all_subreddits:
+                    subreddit_stats[sub] = {
+                        "posts": posts_collection.count_documents({"subreddit": sub}),
+                        "comments": comments_collection.count_documents({"subreddit": sub})
+                    }
             else:
                 db_total_posts = posts_collection.count_documents({"subreddit": subreddit})
                 db_total_comments = comments_collection.count_documents({"subreddit": subreddit})
+                subreddit_stats = {
+                    subreddit: {"posts": db_total_posts, "comments": db_total_comments}
+                }
 
             result[subreddit] = {
                 "status": container_status,
@@ -2244,6 +2270,7 @@ async def list_scrapers():
                     "total_posts": db_total_posts,
                     "total_comments": db_total_comments
                 },
+                "subreddit_stats": subreddit_stats,
                 "last_error": scraper_doc.get("last_error"),
                 "container_id": scraper_doc.get("container_id"),
                 "container_name": scraper_doc.get("container_name"),
