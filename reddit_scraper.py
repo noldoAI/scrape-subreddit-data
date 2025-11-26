@@ -829,16 +829,48 @@ class UnifiedRedditScraper:
             return None
     
     def save_subreddit_metadata(self, metadata):
-        """Save subreddit metadata to MongoDB with embedding status flag."""
+        """Save subreddit metadata to MongoDB with embedding status flag.
+
+        Only sets embedding_status to 'pending' if text fields used for
+        embedding generation have changed (avoids unnecessary re-embedding).
+        """
         if not metadata:
             return False
 
         try:
             subreddit_collection.create_index("subreddit_name", unique=True)
 
-            # Set embedding status to pending for background worker to process
-            metadata["embedding_status"] = "pending"
-            metadata["embedding_requested_at"] = datetime.now(UTC)
+            # Fields used for embedding generation
+            embedding_fields = [
+                'title', 'public_description', 'description',
+                'guidelines_text', 'rules_text', 'sample_posts_titles',
+                'advertiser_category'
+            ]
+
+            # Check if embedding-relevant fields have changed
+            existing = subreddit_collection.find_one(
+                {"subreddit_name": metadata["subreddit_name"]},
+                {field: 1 for field in embedding_fields}
+            )
+
+            needs_embedding = False
+            if not existing:
+                # New document - needs embedding
+                needs_embedding = True
+            else:
+                # Check if any embedding field changed
+                for field in embedding_fields:
+                    old_val = existing.get(field, '')
+                    new_val = metadata.get(field, '')
+                    if old_val != new_val:
+                        needs_embedding = True
+                        logger.debug(f"Embedding field '{field}' changed")
+                        break
+
+            # Only set pending if content changed
+            if needs_embedding:
+                metadata["embedding_status"] = "pending"
+                metadata["embedding_requested_at"] = datetime.now(UTC)
 
             result = subreddit_collection.update_one(
                 {"subreddit_name": metadata["subreddit_name"]},
@@ -848,11 +880,13 @@ class UnifiedRedditScraper:
 
             if result.upserted_id:
                 logger.info(f"Inserted new subreddit metadata (embedding: pending)")
+            elif needs_embedding:
+                logger.info(f"Updated subreddit metadata - content changed (embedding: pending)")
             else:
-                logger.info(f"Updated existing subreddit metadata (embedding: pending)")
+                logger.info(f"Updated subreddit metadata - no content change (embedding: skipped)")
 
             return True
-            
+
         except Exception as e:
             logger.error(f"Error saving subreddit metadata: {e}")
             return False
