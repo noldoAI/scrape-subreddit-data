@@ -694,15 +694,27 @@ def run_scraper(config: ScraperConfig):
         # Get scraper type (posts or comments)
         scraper_type = getattr(config, 'scraper_type', 'posts')
 
+        # Determine subreddits list (multi-subreddit or single)
+        subreddits = config.subreddits if config.subreddits else [config.subreddit]
+        subreddit_arg = ",".join(subreddits)
+        is_multi = len(subreddits) > 1
+
         # Create unique container name using type-specific prefix
         container_prefix = DOCKER_CONFIG['container_prefix'].get(scraper_type, DOCKER_CONFIG['container_prefix']['posts'])
-        container_name = f"{container_prefix}{config.subreddit}"
+        if is_multi:
+            # Multi-subreddit container naming: reddit-posts-scraper-multi-5subs-stocks
+            container_name = f"{container_prefix}multi-{len(subreddits)}subs-{subreddits[0][:10]}"
+            display_name = f"multi:{len(subreddits)}subs"
+        else:
+            container_name = f"{container_prefix}{config.subreddit}"
+            display_name = config.subreddit
 
         # Get the appropriate script for this scraper type
         scraper_script = DOCKER_CONFIG['scraper_scripts'].get(scraper_type, 'posts_scraper.py')
 
-        # Save to database first
-        save_scraper_to_db(config.subreddit, config, "starting", container_name=container_name, scraper_type=scraper_type)
+        # Save to database first (use first subreddit as primary key for multi-mode)
+        primary_subreddit = subreddits[0] if is_multi else config.subreddit
+        save_scraper_to_db(primary_subreddit, config, "starting", container_name=container_name, scraper_type=scraper_type)
 
         # Prepare environment variables for the container
         env_vars = [
@@ -731,7 +743,7 @@ def run_scraper(config: ScraperConfig):
         if scraper_type == "posts":
             cmd.extend([
                 DOCKER_CONFIG["image_name"],
-                "python", scraper_script, config.subreddit,
+                "python", scraper_script, subreddit_arg,  # Pass comma-separated subreddits
                 "--posts-limit", str(config.posts_limit),
                 "--interval", str(config.interval),
                 "--sorting-methods", ",".join(config.sorting_methods)
@@ -739,7 +751,7 @@ def run_scraper(config: ScraperConfig):
         else:  # comments
             cmd.extend([
                 DOCKER_CONFIG["image_name"],
-                "python", scraper_script, config.subreddit,
+                "python", scraper_script, subreddit_arg,  # Pass comma-separated subreddits
                 "--interval", str(config.interval),
                 "--comment-batch", str(config.comment_batch)
             ])
@@ -752,13 +764,13 @@ def run_scraper(config: ScraperConfig):
         
         if result.returncode != 0:
             error_msg = f"Failed to start container: {result.stderr}"
-            update_scraper_status(config.subreddit, "error", last_error=error_msg, scraper_type=scraper_type)
+            update_scraper_status(primary_subreddit, "error", last_error=error_msg, scraper_type=scraper_type)
             raise Exception(error_msg)
 
         container_id = result.stdout.strip()
 
         # Update database with container info and running status
-        update_scraper_status(config.subreddit, "running", container_id=container_id,
+        update_scraper_status(primary_subreddit, "running", container_id=container_id,
                             container_name=container_name, scraper_type=scraper_type)
 
         # Update memory cache with safe config (use model_copy instead of copy)
@@ -772,24 +784,28 @@ def run_scraper(config: ScraperConfig):
         )
 
         # Use composite key for memory cache
-        scraper_key = get_scraper_key(config.subreddit, scraper_type)
+        scraper_key = get_scraper_key(primary_subreddit, scraper_type)
         active_scrapers[scraper_key] = {
             "container_id": container_id,
             "container_name": container_name,
             "config": config_safe,
             "scraper_type": scraper_type,
+            "subreddits": subreddits,  # Store all subreddits for multi-mode
             "started_at": datetime.now(UTC),
             "status": "running",
             "last_error": None
         }
 
-        logger.info(f"Started {scraper_type} container {container_name} ({container_id[:12]}) for r/{config.subreddit}")
+        if is_multi:
+            logger.info(f"Started {scraper_type} container {container_name} ({container_id[:12]}) for {len(subreddits)} subreddits: {', '.join(subreddits)}")
+        else:
+            logger.info(f"Started {scraper_type} container {container_name} ({container_id[:12]}) for r/{primary_subreddit}")
 
     except Exception as e:
-        error_msg = f"Error starting {scraper_type} container for r/{config.subreddit}: {e}"
+        error_msg = f"Error starting {scraper_type} container for {display_name}: {e}"
         logger.error(error_msg)
-        update_scraper_status(config.subreddit, "error", last_error=str(e), scraper_type=scraper_type)
-        scraper_key = get_scraper_key(config.subreddit, scraper_type)
+        update_scraper_status(primary_subreddit, "error", last_error=str(e), scraper_type=scraper_type)
+        scraper_key = get_scraper_key(primary_subreddit, scraper_type)
         if scraper_key in active_scrapers:
             active_scrapers[scraper_key]["status"] = "error"
             active_scrapers[scraper_key]["last_error"] = str(e)
@@ -1172,9 +1188,23 @@ async def dashboard():
         <h2>Start New Scraper</h2>
         <div>
             <div class="form-row">
+                <label>Mode:</label>
+                <select id="scraper_mode" onchange="toggleSubredditInput()">
+                    <option value="single">Single Subreddit</option>
+                    <option value="multi">Multi-Subreddit (up to 10)</option>
+                </select>
+
+                <label>Scraper Type:</label>
+                <select id="scraper_type">
+                    <option value="posts">Posts Scraper</option>
+                    <option value="comments">Comments Scraper</option>
+                </select>
+            </div>
+
+            <div class="form-row" id="single-subreddit-input">
                 <label>Subreddit:</label>
                 <input type="text" id="subreddit" placeholder="wallstreetbets" />
-                
+
                 <label>Preset:</label>
                 <select id="preset">
                     <option value="custom">Custom</option>
@@ -1182,6 +1212,13 @@ async def dashboard():
                     <option value="medium">Medium Activity (investing, crypto)</option>
                     <option value="low">Low Activity (pennystocks, niche)</option>
                 </select>
+            </div>
+
+            <div class="form-row" id="multi-subreddit-input" style="display: none;">
+                <label style="vertical-align: top;">Subreddits:</label>
+                <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket"
+                    style="width: 400px; height: 60px; background: #1e1e1e; color: #d4d4d4; border: 1px solid #404040; border-radius: 4px; padding: 8px; font-family: inherit;"></textarea>
+                <small style="color: #737373; display: block; margin-top: 4px;">Comma-separated. Max 10 subreddits per container.</small>
             </div>
             
             <div class="form-row">
@@ -1575,12 +1612,27 @@ async def dashboard():
                 }
             }
             
+            // Subreddit mode toggle
+            function toggleSubredditInput() {
+                const mode = document.getElementById('scraper_mode').value;
+                const singleInput = document.getElementById('single-subreddit-input');
+                const multiInput = document.getElementById('multi-subreddit-input');
+
+                if (mode === 'single') {
+                    singleInput.style.display = 'flex';
+                    multiInput.style.display = 'none';
+                } else {
+                    singleInput.style.display = 'none';
+                    multiInput.style.display = 'block';
+                }
+            }
+
             // Account management functions
             function toggleAccountType() {
                 const accountType = document.getElementById('account_type').value;
                 const savedSection = document.getElementById('saved_account_section');
                 const manualSection = document.getElementById('manual_credentials_section');
-                
+
                 if (accountType === 'saved') {
                     savedSection.style.display = 'block';
                     manualSection.style.display = 'none';
@@ -1721,9 +1773,11 @@ async def dashboard():
             async function startScraper() {
                 const button = document.getElementById('startScraperBtn');
                 const accountType = document.getElementById('account_type').value;
-                
+                const scraperMode = document.getElementById('scraper_mode').value;
+                const scraperType = document.getElementById('scraper_type').value;
+
                 setButtonLoading(button, true, 'Starting...');
-                
+
                 try {
                     // Collect sorting methods from checkboxes
                     const sortingMethods = Array.from(document.querySelectorAll('input[name="sorting"]:checked'))
@@ -1736,7 +1790,7 @@ async def dashboard():
                     }
 
                     let requestData = {
-                        subreddit: document.getElementById('subreddit').value,
+                        scraper_type: scraperType,
                         posts_limit: parseInt(document.getElementById('posts_limit').value),
                         interval: parseInt(document.getElementById('interval').value),
                         comment_batch: parseInt(document.getElementById('comment_batch').value),
@@ -1744,10 +1798,30 @@ async def dashboard():
                         auto_restart: document.getElementById('auto_restart').checked
                     };
 
-                    if (!requestData.subreddit) {
-                        alert('Please enter a subreddit name');
-                        setButtonLoading(button, false);
-                        return;
+                    // Handle single vs multi-subreddit mode
+                    if (scraperMode === 'single') {
+                        const subreddit = document.getElementById('subreddit').value.trim();
+                        if (!subreddit) {
+                            alert('Please enter a subreddit name');
+                            setButtonLoading(button, false);
+                            return;
+                        }
+                        requestData.subreddit = subreddit;
+                    } else {
+                        // Multi-subreddit mode
+                        const subredditsText = document.getElementById('subreddits').value;
+                        const subreddits = subredditsText.split(',').map(s => s.trim()).filter(s => s);
+                        if (subreddits.length === 0) {
+                            alert('Please enter at least one subreddit');
+                            setButtonLoading(button, false);
+                            return;
+                        }
+                        if (subreddits.length > 10) {
+                            alert('Maximum 10 subreddits per container');
+                            setButtonLoading(button, false);
+                            return;
+                        }
+                        requestData.subreddits = subreddits;
                     }
                     
                     if (accountType === 'saved') {
@@ -2044,19 +2118,47 @@ async def list_scrapers():
 
 @app.post("/scrapers/start-flexible")
 async def start_scraper_flexible(request: ScraperStartRequest, background_tasks: BackgroundTasks):
-    """Start a new scraper using either saved account or manual credentials"""
-    
+    """Start a new scraper using either saved account or manual credentials
+
+    Supports both single and multi-subreddit modes:
+    - Single: {"subreddit": "stocks", ...}
+    - Multi: {"subreddits": ["stocks", "investing", "wallstreetbets"], ...}
+    """
+
+    # Determine subreddits list (multi-subreddit or single)
+    if request.subreddits:
+        subreddits = request.subreddits
+    elif request.subreddit:
+        subreddits = [request.subreddit]
+    else:
+        raise HTTPException(status_code=400, detail="Must provide 'subreddit' or 'subreddits'")
+
+    # Validate max subreddits (from config)
+    from config import MULTI_SCRAPER_CONFIG
+    max_subreddits = MULTI_SCRAPER_CONFIG["max_subreddits_per_container"]
+    if len(subreddits) > max_subreddits:
+        raise HTTPException(status_code=400, detail=f"Maximum {max_subreddits} subreddits per container")
+
+    # Clean subreddit names
+    subreddits = [s.strip() for s in subreddits if s.strip()]
+    if not subreddits:
+        raise HTTPException(status_code=400, detail="No valid subreddit names provided")
+
+    is_multi = len(subreddits) > 1
+    primary_subreddit = subreddits[0]
+    display_name = f"multi:{len(subreddits)}subs" if is_multi else primary_subreddit
+
     # Determine which credentials to use
     if request.saved_account_name:
         # Use saved account
         credentials = get_reddit_account(request.saved_account_name)
         if not credentials:
             raise HTTPException(status_code=404, detail=f"Saved account '{request.saved_account_name}' not found")
-        logger.info(f"Using saved account '{request.saved_account_name}' for r/{request.subreddit}")
+        logger.info(f"Using saved account '{request.saved_account_name}' for {display_name}")
     elif request.credentials:
         # Use manual credentials
         credentials = request.credentials
-        
+
         # Optionally save the account
         if request.save_account_as:
             save_success = save_reddit_account(request.save_account_as, credentials)
@@ -2066,13 +2168,15 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
                 logger.warning(f"Failed to save account '{request.save_account_as}'")
     else:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Either 'saved_account_name' or 'credentials' must be provided"
         )
-    
-    # Create scraper config
+
+    # Create scraper config with subreddits list
     config = ScraperConfig(
-        subreddit=request.subreddit,
+        subreddit=primary_subreddit,  # Primary key for backwards compat
+        subreddits=subreddits,         # Full list for multi-mode
+        scraper_type=request.scraper_type,
         posts_limit=request.posts_limit,
         interval=request.interval,
         comment_batch=request.comment_batch,
@@ -2080,14 +2184,14 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
         credentials=credentials,
         auto_restart=request.auto_restart
     )
-    
-    # Check if scraper already exists
-    existing_scraper = load_scraper_from_db(config.subreddit)
+
+    # Check if scraper already exists for primary subreddit
+    existing_scraper = load_scraper_from_db(primary_subreddit, request.scraper_type)
     if existing_scraper:
         if existing_scraper["container_name"]:
             container_status = check_container_status(existing_scraper["container_name"])
             if container_status == "running":
-                raise HTTPException(status_code=400, detail="Scraper already running for this subreddit")
+                raise HTTPException(status_code=400, detail=f"Scraper already running for r/{primary_subreddit}")
         logger.info(f"Updating existing scraper configuration for r/{config.subreddit}")
     
     # Check MongoDB URI
@@ -2116,14 +2220,26 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
     
     # Start scraper in background
     background_tasks.add_task(run_scraper, config)
-    
+
+    # Generate container name for response
+    container_prefix = DOCKER_CONFIG['container_prefix'].get(request.scraper_type, DOCKER_CONFIG['container_prefix']['posts'])
+    if is_multi:
+        container_name = f"{container_prefix}multi-{len(subreddits)}subs-{subreddits[0][:10]}"
+        message = f"Multi-subreddit scraper started for {len(subreddits)} subreddits"
+    else:
+        container_name = f"{container_prefix}{primary_subreddit}"
+        message = f"Scraper started for r/{primary_subreddit}"
+
     return {
-        "message": f"Scraper started for r/{config.subreddit}",
+        "message": message,
+        "subreddits": subreddits,
+        "subreddit_count": len(subreddits),
+        "scraper_type": request.scraper_type,
         "reddit_user": credentials.username,
         "posts_limit": config.posts_limit,
         "interval": config.interval,
         "comment_batch": config.comment_batch,
-        "container_name": f"{DOCKER_CONFIG['container_prefix']}{config.subreddit}",
+        "container_name": container_name,
         "auto_restart": config.auto_restart,
         "used_saved_account": request.saved_account_name is not None,
         "saved_new_account": request.save_account_as is not None

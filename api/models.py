@@ -10,7 +10,7 @@ from datetime import datetime
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import DEFAULT_SCRAPER_CONFIG
+from config import DEFAULT_SCRAPER_CONFIG, MULTI_SCRAPER_CONFIG
 
 
 class RedditCredentials(BaseModel):
@@ -22,8 +22,9 @@ class RedditCredentials(BaseModel):
 
 
 class ScraperConfig(BaseModel):
-    subreddit: str
-    scraper_type: str = "posts"  # "posts" or "comments"
+    subreddit: str = ""                    # Single subreddit (backwards compat)
+    subreddits: List[str] = []             # Multi-subreddit mode
+    scraper_type: str = "posts"            # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
@@ -43,8 +44,9 @@ class ScraperStatus(BaseModel):
 
 
 class ScraperStartRequest(BaseModel):
-    subreddit: str
-    scraper_type: str = "posts"  # "posts" or "comments"
+    subreddit: str = ""                    # Single subreddit (backwards compat)
+    subreddits: List[str] = []             # Multi-subreddit mode (up to 10)
+    scraper_type: str = "posts"            # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]

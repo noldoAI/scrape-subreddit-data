@@ -54,6 +54,14 @@ DEFAULT_SCRAPER_CONFIG = {
     **DEFAULT_COMMENTS_SCRAPER_CONFIG,
 }
 
+# Multi-Subreddit Scraper Configuration
+MULTI_SCRAPER_CONFIG = {
+    "max_subreddits_per_container": 10,    # Maximum subreddits per container
+    "rotation_delay": 2,                    # Seconds between subreddit switches
+    "recommended_posts_limit": 50,          # Recommended posts limit per subreddit in multi-mode
+    "recommended_interval": 300,            # Recommended interval (5 min) for multi-subreddit
+}
+
 # Monitoring Configuration
 MONITORING_CONFIG = {
     "check_interval": 30,          # Seconds between health checks

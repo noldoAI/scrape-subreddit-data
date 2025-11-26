@@ -667,9 +667,77 @@ class RedditPostsScraper:
             self.run_continuous_scraping()  # Restart on error
 
 
+def run_multi_subreddit_scraping(subreddit_names, config):
+    """Rotate through multiple subreddits in one container."""
+    from config import MULTI_SCRAPER_CONFIG
+
+    cycle_count = 0
+    rotation_delay = MULTI_SCRAPER_CONFIG.get("rotation_delay", 2)
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"MULTI-SUBREDDIT MODE INITIALIZED")
+    logger.info(f"Subreddits: {', '.join(subreddit_names)}")
+    logger.info(f"Rotation delay: {rotation_delay}s between subreddits")
+    logger.info(f"{'='*80}")
+
+    while True:
+        cycle_count += 1
+        cycle_start = time.time()
+
+        logger.info(f"\n{'='*80}")
+        logger.info(f"MULTI-SUBREDDIT ROTATION CYCLE #{cycle_count}")
+        logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Subreddits: {', '.join(subreddit_names)}")
+        logger.info(f"{'='*80}")
+
+        cycle_stats = {"total_posts": 0, "total_new": 0, "errors": 0}
+
+        for i, subreddit_name in enumerate(subreddit_names):
+            logger.info(f"\n[{i+1}/{len(subreddit_names)}] Processing r/{subreddit_name}")
+            logger.info("-" * 40)
+
+            try:
+                scraper = RedditPostsScraper(subreddit_name, config)
+
+                # Run single cycle (not continuous)
+                posts = scraper.scrape_all_posts()
+                new_posts = scraper.save_posts_to_db(posts)
+                scraper.update_subreddit_metadata_if_needed()
+
+                # Update metrics
+                scraper.update_scraper_metrics(len(posts), new_posts, time.time() - cycle_start)
+
+                cycle_stats["total_posts"] += len(posts)
+                cycle_stats["total_new"] += new_posts
+
+                logger.info(f"r/{subreddit_name}: {len(posts)} posts ({new_posts} new)")
+
+            except Exception as e:
+                logger.error(f"Error scraping r/{subreddit_name}: {e}")
+                cycle_stats["errors"] += 1
+                continue
+
+            # Brief pause between subreddits
+            if i < len(subreddit_names) - 1:
+                time.sleep(rotation_delay)
+
+        cycle_duration = time.time() - cycle_start
+
+        logger.info(f"\n{'='*60}")
+        logger.info("ROTATION CYCLE SUMMARY")
+        logger.info(f"{'='*60}")
+        logger.info(f"Subreddits processed: {len(subreddit_names) - cycle_stats['errors']}/{len(subreddit_names)}")
+        logger.info(f"Total posts: {cycle_stats['total_posts']} ({cycle_stats['total_new']} new)")
+        logger.info(f"Errors: {cycle_stats['errors']}")
+        logger.info(f"Cycle duration: {cycle_duration:.1f}s")
+
+        logger.info(f"\nRotation complete. Waiting {config['scrape_interval']}s before next cycle...")
+        time.sleep(config['scrape_interval'])
+
+
 def main():
     parser = argparse.ArgumentParser(description="Reddit Posts Scraper")
-    parser.add_argument("subreddit", help="Subreddit name to scrape (without r/)")
+    parser.add_argument("subreddits", help="Subreddit name(s) to scrape - single name or comma-separated (e.g., 'stocks,investing,wallstreetbets')")
     parser.add_argument("--stats", action="store_true", help="Show statistics only")
     parser.add_argument("--metadata-only", action="store_true", help="Update subreddit metadata only")
     parser.add_argument("--posts-limit", type=int, default=1000, help="Number of posts to scrape per cycle")
@@ -677,6 +745,9 @@ def main():
     parser.add_argument("--sorting-methods", type=str, default="new,hot,rising", help="Comma-separated sorting methods (new,hot,rising,top,controversial)")
 
     args = parser.parse_args()
+
+    # Parse subreddit names (comma-separated)
+    subreddit_names = [s.strip() for s in args.subreddits.split(",")]
 
     # Parse sorting methods
     sorting_methods = [s.strip() for s in args.sorting_methods.split(",")]
@@ -688,19 +759,39 @@ def main():
         "sorting_methods": sorting_methods,
     }
 
-    # Create scraper instance
-    scraper = RedditPostsScraper(args.subreddit, config)
+    if len(subreddit_names) == 1:
+        # Single subreddit mode - backwards compatible
+        scraper = RedditPostsScraper(subreddit_names[0], config)
 
-    if args.stats:
-        scraper.print_stats()
-    elif args.metadata_only:
-        logger.info(f"Updating subreddit metadata for r/{args.subreddit}...")
-        updated = scraper.update_subreddit_metadata_if_needed()
-        logger.info(f"Metadata: {'Updated' if updated else 'No update needed'}")
+        if args.stats:
+            scraper.print_stats()
+        elif args.metadata_only:
+            logger.info(f"Updating subreddit metadata for r/{subreddit_names[0]}...")
+            updated = scraper.update_subreddit_metadata_if_needed()
+            logger.info(f"Metadata: {'Updated' if updated else 'No update needed'}")
+        else:
+            # Show initial stats then run continuous scraping
+            scraper.print_stats()
+            scraper.run_continuous_scraping()
     else:
-        # Show initial stats then run continuous scraping
-        scraper.print_stats()
-        scraper.run_continuous_scraping()
+        # Multi-subreddit rotation mode
+        logger.info(f"Multi-subreddit mode: {len(subreddit_names)} subreddits")
+
+        if args.stats:
+            # Show stats for all subreddits
+            for subreddit_name in subreddit_names:
+                scraper = RedditPostsScraper(subreddit_name, config)
+                scraper.print_stats()
+        elif args.metadata_only:
+            # Update metadata for all subreddits
+            for subreddit_name in subreddit_names:
+                logger.info(f"Updating subreddit metadata for r/{subreddit_name}...")
+                scraper = RedditPostsScraper(subreddit_name, config)
+                updated = scraper.update_subreddit_metadata_if_needed()
+                logger.info(f"Metadata: {'Updated' if updated else 'No update needed'}")
+        else:
+            # Run multi-subreddit rotation
+            run_multi_subreddit_scraping(subreddit_names, config)
 
 
 if __name__ == "__main__":
