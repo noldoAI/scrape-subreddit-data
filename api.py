@@ -353,7 +353,16 @@ def load_scraper_from_db(subreddit: str, scraper_type: str = "posts") -> Optiona
             logger.warning("Database not connected, cannot load scraper")
             return None
 
+        # Try to find with scraper_type first
         scraper_doc = scrapers_collection.find_one({"subreddit": subreddit, "scraper_type": scraper_type})
+
+        # Backwards compatibility: try without scraper_type field for old records
+        if not scraper_doc:
+            scraper_doc = scrapers_collection.find_one({
+                "subreddit": subreddit,
+                "scraper_type": {"$exists": False}
+            })
+
         if not scraper_doc:
             return None
 
@@ -410,7 +419,7 @@ def update_scraper_status(subreddit: str, status: str, container_id: str = None,
             update_data["container_name"] = container_name
         if last_error:
             update_data["last_error"] = last_error
-        
+
         # Build the update operation properly
         if increment_restart:
             # Use both $set and $inc operators at the same level
@@ -421,11 +430,19 @@ def update_scraper_status(subreddit: str, status: str, container_id: str = None,
         else:
             # Only use $set
             update_operation = {"$set": update_data}
-        
+
+        # Try with scraper_type first
         result = scrapers_collection.update_one(
             {"subreddit": subreddit, "scraper_type": scraper_type},
             update_operation
         )
+
+        # Backwards compatibility: try without scraper_type for old records
+        if result.matched_count == 0:
+            result = scrapers_collection.update_one(
+                {"subreddit": subreddit, "scraper_type": {"$exists": False}},
+                update_operation
+            )
 
         return result.modified_count > 0
 
@@ -2130,14 +2147,22 @@ async def start_scraper_legacy(config: ScraperConfig, background_tasks: Backgrou
     return await start_scraper_flexible(request, background_tasks)
 
 @app.post("/scrapers/{subreddit}/stop")
-async def stop_scraper(subreddit: str):
-    """Stop a running scraper container"""
-    
-    # Load scraper from database
-    scraper_data = load_scraper_from_db(subreddit)
+async def stop_scraper(subreddit: str, scraper_type: Optional[str] = None):
+    """Stop a running scraper container
+
+    Args:
+        subreddit: Subreddit name
+        scraper_type: Optional - "posts" or "comments". If not provided, stops first matching scraper.
+    """
+    # Load scraper from database (with backwards compatibility)
+    scraper_data = load_scraper_from_db(subreddit, scraper_type or "posts")
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
-    
+
+    # Get actual scraper_type from loaded data
+    actual_scraper_type = scraper_data.get("scraper_type", "posts")
+    cache_key = get_scraper_key(subreddit, actual_scraper_type)
+
     container_name = scraper_data.get("container_name")
     if container_name:
         try:
@@ -2145,36 +2170,36 @@ async def stop_scraper(subreddit: str):
             result = subprocess.run([
                 "docker", "stop", container_name
             ], capture_output=True, text=True, timeout=30)
-            
+
             if result.returncode == 0:
-                update_scraper_status(subreddit, "stopped")
-                if subreddit in active_scrapers:
-                    active_scrapers[subreddit]["status"] = "stopped"
-                logger.info(f"Stopped container {container_name} for r/{subreddit}")
+                update_scraper_status(subreddit, "stopped", scraper_type=actual_scraper_type)
+                if cache_key in active_scrapers:
+                    active_scrapers[cache_key]["status"] = "stopped"
+                logger.info(f"Stopped container {container_name} for r/{subreddit} ({actual_scraper_type})")
             else:
                 # Try force kill if stop didn't work
                 subprocess.run([
                     "docker", "kill", container_name
                 ], capture_output=True, text=True)
-                update_scraper_status(subreddit, "stopped")
-                if subreddit in active_scrapers:
-                    active_scrapers[subreddit]["status"] = "stopped"
-                logger.info(f"Force killed container {container_name} for r/{subreddit}")
-                
+                update_scraper_status(subreddit, "stopped", scraper_type=actual_scraper_type)
+                if cache_key in active_scrapers:
+                    active_scrapers[cache_key]["status"] = "stopped"
+                logger.info(f"Force killed container {container_name} for r/{subreddit} ({actual_scraper_type})")
+
         except subprocess.TimeoutExpired:
             # Force kill if timeout
             subprocess.run([
                 "docker", "kill", container_name
             ], capture_output=True, text=True)
-            update_scraper_status(subreddit, "stopped")
-            if subreddit in active_scrapers:
-                active_scrapers[subreddit]["status"] = "stopped"
-            logger.info(f"Timeout - force killed container {container_name} for r/{subreddit}")
+            update_scraper_status(subreddit, "stopped", scraper_type=actual_scraper_type)
+            if cache_key in active_scrapers:
+                active_scrapers[cache_key]["status"] = "stopped"
+            logger.info(f"Timeout - force killed container {container_name} for r/{subreddit} ({actual_scraper_type})")
         except Exception as e:
-            update_scraper_status(subreddit, "error", last_error=f"Error stopping container: {str(e)}")
+            update_scraper_status(subreddit, "error", last_error=f"Error stopping container: {str(e)}", scraper_type=actual_scraper_type)
             raise HTTPException(status_code=500, detail=f"Error stopping container: {str(e)}")
-    
-    return {"message": f"Scraper stopped for r/{subreddit}"}
+
+    return {"message": f"Scraper stopped for r/{subreddit} ({actual_scraper_type})"}
 
 @app.get("/scrapers/{subreddit}/stats")
 async def get_scraper_stats(subreddit: str, detailed: bool = False):
@@ -2441,9 +2466,14 @@ async def get_scraper_stats(subreddit: str, detailed: bool = False):
         raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")
 
 @app.get("/scrapers/{subreddit}/status")
-async def get_scraper_status(subreddit: str):
-    """Get detailed status of a specific scraper"""
-    scraper_data = load_scraper_from_db(subreddit)
+async def get_scraper_status(subreddit: str, scraper_type: Optional[str] = None):
+    """Get detailed status of a specific scraper
+
+    Args:
+        subreddit: Subreddit name
+        scraper_type: Optional - "posts" or "comments". If not provided, returns first matching scraper.
+    """
+    scraper_data = load_scraper_from_db(subreddit, scraper_type or "posts")
     if not scraper_data:
         return {"status": "not_found", "message": "No scraper found for this subreddit"}
     
@@ -2481,6 +2511,7 @@ async def get_scraper_status(subreddit: str):
     
     return {
         "subreddit": subreddit,
+        "scraper_type": scraper_data.get("scraper_type", "posts"),
         "status": status,
         "container_id": scraper_data.get("container_id"),
         "container_name": container_name,
@@ -2492,9 +2523,15 @@ async def get_scraper_status(subreddit: str):
     }
 
 @app.get("/scrapers/{subreddit}/logs")
-async def get_scraper_logs(subreddit: str, lines: int = 100):
-    """Get recent logs from a scraper container"""
-    scraper_data = load_scraper_from_db(subreddit)
+async def get_scraper_logs(subreddit: str, lines: int = 100, scraper_type: Optional[str] = None):
+    """Get recent logs from a scraper container
+
+    Args:
+        subreddit: Subreddit name
+        lines: Number of log lines to return (default: 100)
+        scraper_type: Optional - "posts" or "comments". If not provided, returns first matching scraper.
+    """
+    scraper_data = load_scraper_from_db(subreddit, scraper_type or "posts")
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
     
@@ -2514,62 +2551,104 @@ async def get_scraper_logs(subreddit: str, lines: int = 100):
     }
 
 @app.post("/scrapers/{subreddit}/restart")
-async def restart_scraper_endpoint(subreddit: str, background_tasks: BackgroundTasks):
-    """Manually restart a scraper"""
-    scraper_data = load_scraper_from_db(subreddit)
+async def restart_scraper_endpoint(subreddit: str, background_tasks: BackgroundTasks, scraper_type: Optional[str] = None):
+    """Manually restart a scraper
+
+    Args:
+        subreddit: Subreddit name
+        scraper_type: Optional - "posts" or "comments". If not provided, restarts first matching scraper.
+    """
+    scraper_data = load_scraper_from_db(subreddit, scraper_type or "posts")
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
-    
+
+    # Get actual scraper_type from loaded data
+    actual_scraper_type = scraper_data.get("scraper_type", "posts")
+
     # Stop and remove existing container first
     container_name = scraper_data.get("container_name")
     if container_name:
         cleanup_container(container_name)
-    
+
     # Start new container
     background_tasks.add_task(restart_scraper, scraper_data["config"], subreddit)
-    
-    return {"message": f"Restarting scraper for r/{subreddit}"}
+
+    return {"message": f"Restarting scraper for r/{subreddit} ({actual_scraper_type})"}
 
 @app.put("/scrapers/{subreddit}/auto-restart")
-async def toggle_auto_restart(subreddit: str, auto_restart: bool):
-    """Toggle auto-restart setting for a scraper"""
-    scraper_data = load_scraper_from_db(subreddit)
+async def toggle_auto_restart(subreddit: str, auto_restart: bool, scraper_type: Optional[str] = None):
+    """Toggle auto-restart setting for a scraper
+
+    Args:
+        subreddit: Subreddit name
+        auto_restart: Enable or disable auto-restart
+        scraper_type: Optional - "posts" or "comments". If not provided, updates first matching scraper.
+    """
+    scraper_data = load_scraper_from_db(subreddit, scraper_type or "posts")
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
-    
-    # Update auto-restart setting in database
+
+    # Get actual scraper_type from loaded data
+    actual_scraper_type = scraper_data.get("scraper_type", "posts")
+
+    # Update auto-restart setting in database - try with scraper_type first
     result = scrapers_collection.update_one(
-        {"subreddit": subreddit},
+        {"subreddit": subreddit, "scraper_type": actual_scraper_type},
         {"$set": {"auto_restart": auto_restart, "last_updated": datetime.now(UTC)}}
     )
-    
+
+    # Backwards compatibility for old records
+    if result.matched_count == 0:
+        result = scrapers_collection.update_one(
+            {"subreddit": subreddit, "scraper_type": {"$exists": False}},
+            {"$set": {"auto_restart": auto_restart, "last_updated": datetime.now(UTC)}}
+        )
+
     if result.modified_count > 0:
-        return {"message": f"Auto-restart {'enabled' if auto_restart else 'disabled'} for r/{subreddit}"}
+        return {"message": f"Auto-restart {'enabled' if auto_restart else 'disabled'} for r/{subreddit} ({actual_scraper_type})"}
     else:
         raise HTTPException(status_code=500, detail="Failed to update auto-restart setting")
 
 @app.delete("/scrapers/{subreddit}")
-async def remove_scraper(subreddit: str):
-    """Remove a scraper completely (stop it first if running)"""
-    scraper_data = load_scraper_from_db(subreddit)
-    if not scraper_data:
+async def remove_scraper(subreddit: str, scraper_type: Optional[str] = None):
+    """Remove a scraper completely (stop it first if running).
+
+    Args:
+        subreddit: Subreddit name
+        scraper_type: Optional - "posts" or "comments". If not provided, removes any scraper for this subreddit.
+    """
+    # Build query - support old records without scraper_type field
+    if scraper_type:
+        query = {"subreddit": subreddit, "scraper_type": scraper_type}
+    else:
+        # Try to find any scraper for this subreddit (backwards compatibility)
+        query = {"subreddit": subreddit}
+
+    scraper_doc = scrapers_collection.find_one(query)
+    if not scraper_doc:
         raise HTTPException(status_code=404, detail="Scraper not found")
-    
+
+    # Get the actual scraper_type from the document (may be None for old records)
+    actual_scraper_type = scraper_doc.get("scraper_type", "posts")
+
     # Stop and remove container if it exists
-    container_name = scraper_data.get("container_name")
+    container_name = scraper_doc.get("container_name")
     if container_name:
         cleanup_container(container_name)
         logger.info(f"Cleaned up container {container_name} for r/{subreddit}")
-    
-    # Remove from database
-    result = scrapers_collection.delete_one({"subreddit": subreddit})
-    
-    # Remove from memory cache
-    if subreddit in active_scrapers:
+
+    # Remove from database using the same query
+    result = scrapers_collection.delete_one({"_id": scraper_doc["_id"]})
+
+    # Remove from memory cache (try both old and new key formats)
+    cache_key = f"{subreddit}:{actual_scraper_type}"
+    if cache_key in active_scrapers:
+        del active_scrapers[cache_key]
+    if subreddit in active_scrapers:  # Old format fallback
         del active_scrapers[subreddit]
-    
+
     if result.deleted_count > 0:
-        return {"message": f"Scraper removed for r/{subreddit}"}
+        return {"message": f"Scraper removed for r/{subreddit} ({actual_scraper_type})"}
     else:
         raise HTTPException(status_code=500, detail="Failed to remove scraper")
 
