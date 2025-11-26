@@ -5,4 +5,5 @@ fastapi
 uvicorn[standard]
 pydantic
 cryptography
-sentence-transformers>=3.0.0 
+sentence-transformers>=3.0.0
+einops 
