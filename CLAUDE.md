@@ -841,6 +841,13 @@ DISCOVERY_CONFIG = {
     "default_min_subscribers": 1000,
     "sample_posts_limit": 20
 }
+
+EMBEDDING_WORKER_CONFIG = {
+    "enabled": True,
+    "check_interval": 60,           # Seconds between checks
+    "batch_size": 10,               # Max subreddits per batch
+    "metadata_vector_index_name": "metadata_vector_index"
+}
 ```
 
 ### **Files**
@@ -848,8 +855,79 @@ DISCOVERY_CONFIG = {
 | File | Purpose |
 |------|---------|
 | `discover_subreddits.py` | Search Reddit and scrape subreddit metadata |
-| `generate_embeddings.py` | Generate semantic embeddings |
+| `generate_embeddings.py` | Generate semantic embeddings for discovery collection |
+| `embedding_worker.py` | Background worker for metadata collection embeddings |
 | `setup_vector_index.py` | Create MongoDB vector search index |
 | `semantic_search_subreddits.py` | CLI semantic search tool |
 | `api.py` | REST API endpoints for search & discovery |
 | `config.py` | Embedding and discovery configuration |
+
+### **Automatic Embeddings for Active Scrapers (v1.4+)**
+
+Subreddits being actively scraped now automatically get embeddings generated, making them searchable via semantic search.
+
+**How It Works:**
+1. When `reddit_scraper.py` saves subreddit metadata, it sets `embedding_status: "pending"`
+2. Background worker in the API server processes pending embeddings every 60 seconds
+3. Embeddings are stored in the `subreddit_metadata` collection
+4. Both collections (discovery + metadata) can be searched
+
+**Data Flow:**
+```
+Scraper Container              API Server                    MongoDB
+┌─────────────────┐          ┌───────────────────┐         ┌──────────────────┐
+│ reddit_scraper  │          │ Background Worker │         │ subreddit_       │
+│                 │          │ (every 60s)       │         │ metadata         │
+│ Saves metadata  │─────────>│                   │         │                  │
+│ + sets:         │          │ 1. Query pending  │<────────│ embedding_status │
+│ embedding_      │          │ 2. Generate       │         │ : "pending"      │
+│ status:pending  │          │ 3. Save embedding │────────>│ embeddings.      │
+└─────────────────┘          └───────────────────┘         │ combined_        │
+                                                           │ embedding        │
+                                                           └──────────────────┘
+```
+
+**API Endpoints:**
+- `GET /embeddings/worker/status` - Worker status and statistics
+- `POST /embeddings/worker/process` - Manually trigger processing
+- `POST /embeddings/worker/process?subreddit=X` - Process specific subreddit
+
+**CLI Search Sources:**
+```bash
+# Search discovered subreddits (default)
+python semantic_search_subreddits.py --query "stocks" --source discovery
+
+# Search actively scraped subreddits
+python semantic_search_subreddits.py --query "stocks" --source active
+
+# Search both collections (deduplicates)
+python semantic_search_subreddits.py --query "stocks" --source all
+```
+
+**Setup Vector Index for Metadata:**
+```bash
+# Create index on metadata collection
+python setup_vector_index.py --collection metadata
+
+# Create indexes on both collections
+python setup_vector_index.py --collection both
+```
+
+**Database Schema (subreddit_metadata):**
+```javascript
+{
+  // ... existing fields ...
+
+  // Embedding tracking
+  "embedding_status": "pending" | "complete" | "failed",
+  "embedding_requested_at": ISODate("..."),
+
+  // Embeddings (same structure as subreddit_discovery)
+  "embeddings": {
+    "combined_embedding": [/* 768 floats */],
+    "model": "nomic-embed-text-v2",
+    "dimensions": 768,
+    "generated_at": ISODate("...")
+  }
+}
+```

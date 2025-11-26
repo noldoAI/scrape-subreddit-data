@@ -829,24 +829,28 @@ class UnifiedRedditScraper:
             return None
     
     def save_subreddit_metadata(self, metadata):
-        """Save subreddit metadata to MongoDB."""
+        """Save subreddit metadata to MongoDB with embedding status flag."""
         if not metadata:
             return False
-        
+
         try:
             subreddit_collection.create_index("subreddit_name", unique=True)
-            
+
+            # Set embedding status to pending for background worker to process
+            metadata["embedding_status"] = "pending"
+            metadata["embedding_requested_at"] = datetime.now(UTC)
+
             result = subreddit_collection.update_one(
                 {"subreddit_name": metadata["subreddit_name"]},
                 {"$set": metadata},
                 upsert=True
             )
-            
+
             if result.upserted_id:
-                logger.info(f"Inserted new subreddit metadata")
+                logger.info(f"Inserted new subreddit metadata (embedding: pending)")
             else:
-                logger.info(f"Updated existing subreddit metadata")
-            
+                logger.info(f"Updated existing subreddit metadata (embedding: pending)")
+
             return True
             
         except Exception as e:

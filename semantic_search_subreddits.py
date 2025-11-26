@@ -9,6 +9,7 @@ Usage:
     python semantic_search_subreddits.py --query "building b2b saas"
     python semantic_search_subreddits.py --query "cryptocurrency trading" --limit 20
     python semantic_search_subreddits.py --query "indie game dev" --min-subscribers 10000
+    python semantic_search_subreddits.py --query "stocks" --source all  # Search both collections
 """
 
 import os
@@ -18,6 +19,8 @@ import logging
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from pymongo import MongoClient
+
+from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, EMBEDDING_CONFIG, COLLECTIONS
 
 # Setup logging
 logging.basicConfig(
@@ -37,13 +40,26 @@ if not MONGODB_URI:
 
 client = MongoClient(MONGODB_URI)
 db = client.noldo
-collection = db.subreddit_discovery
+
+# Collection configurations
+SEARCH_SOURCES = {
+    "discovery": {
+        "collection": db.subreddit_discovery,
+        "index_name": DISCOVERY_CONFIG["vector_index_name"],
+        "description": "Discovered subreddits"
+    },
+    "active": {
+        "collection": db[COLLECTIONS["SUBREDDIT_METADATA"]],
+        "index_name": EMBEDDING_WORKER_CONFIG["metadata_vector_index_name"],
+        "description": "Actively scraped subreddits"
+    }
+}
 
 # Load embedding model
 try:
-    logger.info("Loading nomic-embed-text-v2 model...")
+    logger.info(f"Loading {EMBEDDING_CONFIG['model_name']} model...")
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer('nomic-ai/nomic-embed-text-v2', trust_remote_code=True)
+    model = SentenceTransformer(EMBEDDING_CONFIG['model_name'], trust_remote_code=True)
     logger.info("✅ Model loaded\n")
 except Exception as e:
     logger.error(f"Failed to load model: {e}")
@@ -51,38 +67,38 @@ except Exception as e:
     sys.exit(1)
 
 
-def search_subreddits(
-    query: str,
+def search_collection(
+    collection,
+    index_name: str,
+    query_embedding: List[float],
     limit: int = 10,
     min_subscribers: Optional[int] = 1000,
     max_subscribers: Optional[int] = None,
     exclude_nsfw: bool = True,
     language: Optional[str] = None,
     subreddit_type: str = "public",
-    num_candidates: int = 100
+    num_candidates: int = 100,
+    source_label: str = "unknown"
 ) -> List[Dict]:
     """
-    Semantic search for subreddits using natural language queries.
+    Search a single collection for subreddits.
 
     Args:
-        query: Natural language search query (e.g., "building b2b saas")
+        collection: MongoDB collection to search
+        index_name: Vector search index name
+        query_embedding: Pre-computed query embedding
         limit: Number of results to return
-        min_subscribers: Minimum subscriber count (None = no filter)
-        max_subscribers: Maximum subscriber count (None = no filter)
+        min_subscribers: Minimum subscriber count
+        max_subscribers: Maximum subscriber count
         exclude_nsfw: Filter out NSFW subreddits
-        language: Language filter (e.g., "en")
-        subreddit_type: Filter by type (public/private/restricted)
-        num_candidates: Number of candidates to consider (higher = more accurate but slower)
+        language: Language filter
+        subreddit_type: Subreddit type filter
+        num_candidates: Number of candidates for vector search
+        source_label: Label for the source collection
 
     Returns:
         List of matching subreddit dictionaries with similarity scores
     """
-    logger.info(f"🔍 Searching for: '{query}'")
-    logger.info(f"   Filters: min_subs={min_subscribers}, exclude_nsfw={exclude_nsfw}, type={subreddit_type}\n")
-
-    # Generate query embedding
-    query_embedding = model.encode(query, convert_to_numpy=True).tolist()
-
     # Build MongoDB filters
     filters = {}
 
@@ -95,8 +111,7 @@ def search_subreddits(
     if language:
         filters["lang"] = language
 
-    # Subscriber filters (MongoDB doesn't support range in $vectorSearch filter directly)
-    # So we'll apply them in post-filtering if needed
+    # Subscriber filters
     subscriber_filter = {}
     if min_subscribers is not None:
         subscriber_filter["$gte"] = min_subscribers
@@ -106,17 +121,16 @@ def search_subreddits(
     if subscriber_filter:
         filters["subscribers"] = subscriber_filter
 
-    # Execute vector search
     try:
         pipeline = [
             {
                 "$vectorSearch": {
-                    "index": "subreddit_vector_index",
+                    "index": index_name,
                     "path": "embeddings.combined_embedding",
                     "queryVector": query_embedding,
                     "numCandidates": num_candidates,
                     "limit": limit,
-                    "filter": {k: v for k, v in filters.items() if k != "subscribers"}  # Exclude range filters
+                    "filter": {k: v for k, v in filters.items() if k != "subscribers"}
                 }
             },
             {
@@ -142,31 +156,110 @@ def search_subreddits(
 
         results = list(collection.aggregate(pipeline))
 
-        logger.info(f"✅ Found {len(results)} results\n")
+        # Add source label to each result
+        for r in results:
+            r["source"] = source_label
+
         return results
 
     except Exception as e:
-        logger.error(f"❌ Search failed: {e}")
-        logger.error(f"\n💡 Troubleshooting:")
-        logger.error(f"   1. Ensure vector index exists: python setup_vector_index.py --verify-only")
-        logger.error(f"   2. Check embeddings exist: python generate_embeddings.py --stats")
-        logger.error(f"   3. Verify MongoDB Atlas version supports vector search")
+        logger.warning(f"Search failed on {collection.name}: {e}")
         return []
 
 
-def print_results(results: List[Dict], detailed: bool = False):
+def search_subreddits(
+    query: str,
+    source: str = "discovery",
+    limit: int = 10,
+    min_subscribers: Optional[int] = 1000,
+    max_subscribers: Optional[int] = None,
+    exclude_nsfw: bool = True,
+    language: Optional[str] = None,
+    subreddit_type: str = "public",
+    num_candidates: int = 100
+) -> List[Dict]:
+    """
+    Semantic search for subreddits using natural language queries.
+
+    Args:
+        query: Natural language search query (e.g., "building b2b saas")
+        source: Search source - "discovery", "active", or "all"
+        limit: Number of results to return
+        min_subscribers: Minimum subscriber count (None = no filter)
+        max_subscribers: Maximum subscriber count (None = no filter)
+        exclude_nsfw: Filter out NSFW subreddits
+        language: Language filter (e.g., "en")
+        subreddit_type: Filter by type (public/private/restricted)
+        num_candidates: Number of candidates to consider (higher = more accurate but slower)
+
+    Returns:
+        List of matching subreddit dictionaries with similarity scores
+    """
+    logger.info(f"🔍 Searching for: '{query}'")
+    logger.info(f"   Source: {source}")
+    logger.info(f"   Filters: min_subs={min_subscribers}, exclude_nsfw={exclude_nsfw}, type={subreddit_type}\n")
+
+    # Generate query embedding
+    query_embedding = model.encode(query, convert_to_numpy=True).tolist()
+
+    all_results = []
+
+    # Determine which collections to search
+    sources_to_search = ["discovery", "active"] if source == "all" else [source]
+
+    for src in sources_to_search:
+        if src not in SEARCH_SOURCES:
+            logger.warning(f"Unknown source: {src}")
+            continue
+
+        src_config = SEARCH_SOURCES[src]
+        logger.info(f"   Searching {src_config['description']} ({src_config['collection'].name})...")
+
+        results = search_collection(
+            collection=src_config["collection"],
+            index_name=src_config["index_name"],
+            query_embedding=query_embedding,
+            limit=limit,
+            min_subscribers=min_subscribers,
+            max_subscribers=max_subscribers,
+            exclude_nsfw=exclude_nsfw,
+            language=language,
+            subreddit_type=subreddit_type,
+            num_candidates=num_candidates,
+            source_label=src
+        )
+
+        all_results.extend(results)
+        logger.info(f"   Found {len(results)} results from {src}")
+
+    # Deduplicate if searching multiple sources (keep highest score)
+    if source == "all" and all_results:
+        seen = {}
+        for r in all_results:
+            name = r["subreddit_name"]
+            if name not in seen or r["score"] > seen[name]["score"]:
+                seen[name] = r
+        all_results = sorted(seen.values(), key=lambda x: x["score"], reverse=True)[:limit]
+
+    logger.info(f"\n✅ Total results: {len(all_results)}\n")
+    return all_results
+
+
+def print_results(results: List[Dict], detailed: bool = False, show_source: bool = False):
     """
     Pretty print search results.
 
     Args:
         results: List of search results
         detailed: Show detailed information
+        show_source: Show which collection the result came from
     """
     if not results:
         logger.warning("No results found. Try:")
         logger.warning("  1. Different query terms")
         logger.warning("  2. Relaxing filters (--min-subscribers 0)")
         logger.warning("  3. Checking if subreddits exist: python generate_embeddings.py --stats")
+        logger.warning("  4. Try --source all to search both collections")
         return
 
     print("\n" + "="*80)
@@ -175,7 +268,8 @@ def print_results(results: List[Dict], detailed: bool = False):
 
     for i, sub in enumerate(results, 1):
         # Header
-        print(f"{i}. r/{sub['subreddit_name']}")
+        source_label = f" [{sub.get('source', 'unknown')}]" if show_source else ""
+        print(f"{i}. r/{sub['subreddit_name']}{source_label}")
         print(f"   {'─'*70}")
 
         # Similarity score
@@ -212,16 +306,19 @@ def print_results(results: List[Dict], detailed: bool = False):
             print(f"\n   Type: {sub.get('subreddit_type', 'unknown')}")
             print(f"   NSFW: {sub.get('over_18', False)}")
             print(f"   Language: {sub.get('lang', 'unknown')}")
+            if show_source:
+                print(f"   Source: {sub.get('source', 'unknown')}")
 
         print()
 
 
-def interactive_search():
+def interactive_search(source: str = "discovery"):
     """Interactive search mode - keep asking for queries."""
     print("\n" + "="*80)
     print("INTERACTIVE SEMANTIC SUBREDDIT SEARCH")
     print("="*80)
-    print("\nEnter your search queries (or 'quit' to exit)")
+    print(f"\nSource: {source}")
+    print("Enter your search queries (or 'quit' to exit)")
     print("Examples:")
     print("  - building b2b saas")
     print("  - cryptocurrency trading strategies")
@@ -239,8 +336,8 @@ def interactive_search():
             if not query:
                 continue
 
-            results = search_subreddits(query, limit=10)
-            print_results(results, detailed=False)
+            results = search_subreddits(query, source=source, limit=10)
+            print_results(results, detailed=False, show_source=(source == "all"))
 
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
@@ -257,13 +354,27 @@ def main():
 Examples:
   python semantic_search_subreddits.py --query "building b2b saas"
   python semantic_search_subreddits.py --query "crypto trading" --limit 20 --min-subscribers 10000
+  python semantic_search_subreddits.py --query "stocks" --source all  # Search both collections
+  python semantic_search_subreddits.py --query "gaming" --source active  # Search only active scrapers
   python semantic_search_subreddits.py --interactive
+
+Sources:
+  discovery  - Subreddits discovered via discover_subreddits.py (default)
+  active     - Subreddits actively being scraped (from reddit_scraper.py)
+  all        - Search both collections and deduplicate
         """
     )
     parser.add_argument(
         '--query',
         type=str,
         help='Search query (e.g., "building b2b saas")'
+    )
+    parser.add_argument(
+        '--source',
+        type=str,
+        default='discovery',
+        choices=['discovery', 'active', 'all'],
+        help='Search source: discovery (default), active, or all'
     )
     parser.add_argument(
         '--limit',
@@ -314,7 +425,7 @@ Examples:
 
     # Interactive mode
     if args.interactive:
-        interactive_search()
+        interactive_search(source=args.source)
         return
 
     # Single query mode
@@ -328,6 +439,7 @@ Examples:
     # Search
     results = search_subreddits(
         query=args.query,
+        source=args.source,
         limit=args.limit,
         min_subscribers=min_subs,
         max_subscribers=args.max_subscribers,
@@ -337,7 +449,7 @@ Examples:
     )
 
     # Display results
-    print_results(results, detailed=args.detailed)
+    print_results(results, detailed=args.detailed, show_source=(args.source == "all"))
 
 
 if __name__ == "__main__":

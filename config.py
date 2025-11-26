@@ -80,7 +80,7 @@ LOGGING_CONFIG = {
 
 # Semantic Search & Embedding Configuration
 EMBEDDING_CONFIG = {
-    "model_name": "nomic-ai/nomic-embed-text-v2",  # Open source embedding model
+    "model_name": "nomic-ai/nomic-embed-text-v1.5",  # Open source embedding model (v2 requires HF auth)
     "dimensions": 768,                              # nomic-embed-text-v2 output dimensions
     "context_window": 8192,                         # Maximum tokens per text
     "batch_size": 32,                               # Batch size for embedding generation
@@ -97,4 +97,14 @@ DISCOVERY_CONFIG = {
     "num_candidates": 100,                          # Number of candidates for vector search
     "sample_posts_limit": 20,                       # Number of sample posts to collect
     "sample_posts_time_filter": "month"             # Time filter for sample posts (month/week/year)
+}
+
+# Background Embedding Worker Configuration
+EMBEDDING_WORKER_CONFIG = {
+    "enabled": True,                                # Enable/disable background embedding worker
+    "check_interval": 60,                           # Seconds between checks for pending embeddings
+    "batch_size": 10,                               # Max subreddits to process per cycle
+    "metadata_vector_index_name": "metadata_vector_index",  # Vector index for subreddit_metadata
+    "max_retries": 3,                               # Max retry attempts for failed embeddings
+    "retry_delay": 300                              # Seconds to wait before retrying failed embeddings
 } 

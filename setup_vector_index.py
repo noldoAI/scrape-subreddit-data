@@ -2,12 +2,14 @@
 """
 MongoDB Atlas Vector Search Index Setup
 
-Creates a vector search index for semantic subreddit search.
+Creates vector search indexes for semantic subreddit search.
 This enables fast similarity searches using cosine distance.
 
 Usage:
-    python setup_vector_index.py
-    python setup_vector_index.py --drop  # Drop existing index and recreate
+    python setup_vector_index.py                      # Create index on discovery collection
+    python setup_vector_index.py --collection metadata  # Create index on metadata collection
+    python setup_vector_index.py --collection both      # Create indexes on both collections
+    python setup_vector_index.py --drop                 # Drop existing index and recreate
 """
 
 import os
@@ -18,6 +20,8 @@ import time
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
+
+from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS
 
 # Setup logging
 logging.basicConfig(
@@ -37,30 +41,43 @@ if not MONGODB_URI:
 
 client = MongoClient(MONGODB_URI)
 db = client.noldo
-collection = db.subreddit_discovery
+
+# Collection configurations
+COLLECTION_CONFIGS = {
+    "discovery": {
+        "collection": db.subreddit_discovery,
+        "index_name": DISCOVERY_CONFIG["vector_index_name"],
+        "description": "Discovered subreddits (via discover_subreddits.py)"
+    },
+    "metadata": {
+        "collection": db[COLLECTIONS["SUBREDDIT_METADATA"]],
+        "index_name": EMBEDDING_WORKER_CONFIG["metadata_vector_index_name"],
+        "description": "Actively scraped subreddits (via reddit_scraper.py)"
+    }
+}
 
 
-def list_existing_indexes():
+def list_existing_indexes(collection):
     """List all existing search indexes on the collection."""
     try:
         indexes = list(collection.list_search_indexes())
         if indexes:
-            logger.info(f"\n📋 Existing search indexes:")
+            logger.info(f"\n📋 Existing search indexes on {collection.name}:")
             for idx in indexes:
                 logger.info(f"   - {idx.get('name', 'unnamed')} (status: {idx.get('status', 'unknown')})")
             return indexes
         else:
-            logger.info("\n📋 No existing search indexes found")
+            logger.info(f"\n📋 No existing search indexes found on {collection.name}")
             return []
     except Exception as e:
         logger.warning(f"Could not list indexes (might not be supported on this MongoDB version): {e}")
         return []
 
 
-def drop_index(index_name: str):
+def drop_index(collection, index_name: str):
     """Drop an existing search index."""
     try:
-        logger.info(f"\n🗑️  Dropping index: {index_name}")
+        logger.info(f"\n🗑️  Dropping index: {index_name} from {collection.name}")
         collection.drop_search_index(index_name)
         logger.info(f"   ✓ Index dropped successfully")
         time.sleep(2)  # Wait a bit before recreating
@@ -68,7 +85,7 @@ def drop_index(index_name: str):
         logger.error(f"   ✗ Error dropping index: {e}")
 
 
-def create_vector_search_index():
+def create_vector_search_index(collection, index_name: str):
     """
     Create MongoDB Atlas Vector Search index for subreddit embeddings.
 
@@ -79,11 +96,13 @@ def create_vector_search_index():
     """
     logger.info(f"\n🔧 Creating vector search index...")
     logger.info(f"   Collection: {db.name}.{collection.name}")
-    logger.info(f"   Index name: subreddit_vector_index")
+    logger.info(f"   Index name: {index_name}")
 
-    # Define the search index
-    search_index_model = SearchIndexModel(
-        definition={
+    # Define the vector search index
+    index_definition = {
+        "name": index_name,
+        "type": "vectorSearch",
+        "definition": {
             "fields": [
                 {
                     "type": "vector",
@@ -113,14 +132,12 @@ def create_vector_search_index():
                     "path": "advertiser_category"  # Category filter
                 }
             ]
-        },
-        name="subreddit_vector_index",
-        type="vectorSearch"
-    )
+        }
+    }
 
     try:
-        # Create the index
-        result = collection.create_search_index(model=search_index_model)
+        # Create the index using dict format
+        result = collection.create_search_index(index_definition)
         logger.info(f"   ✓ Index creation initiated: {result}")
         logger.info(f"\n⏳ Index is being built (this may take 1-5 minutes)...")
         logger.info(f"   You can check status in MongoDB Atlas UI or wait for confirmation below\n")
@@ -137,7 +154,7 @@ def create_vector_search_index():
             try:
                 indexes = list(collection.list_search_indexes())
                 for idx in indexes:
-                    if idx.get('name') == 'subreddit_vector_index':
+                    if idx.get('name') == index_name:
                         status = idx.get('status', 'UNKNOWN')
                         logger.info(f"   Index status: {status} (elapsed: {elapsed}s)")
 
@@ -160,20 +177,24 @@ def create_vector_search_index():
         logger.error(f"\n❌ Error creating index: {e}")
         logger.error(f"\n💡 Troubleshooting:")
         logger.error(f"   1. Ensure you're using MongoDB Atlas (vector search not available in self-hosted MongoDB)")
-        logger.error(f"   2. Check that you have embeddings in the collection: run 'python generate_embeddings.py --stats'")
+        logger.error(f"   2. Check that you have embeddings in the collection")
         logger.error(f"   3. Verify cluster version supports vector search (M10+ recommended)")
         return False
 
 
-def verify_index():
+def verify_index(collection, index_name: str):
     """Verify that the vector index is working with a test query."""
-    logger.info(f"\n🧪 Verifying vector search index...")
+    logger.info(f"\n🧪 Verifying vector search index on {collection.name}...")
 
     # Get a sample embedding from the database
     sample = collection.find_one({"embeddings.combined_embedding": {"$exists": True}})
 
     if not sample:
-        logger.error("   ✗ No documents with embeddings found. Run generate_embeddings.py first.")
+        logger.error(f"   ✗ No documents with embeddings found in {collection.name}.")
+        if collection.name == "subreddit_discovery":
+            logger.error("   Run: python generate_embeddings.py")
+        else:
+            logger.error("   Wait for embedding worker to process pending subreddits.")
         return False
 
     query_vector = sample['embeddings']['combined_embedding']
@@ -183,7 +204,7 @@ def verify_index():
         results = list(collection.aggregate([
             {
                 "$vectorSearch": {
-                    "index": "subreddit_vector_index",
+                    "index": index_name,
                     "path": "embeddings.combined_embedding",
                     "queryVector": query_vector,
                     "numCandidates": 10,
@@ -215,9 +236,68 @@ def verify_index():
         return False
 
 
+def setup_collection(collection_key: str, drop: bool = False, verify_only: bool = False):
+    """Setup vector index for a specific collection."""
+    config = COLLECTION_CONFIGS[collection_key]
+    collection = config["collection"]
+    index_name = config["index_name"]
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"Setting up: {config['description']}")
+    logger.info(f"Collection: {collection.name}")
+    logger.info(f"Index: {index_name}")
+    logger.info(f"{'='*80}")
+
+    # List existing indexes
+    existing_indexes = list_existing_indexes(collection)
+
+    if verify_only:
+        verify_index(collection, index_name)
+        return
+
+    # Drop index if requested
+    if drop:
+        index_exists = any(idx.get('name') == index_name for idx in existing_indexes)
+        if index_exists:
+            drop_index(collection, index_name)
+        else:
+            logger.warning(f"\n⚠️  Index '{index_name}' does not exist, nothing to drop")
+
+    # Check if index already exists
+    index_exists = any(idx.get('name') == index_name for idx in existing_indexes)
+    if index_exists and not drop:
+        logger.info(f"\n✓ Index '{index_name}' already exists. Use --drop to recreate.")
+        verify_index(collection, index_name)
+        return
+
+    # Create index
+    success = create_vector_search_index(collection, index_name)
+
+    if success:
+        # Verify index
+        logger.info(f"\n{'='*80}\n")
+        verify_index(collection, index_name)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Setup MongoDB Atlas Vector Search index for subreddit semantic search'
+        description='Setup MongoDB Atlas Vector Search index for subreddit semantic search',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python setup_vector_index.py                        # Create index on discovery collection
+  python setup_vector_index.py --collection metadata  # Create index on metadata collection
+  python setup_vector_index.py --collection both      # Create indexes on both collections
+  python setup_vector_index.py --drop                 # Drop and recreate index
+  python setup_vector_index.py --verify-only          # Only verify existing index
+        """
+    )
+    parser.add_argument(
+        '--collection',
+        type=str,
+        default='discovery',
+        choices=['discovery', 'metadata', 'both'],
+        help='Collection to create index on (default: discovery)'
     )
     parser.add_argument(
         '--drop',
@@ -236,36 +316,20 @@ def main():
     logger.info(f"MongoDB Atlas Vector Search Index Setup")
     logger.info(f"{'='*80}")
 
-    # List existing indexes
-    existing_indexes = list_existing_indexes()
+    # Process collections
+    if args.collection == 'both':
+        setup_collection('discovery', args.drop, args.verify_only)
+        setup_collection('metadata', args.drop, args.verify_only)
+    else:
+        setup_collection(args.collection, args.drop, args.verify_only)
 
-    if args.verify_only:
-        verify_index()
-        return
-
-    # Drop index if requested
-    if args.drop:
-        index_exists = any(idx.get('name') == 'subreddit_vector_index' for idx in existing_indexes)
-        if index_exists:
-            drop_index('subreddit_vector_index')
-        else:
-            logger.warning("\n⚠️  Index 'subreddit_vector_index' does not exist, nothing to drop")
-
-    # Create index
-    success = create_vector_search_index()
-
-    if success:
-        # Verify index
-        logger.info(f"\n{'='*80}\n")
-        verify_index()
-
-        # Next steps
-        logger.info(f"\n{'='*80}")
-        logger.info(f"✅ Setup complete!")
-        logger.info(f"\n🎯 Next steps:")
-        logger.info(f"   1. Test semantic search: python semantic_search_subreddits.py --query 'building b2b saas'")
-        logger.info(f"   2. Or use the API: POST /search/subreddits")
-        logger.info(f"{'='*80}\n")
+    # Final summary
+    logger.info(f"\n{'='*80}")
+    logger.info(f"✅ Setup complete!")
+    logger.info(f"\n🎯 Next steps:")
+    logger.info(f"   1. Test semantic search: python semantic_search_subreddits.py --query 'building b2b saas'")
+    logger.info(f"   2. Or use the API: POST /search/subreddits")
+    logger.info(f"{'='*80}\n")
 
 
 if __name__ == "__main__":

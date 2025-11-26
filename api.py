@@ -29,8 +29,9 @@ import logging
 
 # Import centralized configuration
 from config import (
-    DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, 
-    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG
+    DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG,
+    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG,
+    EMBEDDING_WORKER_CONFIG
 )
 
 # Load environment variables (fallback defaults)
@@ -634,6 +635,19 @@ def restart_scraper(config: ScraperConfig, subreddit: str):
 if mongo_connected:
     monitoring_thread = threading.Thread(target=check_for_failed_scrapers, daemon=True)
     monitoring_thread.start()
+
+# Initialize and start embedding worker
+embedding_worker = None
+if mongo_connected and EMBEDDING_WORKER_CONFIG.get("enabled", True):
+    try:
+        from embedding_worker import EmbeddingWorker
+        embedding_worker = EmbeddingWorker(db)
+        embedding_worker.start_background()
+        logger.info("Embedding worker started")
+    except ImportError:
+        logger.warning("embedding_worker module not found, embedding worker disabled")
+    except Exception as e:
+        logger.error(f"Failed to start embedding worker: {e}")
 
 # Load existing scrapers on startup
 if mongo_connected:
@@ -2973,18 +2987,31 @@ async def discover_subreddits_endpoint(query: str, limit: int = 50):
 
 @app.get("/embeddings/stats")
 async def get_embedding_stats():
-    """Get statistics about embeddings in the database."""
+    """Get statistics about embeddings in all collections."""
     try:
+        # Discovery collection stats
         subreddit_discovery = db.subreddit_discovery
-
-        total = subreddit_discovery.count_documents({})
-        with_embeddings = subreddit_discovery.count_documents(
+        discovery_total = subreddit_discovery.count_documents({})
+        discovery_with_embeddings = subreddit_discovery.count_documents(
             {"embeddings.combined_embedding": {"$exists": True}}
         )
-        without_embeddings = total - with_embeddings
+
+        # Metadata collection stats (active scrapers)
+        metadata_total = subreddit_collection.count_documents({})
+        metadata_with_embeddings = subreddit_collection.count_documents(
+            {"embeddings.combined_embedding": {"$exists": True}}
+        )
+        metadata_pending = subreddit_collection.count_documents(
+            {"embedding_status": "pending"}
+        )
+        metadata_failed = subreddit_collection.count_documents(
+            {"embedding_status": "failed"}
+        )
 
         # Sample document to check dimensions
         sample = subreddit_discovery.find_one(
+            {"embeddings.combined_embedding": {"$exists": True}}
+        ) or subreddit_collection.find_one(
             {"embeddings.combined_embedding": {"$exists": True}}
         )
 
@@ -2997,15 +3024,115 @@ async def get_embedding_stats():
             }
 
         return {
-            "total_subreddits": total,
-            "with_embeddings": with_embeddings,
-            "without_embeddings": without_embeddings,
-            "completion_rate": round(with_embeddings / total * 100, 1) if total > 0 else 0,
+            "discovery_collection": {
+                "total": discovery_total,
+                "with_embeddings": discovery_with_embeddings,
+                "without_embeddings": discovery_total - discovery_with_embeddings,
+                "completion_rate": round(discovery_with_embeddings / discovery_total * 100, 1) if discovery_total > 0 else 0
+            },
+            "metadata_collection": {
+                "total": metadata_total,
+                "with_embeddings": metadata_with_embeddings,
+                "pending": metadata_pending,
+                "failed": metadata_failed,
+                "completion_rate": round(metadata_with_embeddings / metadata_total * 100, 1) if metadata_total > 0 else 0
+            },
+            "combined": {
+                "total_with_embeddings": discovery_with_embeddings + metadata_with_embeddings
+            },
             "model_info": model_info
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")
+
+
+# ======================= EMBEDDING WORKER ENDPOINTS =======================
+
+@app.get("/embeddings/worker/status")
+async def get_embedding_worker_status():
+    """Get the status of the background embedding worker."""
+    try:
+        if embedding_worker is None:
+            return {
+                "enabled": False,
+                "reason": "Worker not initialized (check EMBEDDING_WORKER_CONFIG or module import)"
+            }
+
+        stats = embedding_worker.get_stats()
+        return {
+            "enabled": True,
+            **stats
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting worker status: {str(e)}")
+
+
+@app.post("/embeddings/worker/process")
+async def trigger_embedding_processing(
+    subreddit: str = None,
+    force: bool = False
+):
+    """
+    Manually trigger embedding processing.
+
+    Args:
+        subreddit: Process specific subreddit only (optional)
+        force: Force reprocessing even if already complete
+
+    Returns:
+        Processing results
+    """
+    try:
+        if embedding_worker is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Embedding worker not available"
+            )
+
+        if subreddit:
+            # Process specific subreddit
+            doc = subreddit_collection.find_one({"subreddit_name": subreddit})
+            if not doc:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Subreddit r/{subreddit} not found in metadata"
+                )
+
+            if force or doc.get("embedding_status") != "complete":
+                # Set to pending for processing
+                subreddit_collection.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"embedding_status": "pending"}}
+                )
+                doc["embedding_status"] = "pending"
+
+                success = embedding_worker.process_one(doc)
+                return {
+                    "subreddit": subreddit,
+                    "success": success,
+                    "status": "complete" if success else "failed"
+                }
+            else:
+                return {
+                    "subreddit": subreddit,
+                    "success": True,
+                    "status": "already_complete",
+                    "message": "Use force=true to reprocess"
+                }
+        else:
+            # Process batch
+            result = embedding_worker.process_batch()
+            return {
+                "batch_processed": True,
+                **result
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
