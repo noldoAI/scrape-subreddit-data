@@ -133,6 +133,7 @@ class RedditCredentials(BaseModel):
 
 class ScraperConfig(BaseModel):
     subreddit: str
+    scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
@@ -150,6 +151,7 @@ class ScraperStatus(BaseModel):
 
 class ScraperStartRequest(BaseModel):
     subreddit: str
+    scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
@@ -279,7 +281,7 @@ def delete_reddit_account(account_name: str):
 
 def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting",
                        container_id: str = None, container_name: str = None,
-                       last_error: str = None):
+                       last_error: str = None, scraper_type: str = "posts"):
     """Save scraper configuration to database"""
     try:
         # Store credentials directly (no encryption - MongoDB already secured)
@@ -290,9 +292,10 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "password": config.credentials.password,
             "user_agent": config.credentials.user_agent
         }
-        
+
         scraper_doc = {
             "subreddit": subreddit,
+            "scraper_type": scraper_type,
             "status": status,
             "container_id": container_id,
             "container_name": container_name,
@@ -323,9 +326,9 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "avg_cycle_duration": 0
         }
 
-        # Upsert scraper document - only set created_at and metrics on insert
+        # Upsert scraper document - unique by subreddit AND scraper_type
         scrapers_collection.update_one(
-            {"subreddit": subreddit},
+            {"subreddit": subreddit, "scraper_type": scraper_type},
             {
                 "$set": scraper_doc,
                 "$setOnInsert": {
@@ -335,25 +338,25 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             },
             upsert=True
         )
-        
-        logger.info(f"Saved scraper configuration for r/{subreddit} to database")
+
+        logger.info(f"Saved {scraper_type} scraper configuration for r/{subreddit} to database")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error saving scraper to database: {e}")
         return False
 
-def load_scraper_from_db(subreddit: str) -> Optional[dict]:
+def load_scraper_from_db(subreddit: str, scraper_type: str = "posts") -> Optional[dict]:
     """Load scraper configuration from database"""
     try:
         if not mongo_connected:
             logger.warning("Database not connected, cannot load scraper")
             return None
-            
-        scraper_doc = scrapers_collection.find_one({"subreddit": subreddit})
+
+        scraper_doc = scrapers_collection.find_one({"subreddit": subreddit, "scraper_type": scraper_type})
         if not scraper_doc:
             return None
-        
+
         # Read credentials directly (no decryption needed)
         credentials = RedditCredentials(
             client_id=scraper_doc["credentials"]["client_id"],
@@ -362,10 +365,11 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
             password=scraper_doc["credentials"]["password"],
             user_agent=scraper_doc["credentials"]["user_agent"]
         )
-        
+
         # Reconstruct ScraperConfig
         config = ScraperConfig(
             subreddit=subreddit,
+            scraper_type=scraper_doc.get("scraper_type", "posts"),
             posts_limit=scraper_doc["config"]["posts_limit"],
             interval=scraper_doc["config"]["interval"],
             comment_batch=scraper_doc["config"]["comment_batch"],
@@ -373,10 +377,11 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
             credentials=credentials,
             auto_restart=scraper_doc.get("auto_restart", True)
         )
-        
+
         return {
             "config": config,
             "status": scraper_doc["status"],
+            "scraper_type": scraper_doc.get("scraper_type", "posts"),
             "container_id": scraper_doc.get("container_id"),
             "container_name": scraper_doc.get("container_name"),
             "created_at": scraper_doc["created_at"],
@@ -384,21 +389,21 @@ def load_scraper_from_db(subreddit: str) -> Optional[dict]:
             "last_error": scraper_doc.get("last_error"),
             "restart_count": scraper_doc.get("restart_count", 0)
         }
-        
+
     except Exception as e:
         logger.error(f"Error loading scraper from database for r/{subreddit}: {e}")
         return None
 
-def update_scraper_status(subreddit: str, status: str, container_id: str = None, 
-                         container_name: str = None, last_error: str = None, 
-                         increment_restart: bool = False):
+def update_scraper_status(subreddit: str, status: str, container_id: str = None,
+                         container_name: str = None, last_error: str = None,
+                         increment_restart: bool = False, scraper_type: str = "posts"):
     """Update scraper status in database"""
     try:
         update_data = {
             "status": status,
             "last_updated": datetime.now(UTC)
         }
-        
+
         if container_id:
             update_data["container_id"] = container_id
         if container_name:
@@ -418,15 +423,19 @@ def update_scraper_status(subreddit: str, status: str, container_id: str = None,
             update_operation = {"$set": update_data}
         
         result = scrapers_collection.update_one(
-            {"subreddit": subreddit},
+            {"subreddit": subreddit, "scraper_type": scraper_type},
             update_operation
         )
-        
+
         return result.modified_count > 0
-        
+
     except Exception as e:
         logger.error(f"Error updating scraper status: {e}")
         return False
+
+def get_scraper_key(subreddit: str, scraper_type: str = "posts") -> str:
+    """Generate unique key for scraper in memory cache"""
+    return f"{subreddit}:{scraper_type}"
 
 def load_all_scrapers_from_db():
     """Load all scrapers from database on startup"""
@@ -434,7 +443,8 @@ def load_all_scrapers_from_db():
         scrapers = scrapers_collection.find({})
         for scraper_doc in scrapers:
             subreddit = scraper_doc["subreddit"]
-            scraper_data = load_scraper_from_db(subreddit)
+            scraper_type = scraper_doc.get("scraper_type", "posts")
+            scraper_data = load_scraper_from_db(subreddit, scraper_type)
             if scraper_data:
                 # Create safe config for memory storage (masked credentials)
                 safe_config = scraper_data["config"].model_copy()
@@ -445,10 +455,13 @@ def load_all_scrapers_from_db():
                     password=SECURITY_CONFIG["masked_credential_value"],
                     user_agent=scraper_data["config"].credentials.user_agent
                 )
-                
-                active_scrapers[subreddit] = {
+
+                # Use composite key for memory cache
+                scraper_key = get_scraper_key(subreddit, scraper_type)
+                active_scrapers[scraper_key] = {
                     "config": safe_config,
                     "status": scraper_data["status"],
+                    "scraper_type": scraper_type,
                     "container_id": scraper_data["container_id"],
                     "container_name": scraper_data["container_name"],
                     "started_at": scraper_data["created_at"],
@@ -551,41 +564,44 @@ def check_for_failed_scrapers():
                 logger.debug("Database not connected, skipping failed scraper check")
                 time.sleep(60)
                 continue
-            
+
             # Get all scrapers that should be running
             running_scrapers = scrapers_collection.find({"status": "running", "auto_restart": True})
-            
+
             for scraper_doc in running_scrapers:
                 subreddit = scraper_doc["subreddit"]
+                scraper_type = scraper_doc.get("scraper_type", "posts")
                 container_name = scraper_doc.get("container_name")
-                
+
                 if container_name:
                     # Check if container is actually running
                     container_status = check_container_status(container_name)
-                    
+
                     if container_status != "running":
-                        logger.info(f"Detected failed container for r/{subreddit}, attempting restart...")
-                        
+                        logger.info(f"Detected failed {scraper_type} container for r/{subreddit}, attempting restart...")
+
                         # Load full config from database
-                        scraper_data = load_scraper_from_db(subreddit)
+                        scraper_data = load_scraper_from_db(subreddit, scraper_type)
                         if scraper_data and scraper_data["config"]:
                             # Update status to failed
-                            update_scraper_status(subreddit, "failed", 
+                            update_scraper_status(subreddit, "failed",
                                                 last_error="Container stopped unexpectedly",
-                                                increment_restart=True)
-                            
+                                                increment_restart=True,
+                                                scraper_type=scraper_type)
+
                             # Attempt restart after a short delay to avoid rapid restarts
                             time.sleep(MONITORING_CONFIG["restart_delay"])
                             restart_scraper(scraper_data["config"], subreddit)
-            
+
             # Also check for scrapers that are marked as "stopped" but should be running
             stopped_scrapers = scrapers_collection.find({
-                "status": {"$in": ["stopped", "failed"]}, 
+                "status": {"$in": ["stopped", "failed"]},
                 "auto_restart": True
             })
-            
+
             for scraper_doc in stopped_scrapers:
                 subreddit = scraper_doc["subreddit"]
+                scraper_type = scraper_doc.get("scraper_type", "posts")
                 # Only restart if it's been stopped for more than configured cooldown
                 last_updated = scraper_doc.get("last_updated")
                 if last_updated:
@@ -599,9 +615,9 @@ def check_for_failed_scrapers():
                     
                     time_since_update = (current_time - last_updated_utc).total_seconds()
                     if time_since_update > MONITORING_CONFIG["restart_cooldown"]:
-                        logger.info(f"Auto-restarting stopped scraper for r/{subreddit}...")
-                        
-                        scraper_data = load_scraper_from_db(subreddit)
+                        logger.info(f"Auto-restarting stopped {scraper_type} scraper for r/{subreddit}...")
+
+                        scraper_data = load_scraper_from_db(subreddit, scraper_type)
                         if scraper_data and scraper_data["config"]:
                             restart_scraper(scraper_data["config"], subreddit)
             
@@ -615,18 +631,20 @@ def check_for_failed_scrapers():
 def restart_scraper(config: ScraperConfig, subreddit: str):
     """Restart a failed scraper"""
     try:
-        logger.info(f"Restarting scraper for r/{subreddit}")
-        
+        scraper_type = getattr(config, 'scraper_type', 'posts')
+        logger.info(f"Restarting {scraper_type} scraper for r/{subreddit}")
+
         # Stop and remove any existing container first using centralized naming
-        container_name = f"{DOCKER_CONFIG['container_prefix']}{subreddit}"
+        container_prefix = DOCKER_CONFIG['container_prefix'].get(scraper_type, DOCKER_CONFIG['container_prefix']['posts'])
+        container_name = f"{container_prefix}{subreddit}"
         cleanup_container(container_name)
-        
+
         # Update status to restarting
-        update_scraper_status(subreddit, "restarting")
-        
+        update_scraper_status(subreddit, "restarting", scraper_type=scraper_type)
+
         # Start new container
         run_scraper(config)
-        
+
     except Exception as e:
         logger.error(f"Error restarting scraper for r/{subreddit}: {e}")
         update_scraper_status(subreddit, "error", last_error=f"Restart failed: {str(e)}")
@@ -656,12 +674,19 @@ if mongo_connected:
 def run_scraper(config: ScraperConfig):
     """Run a scraper in a separate Docker container with unique credentials"""
     try:
-        # Create unique container name using centralized prefix
-        container_name = f"{DOCKER_CONFIG['container_prefix']}{config.subreddit}"
-        
+        # Get scraper type (posts or comments)
+        scraper_type = getattr(config, 'scraper_type', 'posts')
+
+        # Create unique container name using type-specific prefix
+        container_prefix = DOCKER_CONFIG['container_prefix'].get(scraper_type, DOCKER_CONFIG['container_prefix']['posts'])
+        container_name = f"{container_prefix}{config.subreddit}"
+
+        # Get the appropriate script for this scraper type
+        scraper_script = DOCKER_CONFIG['scraper_scripts'].get(scraper_type, 'posts_scraper.py')
+
         # Save to database first
-        save_scraper_to_db(config.subreddit, config, "starting", container_name=container_name)
-        
+        save_scraper_to_db(config.subreddit, config, "starting", container_name=container_name, scraper_type=scraper_type)
+
         # Prepare environment variables for the container
         env_vars = [
             f"R_CLIENT_ID={config.credentials.client_id}",
@@ -671,30 +696,37 @@ def run_scraper(config: ScraperConfig):
             f"R_USER_AGENT={config.credentials.user_agent}",
             f"MONGODB_URI={os.getenv('MONGODB_URI', '')}"
         ]
-        
+
         # Build Docker command using centralized config
         cmd = ["docker", "run", "--name", container_name]
-        
+
         # Add flags based on configuration
         if DOCKER_CONFIG["remove_on_exit"]:
             cmd.append("--rm")
         if DOCKER_CONFIG["detached"]:
             cmd.append("-d")
-        
+
         # Add environment variables
         for env_var in env_vars:
             cmd.extend(["-e", env_var])
-        
-        # Add the image and command
-        cmd.extend([
-            DOCKER_CONFIG["image_name"],
-            "python", "reddit_scraper.py", config.subreddit,
-            "--posts-limit", str(config.posts_limit),
-            "--interval", str(config.interval),
-            "--comment-batch", str(config.comment_batch),
-            "--sorting-methods", ",".join(config.sorting_methods)
-        ])
-        
+
+        # Build command based on scraper type
+        if scraper_type == "posts":
+            cmd.extend([
+                DOCKER_CONFIG["image_name"],
+                "python", scraper_script, config.subreddit,
+                "--posts-limit", str(config.posts_limit),
+                "--interval", str(config.interval),
+                "--sorting-methods", ",".join(config.sorting_methods)
+            ])
+        else:  # comments
+            cmd.extend([
+                DOCKER_CONFIG["image_name"],
+                "python", scraper_script, config.subreddit,
+                "--interval", str(config.interval),
+                "--comment-batch", str(config.comment_batch)
+            ])
+
         # Stop and remove any existing container with the same name
         cleanup_container(container_name)
         
@@ -703,42 +735,47 @@ def run_scraper(config: ScraperConfig):
         
         if result.returncode != 0:
             error_msg = f"Failed to start container: {result.stderr}"
-            update_scraper_status(config.subreddit, "error", last_error=error_msg)
+            update_scraper_status(config.subreddit, "error", last_error=error_msg, scraper_type=scraper_type)
             raise Exception(error_msg)
-        
+
         container_id = result.stdout.strip()
-        
+
         # Update database with container info and running status
-        update_scraper_status(config.subreddit, "running", container_id=container_id, container_name=container_name)
-        
+        update_scraper_status(config.subreddit, "running", container_id=container_id,
+                            container_name=container_name, scraper_type=scraper_type)
+
         # Update memory cache with safe config (use model_copy instead of copy)
         config_safe = config.model_copy()
         config_safe.credentials = RedditCredentials(
             client_id=SECURITY_CONFIG["masked_credential_value"],
-            client_secret=SECURITY_CONFIG["masked_credential_value"], 
+            client_secret=SECURITY_CONFIG["masked_credential_value"],
             username=config.credentials.username,  # Keep username for identification
             password=SECURITY_CONFIG["masked_credential_value"],
             user_agent=config.credentials.user_agent
         )
-        
-        active_scrapers[config.subreddit] = {
+
+        # Use composite key for memory cache
+        scraper_key = get_scraper_key(config.subreddit, scraper_type)
+        active_scrapers[scraper_key] = {
             "container_id": container_id,
             "container_name": container_name,
             "config": config_safe,
+            "scraper_type": scraper_type,
             "started_at": datetime.now(UTC),
             "status": "running",
             "last_error": None
         }
-        
-        logger.info(f"Started container {container_name} ({container_id[:12]}) for r/{config.subreddit}")
-        
+
+        logger.info(f"Started {scraper_type} container {container_name} ({container_id[:12]}) for r/{config.subreddit}")
+
     except Exception as e:
-        error_msg = f"Error starting container for r/{config.subreddit}: {e}"
+        error_msg = f"Error starting {scraper_type} container for r/{config.subreddit}: {e}"
         logger.error(error_msg)
-        update_scraper_status(config.subreddit, "error", last_error=str(e))
-        if config.subreddit in active_scrapers:
-            active_scrapers[config.subreddit]["status"] = "error"
-            active_scrapers[config.subreddit]["last_error"] = str(e)
+        update_scraper_status(config.subreddit, "error", last_error=str(e), scraper_type=scraper_type)
+        scraper_key = get_scraper_key(config.subreddit, scraper_type)
+        if scraper_key in active_scrapers:
+            active_scrapers[scraper_key]["status"] = "error"
+            active_scrapers[scraper_key]["last_error"] = str(e)
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():

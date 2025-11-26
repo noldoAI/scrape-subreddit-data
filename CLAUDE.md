@@ -15,7 +15,8 @@ This is a **Reddit scraping system** with two deployment modes:
 ```
 scrape-subreddit-data/
 ├── api.py                    # FastAPI management server (main entry point)
-├── reddit_scraper.py         # Unified scraping engine (runs in Docker containers)
+├── posts_scraper.py          # Posts scraping engine (runs in Docker containers)
+├── comments_scraper.py       # Comments scraping engine (runs in Docker containers)
 ├── config.py                 # Centralized configuration
 ├── rate_limits.py            # Reddit API rate limiting utility
 ├── embedding_worker.py       # Background embedding worker
@@ -61,13 +62,16 @@ docker-compose -f docker-compose.api.yml down
 # http://localhost:8000 (or port 80 if using the default docker-compose config)
 
 # List all scraper containers
-docker ps --filter "name=reddit-scraper-"
+docker ps --filter "name=reddit-posts-scraper-"
+docker ps --filter "name=reddit-comments-scraper-"
 
 # View logs from a specific scraper container
-docker logs reddit-scraper-wallstreetbets
+docker logs reddit-posts-scraper-wallstreetbets
+docker logs reddit-comments-scraper-wallstreetbets
 
 # Stop all scraper containers
-docker stop $(docker ps --filter "name=reddit-scraper-" -q)
+docker stop $(docker ps --filter "name=reddit-posts-scraper-" -q)
+docker stop $(docker ps --filter "name=reddit-comments-scraper-" -q)
 ```
 
 ### Standalone Mode (Alternative)
@@ -76,20 +80,21 @@ docker stop $(docker ps --filter "name=reddit-scraper-" -q)
 # Install dependencies
 pip install -r requirements.txt
 
-# Run scraper for a specific subreddit
-python reddit_scraper.py SUBREDDIT_NAME --posts-limit 1000 --interval 300 --comment-batch 20
+# Run POSTS scraper for a specific subreddit
+python posts_scraper.py SUBREDDIT_NAME --posts-limit 1000 --interval 300
+
+# Run COMMENTS scraper for a specific subreddit
+python comments_scraper.py SUBREDDIT_NAME --interval 300 --comment-batch 12
 
 # Show statistics only
-python reddit_scraper.py SUBREDDIT_NAME --stats
-
-# Run comment scraping only
-python reddit_scraper.py SUBREDDIT_NAME --comments-only
+python posts_scraper.py SUBREDDIT_NAME --stats
+python comments_scraper.py SUBREDDIT_NAME --stats
 
 # Update subreddit metadata only
-python reddit_scraper.py SUBREDDIT_NAME --metadata-only
+python posts_scraper.py SUBREDDIT_NAME --metadata-only
 
-# Using Docker Compose with standalone mode
-docker-compose --env-file .env.wallstreetbets up -d
+# Using Docker Compose with standalone mode (runs both scrapers)
+docker-compose --env-file .env up -d
 docker-compose logs -f
 docker-compose down
 ```
@@ -99,27 +104,35 @@ docker-compose down
 ### Core Components
 
 1. **`api.py`** - FastAPI management server
-   - Creates/manages Docker containers for each subreddit scraper
+   - Creates/manages Docker containers for posts and comments scrapers
    - Stores scraper configurations and encrypted credentials in MongoDB (`reddit_scrapers` collection)
    - Provides REST API endpoints and web dashboard
    - Monitors container health and auto-restarts failed scrapers
-   - Each API endpoint manages containers via Docker commands
+   - Supports `scraper_type` field: "posts" or "comments"
 
-2. **`reddit_scraper.py`** - Unified scraping engine (runs in containers)
-   - Single Python process handles all three scraping phases in a continuous loop:
-     - **Phase 1**: Posts scraping (every N seconds based on config)
-     - **Phase 2**: Smart comment updates (prioritized queue system)
-     - **Phase 3**: Subreddit metadata (every 24 hours)
+2. **`posts_scraper.py`** - Posts scraping engine (runs in containers)
+   - Continuous loop handling two phases:
+     - **Phase 1**: Posts scraping (multi-sort: new, top, rising)
+     - **Phase 2**: Subreddit metadata (every 24 hours)
    - Uses PRAW library to interact with Reddit API
-   - Implements intelligent comment update prioritization
+   - First-run historical fetch (month of top posts)
 
-3. **`config.py`** - Centralized configuration
+3. **`comments_scraper.py`** - Comments scraping engine (runs in containers)
+   - Continuous loop for comment scraping with intelligent prioritization:
+     - **HIGHEST**: Posts never scraped (initial scrape)
+     - **HIGH**: High-activity posts (>100 comments) - every 2 hours
+     - **MEDIUM**: Medium-activity posts (20-100 comments) - every 6 hours
+     - **LOW**: Low-activity posts (<20 comments) - every 24 hours
+   - Depth-limited scraping (top 3 levels for efficiency)
+   - Deduplication to avoid re-scraping existing comments
+
+4. **`config.py`** - Centralized configuration
    - Database name: `"noldo"`
    - Collection names: `reddit_posts`, `reddit_comments`, `subreddit_metadata`, `reddit_scrapers`, `reddit_accounts`
-   - Default scraper settings (interval, limits, batch sizes)
+   - Separate configs: `DEFAULT_POSTS_SCRAPER_CONFIG` and `DEFAULT_COMMENTS_SCRAPER_CONFIG`
    - Docker, API, monitoring, and security configurations
 
-4. **`rate_limits.py`** - Reddit API rate limiting
+5. **`rate_limits.py`** - Reddit API rate limiting
    - Monitors Reddit API quota (remaining/used requests)
    - Automatically pauses when rate limit is low
    - Waits for rate limit reset when necessary
@@ -129,14 +142,22 @@ docker-compose down
 ```
 Web Dashboard/API Request
          ↓
-    api.py creates Docker container
+    api.py creates Docker container(s)
          ↓
-Container runs reddit_scraper.py with unique credentials
-         ↓
-    Continuous 3-phase loop:
-    1. Scrape hot posts → Update MongoDB (reddit_posts)
-    2. Smart comment updates → Update MongoDB (reddit_comments)
-    3. Metadata scraping → Update MongoDB (subreddit_metadata)
+   ┌──────────────────────────────────────────────────┐
+   │   POSTS SCRAPER CONTAINER                         │
+   │   (reddit-posts-scraper-{subreddit})              │
+   │   └── posts_scraper.py                            │
+   │       1. Scrape posts → MongoDB (reddit_posts)    │
+   │       2. Update metadata → MongoDB (subreddit_*)  │
+   └──────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────┐
+   │   COMMENTS SCRAPER CONTAINER                      │
+   │   (reddit-comments-scraper-{subreddit})           │
+   │   └── comments_scraper.py                         │
+   │       Priority-based comment scraping             │
+   │       → MongoDB (reddit_comments)                 │
+   └──────────────────────────────────────────────────┘
          ↓
     Container status tracked in MongoDB (reddit_scrapers)
          ↓
@@ -280,7 +301,9 @@ Query uses `$or` conditions with `initial_comments_scraped`, `num_comments`, and
 
 ### Container Isolation Strategy
 
-- Each subreddit runs in its own Docker container (named `reddit-scraper-{subreddit}`)
+- Each subreddit can have two Docker containers:
+  - Posts: `reddit-posts-scraper-{subreddit}`
+  - Comments: `reddit-comments-scraper-{subreddit}`
 - Containers have unique Reddit API credentials (stored encrypted in MongoDB)
 - Prevents rate limit conflicts between scrapers
 - API server mounts Docker socket (`/var/run/docker.sock`) to manage containers
@@ -348,7 +371,7 @@ MONGODB_URI=mongodb+srv://...
 ### When Adding New Scraper Features
 
 - **Update config.py first**: Add new configuration options to `DEFAULT_SCRAPER_CONFIG` or other relevant config dictionaries
-- **Container restart required**: Changes to reddit_scraper.py require rebuilding Docker image and restarting containers
+- **Container restart required**: Changes to posts_scraper.py or comments_scraper.py require rebuilding Docker image and restarting containers
 - **API changes**: If modifying API endpoints, update both the endpoint handler and the HTML dashboard in api.py
 
 ### Rate Limiting Best Practices
@@ -362,7 +385,7 @@ MONGODB_URI=mongodb+srv://...
 1. API receives start request with credentials
 2. Credentials encrypted and stored in MongoDB
 3. Container created with environment variables (decrypted credentials)
-4. Container runs `reddit_scraper.py` with command-line args
+4. Container runs `posts_scraper.py` or `comments_scraper.py` with command-line args
 5. Health check monitors container every 30 seconds
 6. If failed and `auto_restart=True`, API restarts container after cooldown
 7. Container logs accessible via `docker logs {container_name}` or API endpoint
@@ -381,33 +404,38 @@ export R_USER_AGENT=...
 export MONGODB_URI=...
 
 # Run scraper directly
-python reddit_scraper.py wallstreetbets --stats
-python reddit_scraper.py wallstreetbets --posts-limit 100 --interval 60 --comment-batch 5
+python posts_scraper.py wallstreetbets --stats
+python posts_scraper.py wallstreetbets --posts-limit 100 --interval 60
+
+python comments_scraper.py wallstreetbets --stats
+python comments_scraper.py wallstreetbets --interval 60 --comment-batch 5
 ```
 
 ### Debugging Container Issues
 
 ```bash
 # Check if container is running
-docker ps -a --filter "name=reddit-scraper-wallstreetbets"
+docker ps -a --filter "name=reddit-posts-scraper-wallstreetbets"
+docker ps -a --filter "name=reddit-comments-scraper-wallstreetbets"
 
 # View container logs
-docker logs reddit-scraper-wallstreetbets --tail 100
+docker logs reddit-posts-scraper-wallstreetbets --tail 100
+docker logs reddit-comments-scraper-wallstreetbets --tail 100
 
 # Inspect container details
-docker inspect reddit-scraper-wallstreetbets
+docker inspect reddit-posts-scraper-wallstreetbets
 
 # Enter running container for debugging
-docker exec -it reddit-scraper-wallstreetbets bash
+docker exec -it reddit-posts-scraper-wallstreetbets bash
 
 # Check resource usage
-docker stats reddit-scraper-wallstreetbets
+docker stats reddit-posts-scraper-wallstreetbets
 ```
 
 ### Common Issues
 
 **Container exits immediately**:
-- Check logs: `docker logs reddit-scraper-{subreddit}`
+- Check logs: `docker logs reddit-posts-scraper-{subreddit}` or `docker logs reddit-comments-scraper-{subreddit}`
 - Verify credentials are correct
 - Check MongoDB connection string
 - Ensure `reddit-scraper` image exists: `docker images | grep reddit-scraper`
@@ -581,7 +609,7 @@ These are defined in api.py and accessible via `GET /presets` endpoint.
 
 **To customize** (via dashboard or command line):
 ```bash
-python reddit_scraper.py subreddit \
+python posts_scraper.py subreddit \
   --posts-limit 150 \
   --comment-batch 8 \
   --sorting-methods "new,top,rising"
@@ -898,7 +926,7 @@ EMBEDDING_WORKER_CONFIG = {
 Subreddits being actively scraped now automatically get embeddings generated, making them searchable via semantic search.
 
 **How It Works:**
-1. When `reddit_scraper.py` saves subreddit metadata, it sets `embedding_status: "pending"`
+1. When `posts_scraper.py` saves subreddit metadata, it sets `embedding_status: "pending"`
 2. Background worker in the API server processes pending embeddings every 60 seconds
 3. Embeddings are stored in the `subreddit_metadata` collection
 4. Both collections (discovery + metadata) can be searched

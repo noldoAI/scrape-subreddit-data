@@ -23,6 +23,7 @@ class RedditCredentials(BaseModel):
 
 class ScraperConfig(BaseModel):
     subreddit: str
+    scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]
@@ -33,6 +34,7 @@ class ScraperConfig(BaseModel):
 
 class ScraperStatus(BaseModel):
     subreddit: str
+    scraper_type: str = "posts"  # "posts" or "comments"
     status: str  # "running", "stopped", "error", "failed"
     pid: Optional[int] = None
     started_at: Optional[datetime] = None
@@ -42,6 +44,7 @@ class ScraperStatus(BaseModel):
 
 class ScraperStartRequest(BaseModel):
     subreddit: str
+    scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
     comment_batch: int = DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]

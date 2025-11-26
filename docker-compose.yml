@@ -1,11 +1,12 @@
 version: "3.8"
 
 services:
-  reddit-scraper:
+  # Posts scraper service
+  reddit-posts-scraper:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: reddit-scraper
+    container_name: reddit-posts-scraper
     env_file:
       - .env
     environment:
@@ -13,12 +14,39 @@ services:
       - TARGET_SUBREDDIT=${TARGET_SUBREDDIT:-wallstreetbets}
     restart: unless-stopped
     command: >
-      python reddit_scraper.py ${TARGET_SUBREDDIT:-wallstreetbets}
+      python posts_scraper.py ${TARGET_SUBREDDIT:-wallstreetbets}
       --posts-limit ${POSTS_LIMIT:-1000}
       --interval ${SCRAPE_INTERVAL:-300}
-      --comment-batch ${COMMENT_BATCH:-20}
     healthcheck:
-      test: ["CMD", "python", "-c", "import reddit_scraper; print('OK')"]
+      test: ["CMD", "python", "-c", "import posts_scraper; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Comments scraper service
+  reddit-comments-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reddit-comments-scraper
+    env_file:
+      - .env
+    environment:
+      # Override with your target subreddit
+      - TARGET_SUBREDDIT=${TARGET_SUBREDDIT:-wallstreetbets}
+    restart: unless-stopped
+    command: >
+      python comments_scraper.py ${TARGET_SUBREDDIT:-wallstreetbets}
+      --interval ${SCRAPE_INTERVAL:-300}
+      --comment-batch ${COMMENT_BATCH:-12}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import comments_scraper; print('OK')"]
       interval: 30s
       timeout: 10s
       retries: 3
