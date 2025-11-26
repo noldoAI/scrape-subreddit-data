@@ -1638,15 +1638,32 @@ async def dashboard():
                     const container = document.getElementById('scrapers');
                     const scraperCount = Object.keys(scrapers).length;
 
+                    // Calculate totals across all scrapers
+                    let globalTotalPosts = 0;
+                    let globalTotalComments = 0;
+                    Object.values(scrapers).forEach(info => {
+                        globalTotalPosts += info.database_totals?.total_posts || 0;
+                        globalTotalComments += info.database_totals?.total_comments || 0;
+                    });
+
                     container.innerHTML = `
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                             <h2 style="margin: 0;">Active Scrapers (${scraperCount})</h2>
-                            ${scraperCount > 0 ? `
-                                <div>
-                                    <button onclick="expandAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Expand All</button>
-                                    <button onclick="collapseAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Collapse All</button>
+                            <div style="display: flex; align-items: center; gap: 20px;">
+                                <div style="text-align: right;">
+                                    <span style="color: #22c55e; font-size: 18px; font-weight: 600;">${globalTotalPosts.toLocaleString()}</span>
+                                    <span style="color: #666; font-size: 13px;"> posts</span>
+                                    <span style="color: #444; margin: 0 8px;">|</span>
+                                    <span style="color: #3b82f6; font-size: 18px; font-weight: 600;">${globalTotalComments.toLocaleString()}</span>
+                                    <span style="color: #666; font-size: 13px;"> comments</span>
                                 </div>
-                            ` : ''}
+                                ${scraperCount > 0 ? `
+                                    <div>
+                                        <button onclick="expandAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Expand All</button>
+                                        <button onclick="collapseAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Collapse All</button>
+                                    </div>
+                                ` : ''}
+                            </div>
                         </div>
                     `;
 
