@@ -1025,39 +1025,113 @@ async def dashboard():
             @keyframes spin { to { transform: rotate(360deg); } }
 
             input, select, textarea {
-                padding: 10px 12px;
-                margin: 5px 5px 5px 0;
-                border: 1px solid #2a2a2a;
-                border-radius: 4px;
-                background: #0a0a0a;
+                padding: 10px 14px;
+                margin: 5px 8px 5px 0;
+                border: 1px solid #333;
+                border-radius: 6px;
+                background: #0d0d0d;
                 color: #e5e5e5;
                 transition: all 0.2s ease;
                 font-size: 14px;
             }
             input:focus, select:focus, textarea:focus {
                 outline: none;
-                border-color: #525252;
-                background: #0d0d0d;
+                border-color: #22c55e;
+                background: #111;
+                box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15);
             }
-            input::placeholder { color: #525252; }
+            input::placeholder, textarea::placeholder { color: #555; }
+
+            input[type="text"], input[type="password"] {
+                min-width: 220px;
+            }
+            input[type="number"] {
+                width: 100px;
+            }
+            select {
+                min-width: 180px;
+                cursor: pointer;
+            }
+
+            .form-section {
+                background: linear-gradient(135deg, #0a0a0a 0%, #111 100%);
+                padding: 24px;
+                border-radius: 10px;
+                margin: 20px 0;
+                border: 1px solid #222;
+            }
+            .form-section h3 {
+                margin: 0 0 16px 0;
+                color: #fff;
+                font-size: 16px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .form-section h3::before {
+                content: '';
+                width: 4px;
+                height: 18px;
+                background: #22c55e;
+                border-radius: 2px;
+            }
 
             .credentials-section {
                 background: #0a0a0a;
                 padding: 20px;
-                border-radius: 6px;
+                border-radius: 8px;
                 margin: 15px 0;
-                border: 1px solid #1f1f1f;
+                border: 1px solid #222;
             }
 
-            .form-row { margin: 12px 0; display: flex; align-items: center; flex-wrap: wrap; }
+            .form-row {
+                margin: 14px 0;
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
             .form-row label {
                 display: inline-block;
-                min-width: 140px;
-                color: #b4b4b4;
+                min-width: 130px;
+                color: #a3a3a3;
                 font-weight: 500;
-                font-size: 14px;
+                font-size: 13px;
+                text-transform: uppercase;
+                letter-spacing: 0.3px;
             }
-            .form-row small { color: #737373; margin-left: 8px; }
+            .form-row small { color: #666; margin-left: 4px; font-size: 12px; }
+
+            .form-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 16px;
+            }
+            .form-grid .form-row {
+                flex-direction: column;
+                align-items: flex-start;
+                margin: 0;
+            }
+            .form-grid .form-row label {
+                margin-bottom: 6px;
+            }
+            .form-grid .form-row input,
+            .form-grid .form-row select {
+                width: 100%;
+                margin: 0;
+            }
+
+            .mode-badge {
+                display: inline-block;
+                padding: 3px 10px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                margin-left: 8px;
+            }
+            .mode-badge.single { background: #1e3a5f; color: #60a5fa; }
+            .mode-badge.multi { background: #3f2c5f; color: #c084fc; }
 
             .collapsible {
                 cursor: pointer;
@@ -1166,11 +1240,6 @@ async def dashboard():
                 border: 1px solid #1f1f1f !important;
                 border-radius: 6px;
             }
-
-            #accountManagerModal > div {
-                background: #0a0a0a !important;
-                border: 1px solid #2a2a2a;
-            }
         </style>
     </head>
     <body>
@@ -1189,14 +1258,48 @@ async def dashboard():
         <div id="scrapers"></div>
         
         <h2>Start New Scraper</h2>
-        <div>
+
+        <!-- Target Selection -->
+        <div class="form-section">
+            <h3>Target Selection</h3>
             <div class="form-row">
                 <label>Mode:</label>
-                <select id="scraper_mode" onchange="toggleSubredditInput()">
+                <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 240px;">
                     <option value="single">Single Subreddit</option>
                     <option value="multi">Multi-Subreddit (up to 10)</option>
                 </select>
+                <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
+            </div>
 
+            <div id="single-subreddit-input">
+                <div class="form-row">
+                    <label>Subreddit:</label>
+                    <input type="text" id="subreddit" placeholder="e.g. wallstreetbets" style="min-width: 280px;" />
+                    <select id="preset" style="min-width: 260px;">
+                        <option value="custom">Custom Settings</option>
+                        <option value="high">High Activity (wsb, stocks)</option>
+                        <option value="medium">Medium Activity (investing)</option>
+                        <option value="low">Low Activity (niche subs)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="multi-subreddit-input" style="display: none;">
+                <div class="form-row" style="align-items: flex-start;">
+                    <label style="padding-top: 10px;">Subreddits:</label>
+                    <div style="flex: 1; max-width: 500px;">
+                        <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket, pennystocks, daytrading, thetagang, valueinvesting, dividends"
+                            style="width: 100%; height: 80px; resize: vertical;"></textarea>
+                        <small style="display: block; margin-top: 6px; color: #666;">Comma-separated list. Max 10 subreddits per container. First subreddit is used for naming.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scraper Configuration -->
+        <div class="form-section">
+            <h3>Configuration</h3>
+            <div class="form-row">
                 <label>Scraper Type:</label>
                 <select id="scraper_type">
                     <option value="posts">Posts Scraper</option>
@@ -1204,165 +1307,170 @@ async def dashboard():
                 </select>
             </div>
 
-            <div class="form-row" id="single-subreddit-input">
-                <label>Subreddit:</label>
-                <input type="text" id="subreddit" placeholder="wallstreetbets" />
-
-                <label>Preset:</label>
-                <select id="preset">
-                    <option value="custom">Custom</option>
-                    <option value="high">High Activity (wallstreetbets, stocks)</option>
-                    <option value="medium">Medium Activity (investing, crypto)</option>
-                    <option value="low">Low Activity (pennystocks, niche)</option>
-                </select>
-            </div>
-
-            <div class="form-row" id="multi-subreddit-input" style="display: none;">
-                <label style="vertical-align: top;">Subreddits:</label>
-                <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket"
-                    style="width: 400px; height: 60px; background: #1e1e1e; color: #d4d4d4; border: 1px solid #404040; border-radius: 4px; padding: 8px; font-family: inherit;"></textarea>
-                <small style="color: #737373; display: block; margin-top: 4px;">Comma-separated. Max 10 subreddits per container.</small>
-            </div>
-            
-            <div class="form-row">
-                <label>Posts Limit:</label>
-                <input type="number" id="posts_limit" value="1000" />
-
-                <label>Interval (sec):</label>
-                <input type="number" id="interval" value="60" />
-
-                <label>Comment Batch:</label>
-                <input type="number" id="comment_batch" value="50" />
-
-                <label>Auto-restart:</label>
-                <label class="toggle">
-                    <input type="checkbox" id="auto_restart" checked>
-                    <span class="slider"></span>
-                </label>
-            </div>
-
-            <div class="form-row">
-                <label style="vertical-align: top;">Sorting Methods:</label>
-                <div style="display: inline-flex; flex-direction: column; gap: 8px;">
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
-                        <input type="checkbox" name="sorting" value="new" checked style="cursor: pointer; margin-right: 6px;"> new
-                        <small style="color: #737373; margin-left: 8px;">(Captures ALL new posts)</small>
-                    </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
-                        <input type="checkbox" name="sorting" value="hot" checked style="cursor: pointer; margin-right: 6px;"> hot
-                        <small style="color: #737373; margin-left: 8px;">(Popular/trending posts)</small>
-                    </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
-                        <input type="checkbox" name="sorting" value="rising" checked style="cursor: pointer; margin-right: 6px;"> rising
-                        <small style="color: #737373; margin-left: 8px;">(Early trending detection)</small>
-                    </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
-                        <input type="checkbox" name="sorting" value="top" style="cursor: pointer; margin-right: 6px;"> top
-                        <small style="color: #737373; margin-left: 8px;">(Top posts from today)</small>
-                    </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer;">
-                        <input type="checkbox" name="sorting" value="controversial" style="cursor: pointer; margin-right: 6px;"> controversial
-                        <small style="color: #737373; margin-left: 8px;">(Divisive content)</small>
+            <div class="form-grid" style="margin-top: 16px;">
+                <div class="form-row">
+                    <label>Posts Limit</label>
+                    <input type="number" id="posts_limit" value="1000" />
+                </div>
+                <div class="form-row">
+                    <label>Interval (sec)</label>
+                    <input type="number" id="interval" value="60" />
+                </div>
+                <div class="form-row">
+                    <label>Comment Batch</label>
+                    <input type="number" id="comment_batch" value="50" />
+                </div>
+                <div class="form-row">
+                    <label>Auto-restart</label>
+                    <label class="toggle" style="margin-top: 4px;">
+                        <input type="checkbox" id="auto_restart" checked>
+                        <span class="slider"></span>
                     </label>
                 </div>
             </div>
-            
-            <h3>Reddit Account Selection</h3>
+
+            <div class="form-row" style="margin-top: 20px; align-items: flex-start;">
+                <label style="padding-top: 4px;">Sorting:</label>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; flex: 1;">
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
+                        <input type="checkbox" name="sorting" value="new" checked style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
+                        <span>new</span>
+                        <small style="color: #555; margin-left: 6px;">100% coverage</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
+                        <input type="checkbox" name="sorting" value="hot" checked style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
+                        <span>hot</span>
+                        <small style="color: #555; margin-left: 6px;">trending</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
+                        <input type="checkbox" name="sorting" value="rising" checked style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
+                        <span>rising</span>
+                        <small style="color: #555; margin-left: 6px;">early detection</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
+                        <input type="checkbox" name="sorting" value="top" style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
+                        <span>top</span>
+                        <small style="color: #555; margin-left: 6px;">daily best</small>
+                    </label>
+                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
+                        <input type="checkbox" name="sorting" value="controversial" style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
+                        <span>controversial</span>
+                        <small style="color: #555; margin-left: 6px;">divisive</small>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reddit Account -->
+        <div class="form-section">
+            <h3>Reddit Account</h3>
             <div class="form-row">
-                <label>Account Type:</label>
+                <label>Account:</label>
                 <select id="account_type" onchange="toggleAccountType()">
                     <option value="saved">Use Saved Account</option>
-                    <option value="manual">Enter Credentials Manually</option>
+                    <option value="manual">Enter Manually</option>
                 </select>
             </div>
-            
+
             <!-- Saved Account Selection -->
             <div id="saved_account_section">
                 <div class="form-row">
-                    <label>Saved Account:</label>
-                    <select id="saved_account_name">
-                        <option value="">Select an account...</option>
+                    <label>Select:</label>
+                    <select id="saved_account_name" style="min-width: 240px;">
+                        <option value="">Choose an account...</option>
                     </select>
                     <button onclick="loadSavedAccounts()" class="stats">Refresh</button>
-                    <button onclick="showAccountManager()" class="stats">Manage Accounts</button>
+                    <button onclick="showAccountManager()" class="stats">Manage</button>
                 </div>
             </div>
-            
+
             <!-- Manual Credentials -->
             <div id="manual_credentials_section" style="display: none;">
                 <div class="credentials-section">
-                    <div class="form-row">
-                        <label>Client ID:</label>
-                        <input type="text" id="client_id" placeholder="Your Reddit app client ID" />
+                    <div class="form-grid">
+                        <div class="form-row">
+                            <label>Client ID</label>
+                            <input type="text" id="client_id" placeholder="Reddit app client ID" />
+                        </div>
+                        <div class="form-row">
+                            <label>Client Secret</label>
+                            <input type="password" id="client_secret" placeholder="Reddit app secret" />
+                        </div>
+                        <div class="form-row">
+                            <label>Username</label>
+                            <input type="text" id="username" placeholder="Reddit username" />
+                        </div>
+                        <div class="form-row">
+                            <label>Password</label>
+                            <input type="password" id="password" placeholder="Reddit password" />
+                        </div>
                     </div>
-                    <div class="form-row">
-                        <label>Client Secret:</label>
-                        <input type="password" id="client_secret" placeholder="Your Reddit app client secret" />
-                    </div>
-                    <div class="form-row">
-                        <label>Username:</label>
-                        <input type="text" id="username" placeholder="Your Reddit username" />
-                    </div>
-                    <div class="form-row">
-                        <label>Password:</label>
-                        <input type="password" id="password" placeholder="Your Reddit password" />
-                    </div>
-                    <div class="form-row">
+                    <div class="form-row" style="margin-top: 16px;">
                         <label>User Agent:</label>
-                        <input type="text" id="user_agent" placeholder="RedditScraper/1.0 by YourUsername" />
+                        <input type="text" id="user_agent" placeholder="RedditScraper/1.0 by YourUsername" style="flex: 1; max-width: 400px;" />
                     </div>
                     <div class="form-row">
                         <label>Save as:</label>
                         <input type="text" id="save_account_as" placeholder="Account name (optional)" />
-                        <small>Save these credentials for future use</small>
+                        <small>Save for future use</small>
                     </div>
-                    <p><small>Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">https://www.reddit.com/prefs/apps</a></small></p>
+                    <p style="margin: 12px 0 0 0;"><small style="color: #666;">Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank" style="color: #22c55e;">reddit.com/prefs/apps</a></small></p>
                 </div>
             </div>
-            
-            <br>
-            <button onclick="startScraper()" class="start" id="startScraperBtn">Start Scraper</button>
+        </div>
+
+        <div style="margin-top: 24px;">
+            <button onclick="startScraper()" class="start" id="startScraperBtn" style="padding: 14px 32px; font-size: 15px;">Start Scraper</button>
         </div>
         
         <!-- Account Manager Modal -->
-        <div id="accountManagerModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1001;">
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; width: 80%; max-width: 600px; max-height: 80%; overflow-y: auto;">
-                <h2>Account Manager</h2>
-
-                <h3>Add New Account</h3>
-                <div class="credentials-section">
-                    <div class="form-row">
-                        <label>Account Name:</label>
-                        <input type="text" id="new_account_name" placeholder="Give this account a name" />
-                    </div>
-                    <div class="form-row">
-                        <label>Client ID:</label>
-                        <input type="text" id="new_client_id" placeholder="Your Reddit app client ID" />
-                    </div>
-                    <div class="form-row">
-                        <label>Client Secret:</label>
-                        <input type="password" id="new_client_secret" placeholder="Your Reddit app client secret" />
-                    </div>
-                    <div class="form-row">
-                        <label>Username:</label>
-                        <input type="text" id="new_username" placeholder="Your Reddit username" />
-                    </div>
-                    <div class="form-row">
-                        <label>Password:</label>
-                        <input type="password" id="new_password" placeholder="Your Reddit password" />
-                    </div>
-                    <div class="form-row">
-                        <label>User Agent:</label>
-                        <input type="text" id="new_user_agent" placeholder="RedditScraper/1.0 by YourUsername" />
-                    </div>
-                    <button onclick="saveNewAccount()" class="start">Save Account</button>
+        <div id="accountManagerModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); z-index: 1001;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #111; padding: 30px; border-radius: 12px; width: 90%; max-width: 650px; max-height: 85%; overflow-y: auto; border: 1px solid #333;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+                    <h2 style="margin: 0; color: #fff;">Account Manager</h2>
+                    <button onclick="hideAccountManager()" style="background: none; border: none; color: #666; font-size: 24px; cursor: pointer; padding: 0; line-height: 1;">&times;</button>
                 </div>
-                
-                <h3>Saved Accounts</h3>
-                <div id="savedAccountsList"></div>
-                
-                <div style="text-align: center; margin-top: 20px;">
-                    <button onclick="hideAccountManager()" class="stop">Close</button>
+
+                <div class="form-section" style="margin-top: 0;">
+                    <h3>Add New Account</h3>
+                    <div class="form-grid">
+                        <div class="form-row">
+                            <label>Account Name</label>
+                            <input type="text" id="new_account_name" placeholder="e.g. main_account" />
+                        </div>
+                        <div class="form-row">
+                            <label>Username</label>
+                            <input type="text" id="new_username" placeholder="Reddit username" />
+                        </div>
+                        <div class="form-row">
+                            <label>Client ID</label>
+                            <input type="text" id="new_client_id" placeholder="Reddit app client ID" />
+                        </div>
+                        <div class="form-row">
+                            <label>Client Secret</label>
+                            <input type="password" id="new_client_secret" placeholder="Reddit app secret" />
+                        </div>
+                        <div class="form-row">
+                            <label>Password</label>
+                            <input type="password" id="new_password" placeholder="Reddit password" />
+                        </div>
+                        <div class="form-row">
+                            <label>User Agent</label>
+                            <input type="text" id="new_user_agent" placeholder="Scraper/1.0 by user" />
+                        </div>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <button onclick="saveNewAccount()" class="start">Save Account</button>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h3>Saved Accounts</h3>
+                    <div id="savedAccountsList" style="min-height: 60px;"></div>
+                </div>
+
+                <div style="text-align: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #222;">
+                    <button onclick="hideAccountManager()" class="stats" style="padding: 10px 30px;">Close</button>
                 </div>
             </div>
         </div>
@@ -1549,18 +1657,21 @@ async def dashboard():
                         const allSubreddits = info.subreddits || [subreddit];
                         const isMulti = allSubreddits.length > 1;
                         const displayTitle = isMulti
-                            ? `r/${subreddit} <span style="color: #737373; font-size: 14px;">+${allSubreddits.length - 1} more</span>`
+                            ? `r/${subreddit} <span style="color: #666; font-size: 13px; font-weight: 400;">+${allSubreddits.length - 1} more</span>`
                             : `r/${subreddit}`;
                         const subredditList = isMulti
                             ? allSubreddits.map(s => `r/${s}`).join(', ')
                             : null;
+                        const multiBadge = isMulti
+                            ? `<span class="mode-badge multi" style="margin-left: 8px;">${allSubreddits.length} subs</span>`
+                            : '';
 
                         const div = document.createElement('div');
                         div.className = `scraper ${statusClass}`;
                         div.innerHTML = `
                             <div class="scraper-header" onclick="toggleScraper(this)">
                                 <div class="scraper-title">
-                                    <h3>${displayTitle}</h3>
+                                    <h3>${displayTitle}${multiBadge}</h3>
                                     <span class="status-badge ${badgeClass}">${info.status?.toUpperCase() || 'UNKNOWN'}</span>
                                 </div>
                                 <div class="scraper-summary">
@@ -1631,15 +1742,41 @@ async def dashboard():
                 const mode = document.getElementById('scraper_mode').value;
                 const singleInput = document.getElementById('single-subreddit-input');
                 const multiInput = document.getElementById('multi-subreddit-input');
+                const modeIndicator = document.getElementById('mode-indicator');
 
                 if (mode === 'single') {
-                    singleInput.style.display = 'flex';
+                    singleInput.style.display = 'block';
                     multiInput.style.display = 'none';
+                    modeIndicator.className = 'mode-badge single';
+                    modeIndicator.textContent = '1 subreddit';
                 } else {
                     singleInput.style.display = 'none';
                     multiInput.style.display = 'block';
+                    modeIndicator.className = 'mode-badge multi';
+                    modeIndicator.textContent = 'up to 10';
+                }
+                updateMultiSubredditCount();
+            }
+
+            // Update count when typing in multi-subreddit textarea
+            function updateMultiSubredditCount() {
+                const textarea = document.getElementById('subreddits');
+                const modeIndicator = document.getElementById('mode-indicator');
+                const mode = document.getElementById('scraper_mode').value;
+
+                if (mode === 'multi' && textarea.value.trim()) {
+                    const count = textarea.value.split(',').filter(s => s.trim()).length;
+                    modeIndicator.textContent = count + ' subreddit' + (count !== 1 ? 's' : '');
                 }
             }
+
+            // Add event listener to textarea
+            document.addEventListener('DOMContentLoaded', function() {
+                const textarea = document.getElementById('subreddits');
+                if (textarea) {
+                    textarea.addEventListener('input', updateMultiSubredditCount);
+                }
+            });
 
             // Account management functions
             function toggleAccountType() {
