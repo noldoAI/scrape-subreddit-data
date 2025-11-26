@@ -1623,6 +1623,16 @@ async def dashboard():
 
             async function loadScrapers() {
                 try {
+                    // Save expanded state before refresh
+                    const expandedScrapers = new Set();
+                    document.querySelectorAll('.scraper.expanded').forEach(el => {
+                        const h3 = el.querySelector('h3');
+                        if (h3) {
+                            const match = h3.textContent.match(/r\/([^\s+]+)/);
+                            if (match) expandedScrapers.add(match[1]);
+                        }
+                    });
+
                     const response = await fetch('/scrapers');
                     const scrapers = await response.json();
                     const container = document.getElementById('scrapers');
@@ -1747,6 +1757,11 @@ async def dashboard():
                             </div>
                         `;
                         container.appendChild(div);
+
+                        // Restore expanded state
+                        if (expandedScrapers.has(subreddit)) {
+                            div.classList.add('expanded');
+                        }
                     });
                 } catch (error) {
                     console.error('Error loading scrapers:', error);
