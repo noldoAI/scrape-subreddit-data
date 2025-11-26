@@ -43,3 +43,14 @@ services:
     image: reddit-scraper
     command: echo "Image built successfully"
     restart: "no"
+
+  # Cleanup dangling images after builds
+  cleanup:
+    image: docker:cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: sh -c "docker image prune -f && echo 'Dangling images cleaned up'"
+    depends_on:
+      - reddit-scraper-builder
+      - reddit-scraper-api
+    restart: "no"
