@@ -29,7 +29,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY api.py .
 COPY config.py .
-COPY reddit_scraper.py .
+COPY posts_scraper.py .
+COPY comments_scraper.py .
+COPY embedding_worker.py .
 COPY rate_limits.py .
 COPY .env* ./
 
