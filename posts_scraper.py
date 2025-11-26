@@ -565,37 +565,16 @@ class RedditPostsScraper:
     # ======================= MAIN SCRAPING LOOP =======================
     
     def get_scraping_stats(self):
-        """Get current scraping statistics."""
+        """Get current scraping statistics (posts only - comments handled by separate scraper)."""
         try:
             total_posts = posts_collection.count_documents({"subreddit": self.subreddit_name})
-            posts_with_initial_comments = posts_collection.count_documents({
-                "subreddit": self.subreddit_name,
-                "initial_comments_scraped": True
-            })
-            posts_without_initial_comments = posts_collection.count_documents({
-                "subreddit": self.subreddit_name,
-                "$or": [
-                    {"initial_comments_scraped": {"$exists": False}},
-                    {"initial_comments_scraped": False}
-                ]
-            })
-            posts_with_recent_updates = posts_collection.count_documents({
-                "subreddit": self.subreddit_name,
-                "last_comment_fetch_time": {"$gte": (datetime.now(UTC) - timedelta(hours=24)).replace(tzinfo=None)}
-            })
-            total_comments = comments_collection.count_documents({"subreddit": self.subreddit_name})
-            
+
             # Subreddit metadata stats
             subreddit_metadata = subreddit_collection.find_one({"subreddit_name": self.subreddit_name})
-            
+
             return {
                 "subreddit": self.subreddit_name,
                 "total_posts": total_posts,
-                "posts_with_initial_comments": posts_with_initial_comments,
-                "posts_without_initial_comments": posts_without_initial_comments,
-                "posts_with_recent_updates": posts_with_recent_updates,
-                "total_comments": total_comments,
-                "initial_completion_rate": (posts_with_initial_comments / total_posts * 100) if total_posts > 0 else 0,
                 "subreddit_metadata_exists": subreddit_metadata is not None,
                 "subreddit_last_updated": subreddit_metadata.get("last_updated") if subreddit_metadata else None
             }
@@ -604,18 +583,13 @@ class RedditPostsScraper:
             return {}
     
     def print_stats(self):
-        """Print current scraping statistics."""
+        """Print current scraping statistics (posts only)."""
         stats = self.get_scraping_stats()
         if stats:
             logger.info(f"\n{'='*60}")
-            logger.info(f"SCRAPING STATISTICS FOR r/{stats['subreddit']}")
+            logger.info(f"POSTS SCRAPER STATISTICS FOR r/{stats['subreddit']}")
             logger.info(f"{'='*60}")
             logger.info(f"Total posts: {stats['total_posts']}")
-            logger.info(f"Posts with initial comments: {stats['posts_with_initial_comments']}")
-            logger.info(f"Posts without initial comments: {stats['posts_without_initial_comments']}")
-            logger.info(f"Posts with recent updates: {stats['posts_with_recent_updates']}")
-            logger.info(f"Total comments: {stats['total_comments']}")
-            logger.info(f"Initial completion rate: {stats['initial_completion_rate']:.1f}%")
             logger.info(f"Subreddit metadata: {'✓' if stats['subreddit_metadata_exists'] else '✗'}")
             if stats['subreddit_last_updated']:
                 # Handle both timezone-aware and timezone-naive datetimes
@@ -626,6 +600,7 @@ class RedditPostsScraper:
                     last_updated = last_updated.replace(tzinfo=UTC)
                 hours_ago = (current_time - last_updated).total_seconds() / 3600
                 logger.info(f"Metadata last updated: {hours_ago:.1f} hours ago")
+            logger.info(f"(Comment stats available via comments_scraper.py --stats)")
             logger.info(f"{'='*60}")
     
     def run_continuous_scraping(self):
