@@ -132,7 +132,8 @@ class RedditCredentials(BaseModel):
     user_agent: str
 
 class ScraperConfig(BaseModel):
-    subreddit: str
+    subreddit: str = ""                    # Single subreddit (backwards compat)
+    subreddits: List[str] = []             # Multi-subreddit mode
     scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
@@ -143,6 +144,7 @@ class ScraperConfig(BaseModel):
 
 class ScraperStatus(BaseModel):
     subreddit: str
+    scraper_type: str = "posts"  # "posts" or "comments"
     status: str  # "running", "stopped", "error", "failed"
     pid: Optional[int] = None
     started_at: Optional[datetime] = None
@@ -150,7 +152,8 @@ class ScraperStatus(BaseModel):
     last_error: Optional[str] = None
 
 class ScraperStartRequest(BaseModel):
-    subreddit: str
+    subreddit: str = ""                    # Single subreddit (backwards compat)
+    subreddits: List[str] = []             # Multi-subreddit mode (up to 10)
     scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
