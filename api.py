@@ -1545,12 +1545,22 @@ async def dashboard():
                         const totalComments = (info.database_totals?.total_comments || 0).toLocaleString();
                         const collectionRate = info.metrics ? `${(info.metrics.posts_per_hour || 0).toFixed(1)} posts/hr` : 'N/A';
 
+                        // Handle multi-subreddit display
+                        const allSubreddits = info.subreddits || [subreddit];
+                        const isMulti = allSubreddits.length > 1;
+                        const displayTitle = isMulti
+                            ? `r/${subreddit} <span style="color: #737373; font-size: 14px;">+${allSubreddits.length - 1} more</span>`
+                            : `r/${subreddit}`;
+                        const subredditList = isMulti
+                            ? allSubreddits.map(s => `r/${s}`).join(', ')
+                            : null;
+
                         const div = document.createElement('div');
                         div.className = `scraper ${statusClass}`;
                         div.innerHTML = `
                             <div class="scraper-header" onclick="toggleScraper(this)">
                                 <div class="scraper-title">
-                                    <h3>r/${subreddit}</h3>
+                                    <h3>${displayTitle}</h3>
                                     <span class="status-badge ${badgeClass}">${info.status?.toUpperCase() || 'UNKNOWN'}</span>
                                 </div>
                                 <div class="scraper-summary">
@@ -1570,6 +1580,7 @@ async def dashboard():
                             </div>
                             <div class="scraper-details">
                                 <div class="scraper-content">
+                                    ${subredditList ? `<p><strong>Subreddits (${allSubreddits.length}):</strong> <span style="color: #a78bfa;">${subredditList}</span></p>` : ''}
                                     <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
                                     <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
                                     <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
@@ -2056,9 +2067,19 @@ async def list_scrapers():
                 "user_agent": scraper_doc["credentials"]["user_agent"]
             }
 
+            # Get all subreddits (for multi-subreddit scrapers)
+            all_subreddits = scraper_doc.get("subreddits", [subreddit])
+            if not all_subreddits:
+                all_subreddits = [subreddit]
+
             # Query actual database totals (persist across scraper recreations)
-            db_total_posts = posts_collection.count_documents({"subreddit": subreddit})
-            db_total_comments = comments_collection.count_documents({"subreddit": subreddit})
+            # For multi-subreddit scrapers, count totals across all subreddits
+            if len(all_subreddits) > 1:
+                db_total_posts = posts_collection.count_documents({"subreddit": {"$in": all_subreddits}})
+                db_total_comments = comments_collection.count_documents({"subreddit": {"$in": all_subreddits}})
+            else:
+                db_total_posts = posts_collection.count_documents({"subreddit": subreddit})
+                db_total_comments = comments_collection.count_documents({"subreddit": subreddit})
 
             result[subreddit] = {
                 "status": container_status,
@@ -2089,7 +2110,8 @@ async def list_scrapers():
                 "last_error": scraper_doc.get("last_error"),
                 "container_id": scraper_doc.get("container_id"),
                 "container_name": scraper_doc.get("container_name"),
-                "restart_count": scraper_doc.get("restart_count", 0)
+                "restart_count": scraper_doc.get("restart_count", 0),
+                "subreddits": all_subreddits  # All subreddits for multi-subreddit mode
             }
     
     except Exception as e:
