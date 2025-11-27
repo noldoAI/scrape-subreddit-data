@@ -6,7 +6,8 @@ Tests the persona-focused embedding search by querying with
 natural language persona descriptions and displaying results.
 
 Usage:
-    python test_persona_search.py "I'm building SaaS AI video editor for TikTok creators"
+    python test_persona_search.py "AI video editor for TikTok creators"
+    python test_persona_search.py --expand "AI video editor for TikTok creators"
     python test_persona_search.py --interactive
     python test_persona_search.py --compare "saas founder"
 """
@@ -15,10 +16,12 @@ import os
 import sys
 import argparse
 import logging
-from typing import List, Dict
+import json
+from typing import List, Dict, Optional
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from openai import AzureOpenAI
 
 # Setup logging
 logging.basicConfig(
@@ -40,6 +43,21 @@ client = MongoClient(MONGODB_URI)
 db = client.noldo
 subreddit_discovery_collection = db.subreddit_discovery
 
+# Azure OpenAI client for query expansion
+azure_client = None
+try:
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    if endpoint and api_key:
+        azure_client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version="2024-02-01"
+        )
+        logger.info("Azure OpenAI client initialized for query expansion")
+except Exception as e:
+    logger.warning(f"Azure OpenAI not available: {e}")
+
 # Load embedding model
 try:
     from sentence_transformers import SentenceTransformer
@@ -49,6 +67,60 @@ try:
 except Exception as e:
     logger.error(f"Failed to load model: {e}")
     sys.exit(1)
+
+
+def expand_product_query(product: str) -> Optional[str]:
+    """
+    Expand a product description into a detailed customer profile.
+
+    This bridges the gap between "what the product does" and
+    "who the customers are" for better semantic matching.
+
+    Args:
+        product: Product description (e.g., "AI video editor for TikTok creators")
+
+    Returns:
+        Expanded customer profile optimized for semantic search, or None if expansion fails
+    """
+    if not azure_client:
+        logger.warning("Azure OpenAI not configured - using raw query")
+        return None
+
+    deployment = os.getenv("AZURE_DEPLOYMENT_NAME", "gpt-4o-mini")
+
+    prompt = f"""Given this product: {product}
+
+Describe the ideal customers who would buy this product. Include:
+1. Who they are (job titles, roles, situations)
+2. What problems they face that this product solves
+3. What they're trying to achieve
+4. What communities or topics they're interested in
+
+Write as a single paragraph optimized for semantic search. Focus on the PEOPLE and their PROBLEMS, not the product features. Be specific about user types.
+
+Example input: "AI video editor for TikTok creators"
+Example output: "Content creators and social media managers who struggle with video editing time. Small business owners needing marketing content without hiring agencies. Influencers wanting professional-looking videos quickly. Entrepreneurs building personal brands on social media. Marketing teams with limited video production resources. People posting regularly to TikTok, Instagram Reels, or YouTube Shorts who want to create more content faster without learning complex editing software."
+
+Now expand this product:"""
+
+    try:
+        response = azure_client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": "You are an expert at identifying target customers for products. Focus on describing PEOPLE and their PROBLEMS, not product features."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=300
+        )
+
+        expanded = response.choices[0].message.content.strip()
+        logger.info(f"Query expanded ({len(product)} -> {len(expanded)} chars)")
+        return expanded
+
+    except Exception as e:
+        logger.error(f"Query expansion failed: {e}")
+        return None
 
 
 def search_persona(
@@ -126,13 +198,16 @@ def search_combined(
     return search_persona(query, limit, "combined", min_subscribers)
 
 
-def display_results(results: List[Dict], query: str, embedding_type: str = "persona"):
+def display_results(results: List[Dict], query: str, embedding_type: str = "persona", expanded_query: str = None):
     """Display search results in a formatted way."""
     print("\n" + "="*80)
     print(f"PERSONA SEARCH RESULTS ({embedding_type.upper()} embedding)")
     print("="*80)
     print(f"Query: {query}")
-    print(f"Results: {len(results)}")
+    if expanded_query:
+        print(f"\n🔄 EXPANDED TO:")
+        print(f"   {expanded_query[:200]}..." if len(expanded_query) > 200 else f"   {expanded_query}")
+    print(f"\nResults: {len(results)}")
     print("-"*80)
 
     for i, r in enumerate(results, 1):
@@ -211,6 +286,74 @@ def compare_search(query: str, limit: int = 10):
     print("\n" + "="*80)
 
 
+def compare_expanded(product: str, limit: int = 10):
+    """Compare raw query vs expanded query results."""
+    print("\n" + "="*80)
+    print("COMPARISON: RAW vs EXPANDED QUERY")
+    print("="*80)
+    print(f"Product: {product}")
+    print("-"*80)
+
+    # Search with raw query
+    print("\n📊 RAW QUERY (direct match):")
+    raw_results = search_persona(product, limit, "persona")
+    if raw_results:
+        for i, r in enumerate(raw_results[:5], 1):
+            name = r.get('subreddit_name', '?')
+            score = r.get('score', 0)
+            subs = r.get('subscribers', 0)
+            print(f"   {i}. r/{name} (score: {score:.3f}, {subs:,} subs)")
+    else:
+        print("   No results found.")
+
+    # Expand query
+    print("\n🔄 Expanding query with LLM...")
+    expanded = expand_product_query(product)
+
+    if expanded:
+        print(f"\n📝 EXPANDED QUERY:")
+        # Word wrap the expanded query
+        words = expanded.split()
+        line = "   "
+        for word in words:
+            if len(line) + len(word) > 78:
+                print(line)
+                line = "   "
+            line += word + " "
+        if line.strip():
+            print(line)
+
+        print("\n📊 EXPANDED QUERY (customer-focused):")
+        expanded_results = search_persona(expanded, limit, "persona")
+        if expanded_results:
+            for i, r in enumerate(expanded_results[:5], 1):
+                name = r.get('subreddit_name', '?')
+                score = r.get('score', 0)
+                subs = r.get('subscribers', 0)
+                print(f"   {i}. r/{name} (score: {score:.3f}, {subs:,} subs)")
+        else:
+            print("   No results found.")
+
+        # Show differences
+        if raw_results and expanded_results:
+            raw_names = {r['subreddit_name'] for r in raw_results[:5]}
+            expanded_names = {r['subreddit_name'] for r in expanded_results[:5]}
+
+            unique_raw = raw_names - expanded_names
+            unique_expanded = expanded_names - raw_names
+
+            if unique_raw or unique_expanded:
+                print("\n📊 NEW DISCOVERIES:")
+                if unique_expanded:
+                    print(f"   🆕 Found with expansion: {', '.join(unique_expanded)}")
+                if unique_raw:
+                    print(f"   ❌ Lost with expansion: {', '.join(unique_raw)}")
+    else:
+        print("   Query expansion failed - Azure OpenAI not configured")
+
+    print("\n" + "="*80)
+
+
 def interactive_mode():
     """Run in interactive mode for testing multiple queries."""
     print("\n" + "="*80)
@@ -281,13 +424,23 @@ def main():
         'query',
         nargs='?',
         type=str,
-        help='Persona description to search (e.g., "I\'m building SaaS for startups")'
+        help='Product or persona description to search'
     )
     parser.add_argument(
         '--limit',
         type=int,
         default=10,
         help='Number of results to return (default: 10)'
+    )
+    parser.add_argument(
+        '--expand',
+        action='store_true',
+        help='Expand product query into customer profile using LLM (recommended for product descriptions)'
+    )
+    parser.add_argument(
+        '--compare-expand',
+        action='store_true',
+        help='Compare raw vs expanded query results'
     )
     parser.add_argument(
         '--interactive',
@@ -324,14 +477,27 @@ def main():
     if not args.query:
         parser.print_help()
         print("\nExamples:")
-        print('  python test_persona_search.py "I\'m building SaaS AI video editor for TikTok creators"')
+        print('  python test_persona_search.py "AI video editor for TikTok creators"')
+        print('  python test_persona_search.py --expand "AI video editor for TikTok creators"')
+        print('  python test_persona_search.py --compare-expand "invoice automation SaaS"')
         print('  python test_persona_search.py --interactive')
-        print('  python test_persona_search.py --compare "startup founder tools"')
         print('  python test_persona_search.py --stats')
         return
 
-    if args.compare:
+    if args.compare_expand:
+        compare_expanded(args.query, args.limit)
+    elif args.compare:
         compare_search(args.query, args.limit)
+    elif args.expand:
+        # Expand query then search
+        expanded = expand_product_query(args.query)
+        search_query = expanded if expanded else args.query
+        results = search_persona(
+            search_query,
+            limit=args.limit,
+            min_subscribers=args.min_subscribers
+        )
+        display_results(results, args.query, expanded_query=expanded)
     else:
         results = search_persona(
             args.query,
