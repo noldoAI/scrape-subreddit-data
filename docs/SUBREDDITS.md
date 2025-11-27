@@ -2,6 +2,8 @@ Here is a categorized dataset of **320+ High-Intent Subreddits**. I have organiz
 
 ---
 
+CHECK ALL SUBREDDIT VALIDITY BEFORE DEPLOY
+
 ### 🏢 The Founder & Business Core (General B2B)
 *Scan these for: "How do I scale?" "Which tool is best?"*
 1.  r/SaaS
