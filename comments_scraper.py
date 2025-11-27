@@ -20,9 +20,17 @@ import os
 import time
 import sys
 import argparse
+import threading
 from rate_limits import check_rate_limit
 from praw.models import MoreComments
 import logging
+
+# Prometheus metrics
+try:
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server
+    PROMETHEUS_ENABLED = True
+except ImportError:
+    PROMETHEUS_ENABLED = False
 
 # Import centralized configuration
 from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
@@ -38,6 +46,76 @@ logging.basicConfig(
     force=True  # Override any existing logging configuration
 )
 logger = logging.getLogger("comments-scraper")
+
+# =============================================================================
+# PROMETHEUS METRICS
+# =============================================================================
+if PROMETHEUS_ENABLED:
+    # Comments scraped counter
+    COMMENTS_SCRAPED = Counter(
+        'reddit_comments_scraped_total',
+        'Total comments scraped',
+        ['subreddit']
+    )
+
+    # Posts processed for comments counter
+    POSTS_PROCESSED = Counter(
+        'reddit_comments_posts_processed_total',
+        'Posts processed for comment scraping',
+        ['subreddit']
+    )
+
+    # Cycle metrics
+    CYCLE_DURATION = Histogram(
+        'reddit_comments_cycle_duration_seconds',
+        'Duration of comment scrape cycles',
+        ['subreddit'],
+        buckets=[10, 30, 60, 120, 300, 600, 1200]
+    )
+
+    CYCLE_COUNT = Counter(
+        'reddit_comments_cycle_count_total',
+        'Total comment scrape cycles completed',
+        ['subreddit']
+    )
+
+    # Posts pending by priority
+    POSTS_PENDING = Gauge(
+        'reddit_comments_posts_pending',
+        'Posts pending comment scraping by priority',
+        ['subreddit', 'priority']
+    )
+
+    # Scraper errors counter
+    SCRAPER_ERRORS = Counter(
+        'reddit_comments_scraper_errors_total',
+        'Comment scraper errors by type',
+        ['subreddit', 'error_type']
+    )
+
+    # Verification failures
+    VERIFICATION_FAILURES = Counter(
+        'reddit_comments_verification_failures_total',
+        'Comment verification failures',
+        ['subreddit']
+    )
+
+    # Last successful scrape timestamp
+    LAST_SUCCESS = Gauge(
+        'reddit_comments_last_success_timestamp',
+        'Unix timestamp of last successful comment scrape',
+        ['subreddit']
+    )
+
+    def start_metrics_server(port=9100):
+        """Start Prometheus metrics HTTP server in background thread."""
+        def run_server():
+            start_http_server(port)
+            logger.info(f"Prometheus metrics server started on port {port}")
+
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+        return thread
 
 # MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
@@ -581,6 +659,14 @@ class RedditCommentsScraper:
                     cycle_duration=elapsed_time
                 )
 
+                # Update Prometheus metrics
+                if PROMETHEUS_ENABLED:
+                    CYCLE_DURATION.labels(subreddit=self.subreddit_name).observe(elapsed_time)
+                    CYCLE_COUNT.labels(subreddit=self.subreddit_name).inc()
+                    POSTS_PROCESSED.labels(subreddit=self.subreddit_name).inc(posts_processed)
+                    COMMENTS_SCRAPED.labels(subreddit=self.subreddit_name).inc(total_comments)
+                    LAST_SUCCESS.labels(subreddit=self.subreddit_name).set(time.time())
+
                 # Wait before next cycle
                 logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
                 time.sleep(self.config['scrape_interval'])
@@ -602,8 +688,14 @@ def main():
     parser.add_argument("--interval", type=int, default=60, help="Seconds between scrape cycles")
     parser.add_argument("--comment-batch", type=int, default=12, help="Number of posts to process for comments per cycle")
     parser.add_argument("--max-depth", type=int, default=3, help="Maximum comment nesting depth (0-indexed)")
+    parser.add_argument("--metrics-port", type=int, default=9100, help="Port for Prometheus metrics server")
 
     args = parser.parse_args()
+
+    # Start Prometheus metrics server if available
+    if PROMETHEUS_ENABLED and not args.stats:
+        start_metrics_server(args.metrics_port)
+        logger.info(f"Prometheus metrics available at http://localhost:{args.metrics_port}/metrics")
 
     # Custom configuration from command line
     config = {

@@ -1,0 +1,44 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'subreddit']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'telegram'
+  routes:
+    # Critical alerts go immediately
+    - match:
+        severity: critical
+      group_wait: 10s
+      repeat_interval: 1h
+      receiver: 'telegram'
+    # Warning alerts can wait a bit
+    - match:
+        severity: warning
+      group_wait: 1m
+      repeat_interval: 4h
+      receiver: 'telegram'
+
+receivers:
+  - name: 'telegram'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: 'HTML'
+        message: |
+          {{ range .Alerts }}
+          <b>{{ .Status | toUpper }}</b>: {{ .Labels.alertname }}
+          {{ if .Labels.subreddit }}Subreddit: {{ .Labels.subreddit }}{{ end }}
+          {{ .Annotations.summary }}
+          {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+          {{ end }}
+
+# Inhibition rules - suppress less severe alerts when critical fires
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'subreddit']

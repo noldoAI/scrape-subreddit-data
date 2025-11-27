@@ -33,6 +33,7 @@ COPY posts_scraper.py .
 COPY comments_scraper.py .
 COPY embedding_worker.py .
 COPY rate_limits.py .
+COPY metrics.py .
 COPY .env* ./
 
 # Change ownership to non-root user

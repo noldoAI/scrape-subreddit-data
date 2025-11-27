@@ -9,7 +9,7 @@ Includes persistent storage and automatic restart capabilities.
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import subprocess
@@ -32,6 +32,13 @@ from config import (
     DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG,
     MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG,
     EMBEDDING_WORKER_CONFIG
+)
+
+# Import Prometheus metrics
+from metrics import (
+    update_metrics_from_db, get_metrics, init_metrics,
+    scraper_up, database_connected, docker_available as docker_available_metric,
+    CONTENT_TYPE_LATEST
 )
 
 # Load environment variables (fallback defaults)
@@ -94,6 +101,10 @@ try:
             logger.info("Database indexes created successfully")
         except Exception as e:
             logger.warning(f"Error creating indexes (may already exist): {e}")
+
+        # Initialize Prometheus metrics
+        init_metrics(version=API_CONFIG["version"])
+        logger.info("Prometheus metrics initialized")
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {e}")
     mongo_connected = False
@@ -3102,6 +3113,41 @@ async def health_check():
         "docker_version": docker_version,
         "timestamp": datetime.now(UTC)
     }
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """
+    Prometheus metrics endpoint for Grafana/Prometheus monitoring.
+    Returns metrics in Prometheus text format.
+    """
+    try:
+        # Update metrics from current database state
+        update_metrics_from_db(
+            db,
+            posts_collection,
+            comments_collection,
+            scrapers_collection,
+            errors_collection
+        )
+
+        # Set system health metrics
+        scraper_up.set(1)
+        database_connected.set(1 if mongo_connected else 0)
+
+        # Check Docker availability
+        try:
+            result = subprocess.run(["docker", "--version"], capture_output=True, text=True, timeout=5)
+            docker_available_metric.set(1 if result.returncode == 0 else 0)
+        except:
+            docker_available_metric.set(0)
+
+    except Exception as e:
+        logger.error(f"Error updating Prometheus metrics: {e}")
+        scraper_up.set(0)
+
+    return Response(content=get_metrics(), media_type=CONTENT_TYPE_LATEST)
+
 
 @app.get("/presets")
 async def get_presets():

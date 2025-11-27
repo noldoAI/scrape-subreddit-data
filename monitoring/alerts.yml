@@ -1,0 +1,124 @@
+groups:
+  - name: scraper_alerts
+    rules:
+      # Scraper Down Alert
+      - alert: ScraperDown
+        expr: reddit_scraper_status == -1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scraper down: {{ $labels.subreddit }} ({{ $labels.scraper_type }})"
+          description: "Scraper for {{ $labels.subreddit }} has been down for more than 5 minutes"
+
+      # No Posts Collected
+      - alert: NoPostsCollected
+        expr: increase(reddit_scraper_posts_collected[30m]) == 0 and reddit_scraper_status == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No posts collected for {{ $labels.subreddit }}"
+          description: "No posts have been scraped for {{ $labels.subreddit }} in the last 30 minutes"
+
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: reddit_scraper_errors_unresolved > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High unresolved errors for {{ $labels.subreddit }}"
+          description: "{{ $value }} unresolved errors for {{ $labels.subreddit }}"
+
+      # Rate Limit Critical
+      - alert: RateLimitCritical
+        expr: reddit_rate_limit_remaining < 50
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reddit API rate limit critical"
+          description: "Only {{ $value }} requests remaining. Scraping may pause."
+
+      # Rate Limit Warning
+      - alert: RateLimitLow
+        expr: reddit_rate_limit_remaining < 100 and reddit_rate_limit_remaining >= 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reddit API rate limit low"
+          description: "{{ $value }} requests remaining"
+
+      # All Scrapers Down
+      - alert: AllScrapersDown
+        expr: sum(reddit_scrapers_active) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All scrapers are down!"
+          description: "No scraper containers are currently running"
+
+      # Database Disconnected
+      - alert: DatabaseDisconnected
+        expr: reddit_database_connected == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MongoDB connection lost"
+          description: "API server lost connection to MongoDB database"
+
+      # API Server Down
+      - alert: APIServerDown
+        expr: reddit_scraper_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reddit Scraper API is down"
+          description: "The API server is not responding"
+
+  - name: infrastructure_alerts
+    rules:
+      # High CPU Usage
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | printf \"%.1f\" }}%"
+
+      # High Memory Usage
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | printf \"%.1f\" }}%"
+
+      # Disk Space Low
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space low"
+          description: "Only {{ $value | printf \"%.1f\" }}% disk space remaining"
+
+      # Container High Memory
+      - alert: ContainerHighMemory
+        expr: container_memory_usage_bytes{name=~"reddit.*"} / container_spec_memory_limit_bytes > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage in container {{ $labels.name }}"
+          description: "Container is using {{ $value | printf \"%.0f\" }}% of memory limit"

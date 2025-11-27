@@ -14,8 +14,16 @@ import os
 import time
 import sys
 import argparse
+import threading
 from rate_limits import check_rate_limit
 import logging
+
+# Prometheus metrics
+try:
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server
+    PROMETHEUS_ENABLED = True
+except ImportError:
+    PROMETHEUS_ENABLED = False
 
 # Import centralized configuration
 from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
@@ -31,6 +39,82 @@ logging.basicConfig(
     force=True  # Override any existing logging configuration
 )
 logger = logging.getLogger("posts-scraper")
+
+# =============================================================================
+# PROMETHEUS METRICS
+# =============================================================================
+if PROMETHEUS_ENABLED:
+    # Posts scraped counter
+    POSTS_SCRAPED = Counter(
+        'reddit_posts_scraped_total',
+        'Total posts scraped',
+        ['subreddit', 'sort_method']
+    )
+
+    # New posts (not duplicates) counter
+    POSTS_NEW = Counter(
+        'reddit_posts_new_total',
+        'New posts collected (not duplicates)',
+        ['subreddit']
+    )
+
+    # Cycle metrics
+    CYCLE_DURATION = Histogram(
+        'reddit_posts_cycle_duration_seconds',
+        'Duration of scrape cycles',
+        ['subreddit'],
+        buckets=[10, 30, 60, 120, 300, 600, 1200]
+    )
+
+    CYCLE_COUNT = Counter(
+        'reddit_posts_cycle_count_total',
+        'Total scrape cycles completed',
+        ['subreddit']
+    )
+
+    # API calls counter
+    API_CALLS = Counter(
+        'reddit_posts_api_calls_total',
+        'Reddit API calls made',
+        ['subreddit']
+    )
+
+    # Rate limit gauge
+    RATE_LIMIT_REMAINING = Gauge(
+        'reddit_rate_limit_remaining',
+        'Reddit API remaining requests',
+        ['subreddit']
+    )
+
+    RATE_LIMIT_USED = Gauge(
+        'reddit_rate_limit_used',
+        'Reddit API used requests',
+        ['subreddit']
+    )
+
+    # Scraper errors counter
+    SCRAPER_ERRORS = Counter(
+        'reddit_scraper_errors_total',
+        'Scraper errors by type',
+        ['subreddit', 'error_type']
+    )
+
+    # Last successful scrape timestamp
+    LAST_SUCCESS = Gauge(
+        'reddit_scraper_last_success_timestamp',
+        'Unix timestamp of last successful scrape',
+        ['subreddit']
+    )
+
+    def start_metrics_server(port=9100):
+        """Start Prometheus metrics HTTP server in background thread."""
+        def run_server():
+            start_http_server(port)
+            logger.info(f"Prometheus metrics server started on port {port}")
+
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+        return thread
 
 # MongoDB setup using centralized config
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))
@@ -695,6 +779,7 @@ def run_multi_subreddit_scraping(subreddit_names, config):
         for i, subreddit_name in enumerate(subreddit_names):
             logger.info(f"\n[{i+1}/{len(subreddit_names)}] Processing r/{subreddit_name}")
             logger.info("-" * 40)
+            sub_start = time.time()
 
             try:
                 scraper = RedditPostsScraper(subreddit_name, config)
@@ -712,9 +797,20 @@ def run_multi_subreddit_scraping(subreddit_names, config):
 
                 logger.info(f"r/{subreddit_name}: {len(posts)} posts ({new_posts} new)")
 
+                # Update Prometheus metrics
+                if PROMETHEUS_ENABLED:
+                    sub_duration = time.time() - sub_start
+                    CYCLE_DURATION.labels(subreddit=subreddit_name).observe(sub_duration)
+                    CYCLE_COUNT.labels(subreddit=subreddit_name).inc()
+                    POSTS_NEW.labels(subreddit=subreddit_name).inc(new_posts)
+                    LAST_SUCCESS.labels(subreddit=subreddit_name).set(time.time())
+
             except Exception as e:
                 logger.error(f"Error scraping r/{subreddit_name}: {e}")
                 cycle_stats["errors"] += 1
+                # Track errors in Prometheus
+                if PROMETHEUS_ENABLED:
+                    SCRAPER_ERRORS.labels(subreddit=subreddit_name, error_type="scrape_failed").inc()
                 continue
 
             # Brief pause between subreddits
@@ -743,8 +839,14 @@ def main():
     parser.add_argument("--posts-limit", type=int, default=1000, help="Number of posts to scrape per cycle")
     parser.add_argument("--interval", type=int, default=60, help="Seconds between scrape cycles")
     parser.add_argument("--sorting-methods", type=str, default="new,hot,rising", help="Comma-separated sorting methods (new,hot,rising,top,controversial)")
+    parser.add_argument("--metrics-port", type=int, default=9100, help="Port for Prometheus metrics server")
 
     args = parser.parse_args()
+
+    # Start Prometheus metrics server if available
+    if PROMETHEUS_ENABLED and not args.stats and not args.metadata_only:
+        start_metrics_server(args.metrics_port)
+        logger.info(f"Prometheus metrics available at http://localhost:{args.metrics_port}/metrics")
 
     # Parse subreddit names (comma-separated)
     subreddit_names = [s.strip() for s in args.subreddits.split(",")]
