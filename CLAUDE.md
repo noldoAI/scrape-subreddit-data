@@ -270,7 +270,7 @@ Second cycle: "Using 'day' time filter" → ~25 new daily posts
 
 ### Multi-Subreddit Mode (v1.5+)
 
-Scrape up to **10 subreddits with 1 Reddit account** in a single container using rotation.
+Scrape up to **30 subreddits with 1 Reddit account** in a single container using rotation.
 
 **Key Features:**
 - 1 container handles multiple subreddits in rotation
@@ -303,11 +303,11 @@ POST /scrapers/start-flexible
 ```
 
 **Dashboard:**
-- Select "Multi-Subreddit (up to 10)" from Mode dropdown
+- Select "Multi-Subreddit (up to 30)" from Mode dropdown
 - Enter comma-separated subreddit names
 - Container named: `reddit-posts-scraper-multi-5subs-stocks`
 
-**Recommended Config for 10 Subreddits:**
+**Recommended Config for 30 Subreddits:**
 - `posts_limit`: 50 per subreddit
 - `interval`: 300 seconds (5 min between full rotations)
 - `sorting_methods`: ["new", "top"] (reduce from 3 to 2)
@@ -317,7 +317,7 @@ POST /scrapers/start-flexible
 | Mode | Subreddits | API Calls/Cycle | Safe? |
 |------|------------|-----------------|-------|
 | Single | 1 | ~12 calls | Yes |
-| Multi | 10 | ~70-100 calls | Yes (well under 600/10min) |
+| Multi | 30 | ~210-300 calls | Yes (under 600/10min) |
 
 **How Rotation Works:**
 1. Process subreddit 1: scrape posts, save to DB, update metadata
@@ -335,7 +335,7 @@ POST /scrapers/start-flexible
 **Configuration** (config.py):
 ```python
 MULTI_SCRAPER_CONFIG = {
-    "max_subreddits_per_container": 10,
+    "max_subreddits_per_container": 30,
     "rotation_delay": 2,              # Seconds between subreddits
     "recommended_posts_limit": 50,
     "recommended_interval": 300,
