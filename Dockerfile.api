@@ -36,6 +36,9 @@ COPY rate_limits.py .
 COPY metrics.py .
 COPY .env* ./
 
+# Copy discovery module (for LLM enrichment)
+COPY discovery/ ./discovery/
+
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
 # Keep as root for Docker socket access

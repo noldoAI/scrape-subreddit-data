@@ -29,6 +29,9 @@ scrape-subreddit-data/
 ├── discovery/                # Semantic search & subreddit discovery
 │   ├── discover_subreddits.py    # Search Reddit for subreddits
 │   ├── generate_embeddings.py    # Generate semantic embeddings
+│   ├── llm_enrichment.py         # LLM-based audience profiling
+│   ├── enrich_existing.py        # Batch enrich existing subreddits
+│   ├── test_persona_search.py    # Test persona-based search
 │   ├── semantic_search.py        # CLI semantic search tool
 │   └── setup_vector_index.py     # MongoDB vector index setup
 │
@@ -1078,63 +1081,80 @@ EMBEDDING_WORKER_CONFIG = {
 | File | Purpose |
 |------|---------|
 | `discovery/discover_subreddits.py` | Search Reddit and scrape subreddit metadata |
-| `discovery/generate_embeddings.py` | Generate semantic embeddings for discovery collection |
-| `discovery/setup_vector_index.py` | Create MongoDB vector search index |
+| `discovery/generate_embeddings.py` | Generate semantic embeddings (combined + persona) |
+| `discovery/llm_enrichment.py` | LLM-based audience profiling via Azure GPT-4o-mini |
+| `discovery/enrich_existing.py` | Batch enrich existing subreddits with audience data |
+| `discovery/test_persona_search.py` | Test and compare persona-based search |
+| `discovery/setup_vector_index.py` | Create MongoDB vector search indexes |
 | `discovery/semantic_search.py` | CLI semantic search tool |
-| `embedding_worker.py` | Background worker for metadata collection embeddings |
+| `embedding_worker.py` | Background worker: embeddings + LLM enrichment pipeline |
 | `tools/repair_ghost_posts.py` | Data integrity repair utility |
 | `api.py` | REST API endpoints for search & discovery |
-| `config.py` | Embedding and discovery configuration |
+| `config.py` | Embedding, enrichment, and discovery configuration |
 
-### **Automatic Embeddings for Active Scrapers (v1.4+)**
+### **Automatic Embeddings & Enrichment for Active Scrapers (v1.5+)**
 
-Subreddits being actively scraped now automatically get embeddings generated, making them searchable via semantic search.
+Subreddits being actively scraped automatically get full persona search capability through a 3-step pipeline.
 
 **How It Works:**
 1. When `posts_scraper.py` saves subreddit metadata, it sets `embedding_status: "pending"`
-2. Background worker in the API server processes pending embeddings every 60 seconds
-3. Embeddings are stored in the `subreddit_metadata` collection
-4. Both collections (discovery + metadata) can be searched
+2. Background worker processes pending subreddits every 60 seconds with a 3-step pipeline:
+   - **Step 1**: Generate combined embedding (topic-focused)
+   - **Step 2**: Run LLM enrichment via Azure GPT-4o-mini (audience profile)
+   - **Step 3**: Generate persona embedding (audience-focused)
+3. Each step checks if data already exists - **no duplicate processing**
+4. New subreddits get full persona search capability automatically
 
 **Data Flow:**
 ```
 Scraper Container              API Server                    MongoDB
 ┌─────────────────┐          ┌───────────────────┐         ┌──────────────────┐
-│ reddit_scraper  │          │ Background Worker │         │ subreddit_       │
+│ posts_scraper   │          │ Background Worker │         │ subreddit_       │
 │                 │          │ (every 60s)       │         │ metadata         │
 │ Saves metadata  │─────────>│                   │         │                  │
-│ + sets:         │          │ 1. Query pending  │<────────│ embedding_status │
-│ embedding_      │          │ 2. Generate       │         │ : "pending"      │
-│ status:pending  │          │ 3. Save embedding │────────>│ embeddings.      │
-└─────────────────┘          └───────────────────┘         │ combined_        │
-                                                           │ embedding        │
+│ + sets:         │          │ 3-Step Pipeline:  │<────────│ embedding_status │
+│ embedding_      │          │ 1. Combined emb   │         │ : "pending"      │
+│ status:pending  │          │ 2. LLM enrichment │────────>│                  │
+└─────────────────┘          │ 3. Persona emb    │         │ embeddings.*     │
+                             └───────────────────┘         │ llm_enrichment   │
                                                            └──────────────────┘
 ```
+
+**Deduplication:**
+- Each step skips if data already exists
+- LLM enrichment runs **once per subreddit** (no repeated API costs)
+- Re-processing only happens if content changes significantly
 
 **API Endpoints:**
 - `GET /embeddings/worker/status` - Worker status and statistics
 - `POST /embeddings/worker/process` - Manually trigger processing
 - `POST /embeddings/worker/process?subreddit=X` - Process specific subreddit
 
-**CLI Search Sources:**
+**CLI Commands:**
 ```bash
-# Search discovered subreddits (default)
-python discovery/semantic_search.py --query "stocks" --source discovery
+# Check worker stats
+python embedding_worker.py --stats
 
-# Search actively scraped subreddits
-python discovery/semantic_search.py --query "stocks" --source active
+# Process all pending
+python embedding_worker.py --process-all
 
-# Search both collections (deduplicates)
-python discovery/semantic_search.py --query "stocks" --source all
+# Process specific subreddit
+python embedding_worker.py --subreddit wallstreetbets
+
+# Reset failed embeddings
+python embedding_worker.py --reset-failed
 ```
 
-**Setup Vector Index for Metadata:**
+**Setup Vector Indexes:**
 ```bash
-# Create index on metadata collection
+# Create combined embedding index
 python discovery/setup_vector_index.py --collection metadata
 
-# Create indexes on both collections
-python discovery/setup_vector_index.py --collection both
+# Create persona embedding index
+python discovery/setup_vector_index.py --collection metadata --embedding-type persona
+
+# Create both indexes
+python discovery/setup_vector_index.py --collection metadata --embedding-type all
 ```
 
 **Database Schema (subreddit_metadata):**
@@ -1146,12 +1166,32 @@ python discovery/setup_vector_index.py --collection both
   "embedding_status": "pending" | "complete" | "failed",
   "embedding_requested_at": ISODate("..."),
 
-  // Embeddings (same structure as subreddit_discovery)
+  // LLM Enrichment (audience profile)
+  "llm_enrichment": {
+    "audience_profile": "Startup founders and indie hackers...",
+    "audience_types": ["SaaS founders", "indie hackers", ...],
+    "user_intents": ["validate ideas", "find customers", ...],
+    "pain_points": ["customer acquisition", "pricing", ...],
+    "content_themes": ["product launches", "growth hacks", ...]
+  },
+  "llm_enrichment_at": ISODate("..."),
+
+  // Embeddings
   "embeddings": {
-    "combined_embedding": [/* 768 floats */],
+    "combined_embedding": [/* 768 floats - topic focused */],
+    "persona_embedding": [/* 768 floats - audience focused */],
     "model": "nomic-embed-text-v2",
     "dimensions": 768,
-    "generated_at": ISODate("...")
+    "generated_at": ISODate("..."),
+    "persona_generated_at": ISODate("...")
   }
 }
+```
+
+**Required Environment Variables:**
+```bash
+# For LLM enrichment (Azure OpenAI)
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-api-key
+AZURE_DEPLOYMENT_NAME=gpt-4o-mini  # Optional, defaults to gpt-4o-mini
 ```
