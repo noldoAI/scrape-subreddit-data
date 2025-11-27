@@ -2026,8 +2026,8 @@ async def dashboard():
                             setButtonLoading(button, false);
                             return;
                         }
-                        if (subreddits.length > 10) {
-                            alert('Maximum 10 subreddits per container');
+                        if (subreddits.length > 30) {
+                            alert('Maximum 30 subreddits per container');
                             setButtonLoading(button, false);
                             return;
                         }

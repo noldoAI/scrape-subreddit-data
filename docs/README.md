@@ -410,6 +410,55 @@ GET /scrapers/status-summary
 
 ## 📈 Monitoring & Alerting
 
+### **Prometheus + Grafana Monitoring**
+
+Full observability stack with real-time metrics and alerting:
+
+```bash
+# Start monitoring stack
+docker-compose -f docker-compose.monitoring.yml up -d
+
+# Access dashboards
+Grafana:     http://localhost:3000 (admin/admin)
+Prometheus:  http://localhost:9090
+```
+
+**Grafana Dashboards:**
+
+- **Reddit Scraper Overview**: Live collection metrics, scraper status, failure detection
+- **Infrastructure**: CPU, memory, disk, container metrics
+
+**Key Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `reddit_scraper_posts_total{subreddit}` | Total posts per subreddit |
+| `reddit_scraper_comments_total{subreddit}` | Total comments per subreddit |
+| `reddit_scraper_status{subreddit}` | Scraper status (1=running, 0=stopped, -1=failed) |
+| `reddit_scraper_posts_per_hour{subreddit}` | Collection rate |
+| `reddit_scraper_errors_unresolved{subreddit}` | Unresolved errors |
+
+**Live Collection Panels:**
+
+- Posts/Comments collected in last 10 minutes and 1 hour
+- Collection rate over time per subreddit (spot failures instantly)
+- Failed/stopped scrapers table with highlighting
+- Scraper status history timeline
+
+**Alerting (Telegram):**
+
+```bash
+# Set environment variables for Telegram alerts
+export TELEGRAM_BOT_TOKEN=your_bot_token
+export TELEGRAM_CHAT_ID=your_chat_id
+
+# Alerts include:
+# - ScraperDown: Scraper failed for 5+ minutes
+# - RateLimitCritical: API quota < 50 remaining
+# - NoPostsCollected: No posts in 30 minutes
+# - HighCPU/HighMemory/DiskSpaceLow
+```
+
 ### **Automatic Health Checks**
 
 ```

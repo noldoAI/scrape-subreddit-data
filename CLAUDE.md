@@ -643,6 +643,97 @@ sudo reboot
 - `GET /health` - System health (database + Docker status)
 - `GET /presets` - Configuration presets for different subreddit types
 - `POST /scrapers/restart-all-failed` - Restart all failed containers
+- `GET /metrics` - Prometheus metrics endpoint
+
+## Prometheus + Grafana Monitoring
+
+Full observability stack with real-time metrics, dashboards, and alerting.
+
+### Quick Start
+
+```bash
+# Start monitoring stack
+docker-compose -f docker-compose.monitoring.yml up -d
+
+# Access dashboards
+Grafana:     http://localhost:3000 (admin/admin)
+Prometheus:  http://localhost:9090
+```
+
+### Components
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Prometheus | 9090 | Metrics collection and storage |
+| Grafana | 3000 | Dashboards and visualization |
+| Alertmanager | 9093 | Alert routing (Telegram) |
+| Node Exporter | 9100 | Host metrics (CPU, memory, disk) |
+| cAdvisor | 8080 | Container metrics |
+
+### Grafana Dashboards
+
+**Reddit Scraper Overview** (`overview.json`):
+- Row 1: Total posts, comments, active scrapers, errors, API/DB status
+- Row 2: Posts/comments collected in last 10m and 1h (live stats)
+- Row 3: Collection rate over time per subreddit (spot failures instantly)
+- Row 4: Failed/stopped scrapers table, status history timeline
+- Row 5: All scrapers status table
+
+**Infrastructure** (`infrastructure.json`):
+- CPU, memory, disk usage gauges
+- CPU/memory over time graphs
+- Container CPU/memory per scraper
+- Network I/O
+
+### Key Prometheus Metrics
+
+```promql
+# Per-subreddit metrics
+reddit_scraper_posts_total{subreddit="X"}       # Total posts in DB
+reddit_scraper_comments_total{subreddit="X"}    # Total comments in DB
+reddit_scraper_status{subreddit="X"}            # 1=running, 0=stopped, -1=failed
+reddit_scraper_posts_per_hour{subreddit="X"}    # Collection rate
+reddit_scraper_errors_unresolved{subreddit="X"} # Unresolved errors
+
+# Live collection (use increase() for activity)
+sum(increase(reddit_scraper_posts_total[10m]))  # Posts collected last 10 min
+increase(reddit_scraper_posts_total[5m])        # Per-subreddit collection rate
+
+# System metrics
+reddit_scraper_up                               # API health (1=up, 0=down)
+reddit_database_connected                       # MongoDB status
+reddit_scrapers_active{scraper_type="posts"}    # Active scraper count
+```
+
+### Alerting (Telegram)
+
+Set environment variables for Telegram alerts:
+
+```bash
+export TELEGRAM_BOT_TOKEN=your_bot_token
+export TELEGRAM_CHAT_ID=your_chat_id
+```
+
+**Alert Rules** (`monitoring/alerts.yml`):
+- `ScraperDown`: Scraper failed for 5+ minutes
+- `RateLimitCritical`: API quota < 50 remaining
+- `NoPostsCollected`: No posts in 30 minutes
+- `HighErrorRate`: >10 unresolved errors
+- `HighCPU`: CPU > 80% for 15 minutes
+- `HighMemory`: Memory > 85% for 15 minutes
+- `DiskSpaceLow`: Disk < 15% free
+
+### Monitoring Files
+
+| File | Description |
+|------|-------------|
+| `docker-compose.monitoring.yml` | Monitoring stack compose |
+| `monitoring/prometheus.yml` | Prometheus scrape config |
+| `monitoring/alerts.yml` | Alert rules |
+| `monitoring/alertmanager.yml` | Alertmanager config |
+| `monitoring/grafana/dashboards/overview.json` | Main dashboard |
+| `monitoring/grafana/dashboards/infrastructure.json` | Host/container metrics |
+| `metrics.py` | Prometheus metrics module |
 
 ## Configuration Presets
 
