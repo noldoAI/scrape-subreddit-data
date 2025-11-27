@@ -6,4 +6,5 @@ uvicorn[standard]
 pydantic
 cryptography
 sentence-transformers>=3.0.0
-einops 
+einops
+prometheus_client 

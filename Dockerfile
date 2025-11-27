@@ -22,7 +22,11 @@ COPY posts_scraper.py .
 COPY comments_scraper.py .
 COPY config.py .
 COPY rate_limits.py .
+COPY metrics.py .
 COPY .env* ./
+
+# Expose Prometheus metrics port
+EXPOSE 9100
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
