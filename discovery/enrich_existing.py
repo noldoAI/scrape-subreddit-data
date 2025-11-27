@@ -283,8 +283,8 @@ def main():
         '--collection',
         type=str,
         choices=['discovery', 'metadata'],
-        default='discovery',
-        help='Which collection to enrich (default: discovery)'
+        default='metadata',
+        help='Which collection to enrich (default: metadata)'
     )
     parser.add_argument(
         '--stats',

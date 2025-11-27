@@ -6,11 +6,11 @@ Creates vector search indexes for semantic subreddit search.
 This enables fast similarity searches using cosine distance.
 
 Usage:
-    python setup_vector_index.py                           # Create combined index on discovery
-    python setup_vector_index.py --collection metadata     # Create index on metadata collection
-    python setup_vector_index.py --collection both         # Create indexes on both collections
+    python setup_vector_index.py                           # Create combined index on metadata (default)
     python setup_vector_index.py --embedding-type persona  # Create persona embedding index
     python setup_vector_index.py --embedding-type all      # Create both combined and persona indexes
+    python setup_vector_index.py --collection discovery    # Create index on discovery collection
+    python setup_vector_index.py --collection both         # Create indexes on both collections
     python setup_vector_index.py --drop                    # Drop existing index and recreate
 """
 
@@ -311,11 +311,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python setup_vector_index.py                           # Create combined index on discovery
-  python setup_vector_index.py --collection metadata     # Create index on metadata collection
-  python setup_vector_index.py --collection both         # Create indexes on both collections
+  python setup_vector_index.py                           # Create combined index on metadata (default)
   python setup_vector_index.py --embedding-type persona  # Create persona embedding index
   python setup_vector_index.py --embedding-type all      # Create both combined and persona indexes
+  python setup_vector_index.py --collection discovery    # Create index on discovery collection
+  python setup_vector_index.py --collection both         # Create indexes on both collections
   python setup_vector_index.py --drop                    # Drop and recreate index
   python setup_vector_index.py --verify-only             # Only verify existing index
         """
@@ -323,9 +323,9 @@ Examples:
     parser.add_argument(
         '--collection',
         type=str,
-        default='discovery',
+        default='metadata',
         choices=['discovery', 'metadata', 'both'],
-        help='Collection to create index on (default: discovery)'
+        help='Collection to create index on (default: metadata)'
     )
     parser.add_argument(
         '--embedding-type',

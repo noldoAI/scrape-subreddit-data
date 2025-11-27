@@ -41,7 +41,7 @@ if not MONGODB_URI:
 
 client = MongoClient(MONGODB_URI)
 db = client.noldo
-subreddit_discovery_collection = db.subreddit_discovery
+subreddit_metadata_collection = db.subreddit_metadata
 
 # Azure OpenAI client for query expansion
 azure_client = None
@@ -146,7 +146,7 @@ def search_persona(
 
     # Determine which embedding field to search
     embedding_field = "embeddings.persona_embedding" if embedding_type == "persona" else "embeddings.combined_embedding"
-    index_name = "subreddit_persona_vector_index" if embedding_type == "persona" else "subreddit_vector_index"
+    index_name = "metadata_persona_vector_index" if embedding_type == "persona" else "metadata_vector_index"
 
     # Build aggregation pipeline
     pipeline = [
@@ -181,11 +181,11 @@ def search_persona(
     ]
 
     try:
-        results = list(subreddit_discovery_collection.aggregate(pipeline))
+        results = list(subreddit_metadata_collection.aggregate(pipeline))
         return results
     except Exception as e:
         logger.error(f"Search failed: {e}")
-        logger.info("Make sure the vector search index exists. Run: python setup_vector_index.py")
+        logger.info("Make sure the vector search index exists. Run: python setup_vector_index.py --collection metadata --embedding-type persona")
         return []
 
 
@@ -387,14 +387,14 @@ def interactive_mode():
 
 def show_stats():
     """Show embedding statistics."""
-    total = subreddit_discovery_collection.count_documents({})
-    with_persona = subreddit_discovery_collection.count_documents({
+    total = subreddit_metadata_collection.count_documents({})
+    with_persona = subreddit_metadata_collection.count_documents({
         "embeddings.persona_embedding": {"$exists": True}
     })
-    with_combined = subreddit_discovery_collection.count_documents({
+    with_combined = subreddit_metadata_collection.count_documents({
         "embeddings.combined_embedding": {"$exists": True}
     })
-    with_enrichment = subreddit_discovery_collection.count_documents({
+    with_enrichment = subreddit_metadata_collection.count_documents({
         "llm_enrichment": {"$exists": True, "$ne": None}
     })
 

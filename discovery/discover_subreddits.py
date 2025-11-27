@@ -38,7 +38,7 @@ if not MONGODB_URI:
 
 client = MongoClient(MONGODB_URI)
 db = client.noldo
-subreddit_discovery_collection = db.subreddit_discovery
+subreddit_metadata_collection = db.subreddit_metadata
 
 # Reddit API connection
 try:
@@ -179,7 +179,7 @@ def discover_subreddits(query: str, limit: int = 50) -> List[Dict]:
             if metadata:
                 # Store in MongoDB
                 try:
-                    subreddit_discovery_collection.update_one(
+                    subreddit_metadata_collection.update_one(
                         {"subreddit_name": metadata["subreddit_name"]},
                         {"$set": metadata},
                         upsert=True
@@ -225,7 +225,7 @@ def bulk_discover(queries: List[str], limit: int = 50):
 
     logger.info(f"\n✅ Bulk discovery complete!")
     logger.info(f"📊 Total unique subreddits discovered: {len(unique_subreddits)}")
-    logger.info(f"💾 All data saved to MongoDB: {db.name}.{subreddit_discovery_collection.name}")
+    logger.info(f"💾 All data saved to MongoDB: {db.name}.{subreddit_metadata_collection.name}")
 
 
 def main():

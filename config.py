@@ -149,7 +149,7 @@ AZURE_OPENAI_CONFIG = {
 
 # Persona Search Configuration
 PERSONA_SEARCH_CONFIG = {
-    "persona_vector_index_name": "subreddit_persona_vector_index",  # Vector index for persona embeddings
+    "persona_vector_index_name": "metadata_persona_vector_index",  # Vector index for persona embeddings on subreddit_metadata
     "default_min_subscribers": 1000,                # Default minimum subscriber filter
     "num_candidates": 100,                          # Number of candidates for vector search
     "enrichment_fields": [                          # Fields included in persona embedding

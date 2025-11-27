@@ -38,7 +38,12 @@ if not MONGODB_URI:
 
 client = MongoClient(MONGODB_URI)
 db = client.noldo
-subreddit_discovery_collection = db.subreddit_discovery
+
+# Collection references - will be set based on --collection flag
+COLLECTIONS = {
+    'discovery': db.subreddit_discovery,
+    'metadata': db.subreddit_metadata
+}
 
 # Load sentence-transformers model
 try:
@@ -201,7 +206,8 @@ def batch_generate_embeddings(
     batch_size: int = 32,
     force: bool = False,
     subreddit: str = None,
-    embedding_type: str = "combined"
+    embedding_type: str = "combined",
+    collection_name: str = "metadata"
 ):
     """
     Generate embeddings for all subreddits in the database.
@@ -211,7 +217,10 @@ def batch_generate_embeddings(
         force: Regenerate embeddings even if they already exist
         subreddit: Process only specific subreddit (optional)
         embedding_type: "combined" (topic-focused) or "persona" (audience-focused)
+        collection_name: "metadata" or "discovery" (default: metadata)
     """
+    collection = COLLECTIONS.get(collection_name, COLLECTIONS['metadata'])
+
     # Determine embedding field name
     embedding_field = "embeddings.persona_embedding" if embedding_type == "persona" else "embeddings.combined_embedding"
 
@@ -227,7 +236,7 @@ def batch_generate_embeddings(
         query["llm_enrichment"] = {"$exists": True, "$ne": None}
 
     # Get subreddits needing embeddings
-    subreddits = list(subreddit_discovery_collection.find(query))
+    subreddits = list(collection.find(query))
 
     if not subreddits:
         if subreddit:
@@ -270,7 +279,7 @@ def batch_generate_embeddings(
             if embedding_type == "persona":
                 update_fields["embeddings.persona_generated_at"] = datetime.now(UTC)
 
-            subreddit_discovery_collection.update_one(
+            collection.update_one(
                 {"_id": sub["_id"]},
                 {"$set": update_fields}
             )
@@ -292,7 +301,7 @@ def batch_generate_embeddings(
     logger.info(f"   Successful: {successful}/{len(subreddits)}")
     if failed > 0:
         logger.info(f"   Failed: {failed}/{len(subreddits)}")
-    logger.info(f"   Database: {db.name}.{subreddit_discovery_collection.name}")
+    logger.info(f"   Database: {db.name}.{collection.name}")
     logger.info(f"{'='*80}\n")
 
     # Next steps
@@ -302,22 +311,31 @@ def batch_generate_embeddings(
         logger.info("   2. Test semantic search: python semantic_search_subreddits.py --query 'building b2b saas'")
 
 
-def show_statistics():
+def show_statistics(collection_name: str = "metadata"):
     """Show statistics about embeddings in the database."""
-    total = subreddit_discovery_collection.count_documents({})
-    with_embeddings = subreddit_discovery_collection.count_documents(
+    collection = COLLECTIONS.get(collection_name, COLLECTIONS['metadata'])
+
+    total = collection.count_documents({})
+    with_combined = collection.count_documents(
         {"embeddings.combined_embedding": {"$exists": True}}
     )
-    without_embeddings = total - with_embeddings
+    with_persona = collection.count_documents(
+        {"embeddings.persona_embedding": {"$exists": True}}
+    )
+    with_enrichment = collection.count_documents(
+        {"llm_enrichment": {"$exists": True, "$ne": None}}
+    )
 
-    logger.info(f"\n📊 Embedding Statistics")
+    logger.info(f"\n📊 Embedding Statistics ({collection.name})")
     logger.info(f"   Total subreddits: {total}")
-    logger.info(f"   With embeddings: {with_embeddings} ({with_embeddings/total*100:.1f}%)")
-    logger.info(f"   Without embeddings: {without_embeddings} ({without_embeddings/total*100:.1f}%)")
+    if total > 0:
+        logger.info(f"   With LLM enrichment: {with_enrichment} ({with_enrichment/total*100:.1f}%)")
+        logger.info(f"   With combined embedding: {with_combined} ({with_combined/total*100:.1f}%)")
+        logger.info(f"   With persona embedding: {with_persona} ({with_persona/total*100:.1f}%)")
 
-    if with_embeddings > 0:
+    if with_combined > 0:
         # Sample document to check dimensions
-        sample = subreddit_discovery_collection.find_one(
+        sample = collection.find_one(
             {"embeddings.combined_embedding": {"$exists": True}}
         )
         if sample and 'embeddings' in sample:
@@ -359,17 +377,25 @@ def main():
         default='combined',
         help='Embedding type: "combined" (topic-focused) or "persona" (audience-focused, requires LLM enrichment)'
     )
+    parser.add_argument(
+        '--collection',
+        type=str,
+        choices=['discovery', 'metadata'],
+        default='metadata',
+        help='Which collection to process (default: metadata)'
+    )
 
     args = parser.parse_args()
 
     if args.stats:
-        show_statistics()
+        show_statistics(args.collection)
     else:
         batch_generate_embeddings(
             batch_size=args.batch_size,
             force=args.force,
             subreddit=args.subreddit,
-            embedding_type=args.embedding_type
+            embedding_type=args.embedding_type,
+            collection_name=args.collection
         )
 
 
