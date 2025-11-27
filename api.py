@@ -164,7 +164,7 @@ class ScraperStatus(BaseModel):
 
 class ScraperStartRequest(BaseModel):
     subreddit: str = ""                    # Single subreddit (backwards compat)
-    subreddits: List[str] = []             # Multi-subreddit mode (up to 10)
+    subreddits: List[str] = []             # Multi-subreddit mode (up to 30)
     scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
@@ -1279,7 +1279,7 @@ async def dashboard():
                 <label>Mode:</label>
                 <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 240px;">
                     <option value="single">Single Subreddit</option>
-                    <option value="multi">Multi-Subreddit (up to 10)</option>
+                    <option value="multi">Multi-Subreddit (up to 30)</option>
                 </select>
                 <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
             </div>
@@ -1812,7 +1812,7 @@ async def dashboard():
                     singleInput.style.display = 'none';
                     multiInput.style.display = 'block';
                     modeIndicator.className = 'mode-badge multi';
-                    modeIndicator.textContent = 'up to 10';
+                    modeIndicator.textContent = 'up to 30';
                 }
                 updateMultiSubredditCount();
             }
