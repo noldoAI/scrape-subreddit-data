@@ -2,8 +2,10 @@
 """
 Background Embedding Worker
 
-Processes subreddit metadata that has embedding_status: "pending" and generates
-semantic embeddings using nomic-embed-text-v2 model.
+Processes subreddit metadata that has embedding_status: "pending" and generates:
+1. Combined embeddings (topic-focused) using nomic-embed-text-v2
+2. LLM enrichment (audience profiles) using Azure GPT-4o-mini
+3. Persona embeddings (audience-focused) using nomic-embed-text-v2
 
 This module can be:
 1. Imported and run as a background thread in the API server
@@ -32,7 +34,7 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
-from config import EMBEDDING_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS
+from config import EMBEDDING_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS, AZURE_OPENAI_CONFIG
 
 # Setup logging
 logging.basicConfig(
@@ -45,6 +47,11 @@ logger = logging.getLogger('embedding-worker')
 _model = None
 _model_lock = threading.Lock()
 _model_load_attempted = False
+
+# Thread-safe singleton for LLM enricher
+_enricher = None
+_enricher_lock = threading.Lock()
+_enricher_load_attempted = False
 
 
 def get_embedding_model():
@@ -83,6 +90,51 @@ def get_embedding_model():
             return None
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
+            return None
+
+
+def get_llm_enricher():
+    """
+    Lazy load the LLM enricher (thread-safe singleton).
+
+    Returns enricher on success, None on failure (graceful degradation).
+    """
+    global _enricher, _enricher_load_attempted
+
+    if _enricher is not None:
+        return _enricher
+
+    with _enricher_lock:
+        # Double-check after acquiring lock
+        if _enricher is not None:
+            return _enricher
+
+        if _enricher_load_attempted:
+            # Already tried and failed
+            return None
+
+        _enricher_load_attempted = True
+
+        try:
+            # Check if Azure OpenAI is configured
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+            api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+            if not endpoint or not api_key:
+                logger.warning("Azure OpenAI not configured - LLM enrichment disabled")
+                return None
+
+            # Import and initialize enricher
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'discovery'))
+            from llm_enrichment import SubredditEnricher
+            _enricher = SubredditEnricher()
+            logger.info("LLM enricher loaded successfully")
+            return _enricher
+        except ImportError as e:
+            logger.warning(f"LLM enrichment module not found: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to load LLM enricher: {e}")
             return None
 
 
@@ -142,6 +194,68 @@ def combine_text_fields(metadata: Dict) -> str:
     return combined
 
 
+def combine_text_for_persona_embedding(metadata: Dict) -> str:
+    """
+    Combine text fields optimized for persona-based search.
+
+    Prioritizes LLM-enriched audience signals over raw topic data.
+    Structure: audience signals first, then topic context.
+
+    Args:
+        metadata: Subreddit metadata document with llm_enrichment
+
+    Returns:
+        Combined text string optimized for persona matching
+    """
+    text_parts = []
+
+    # SECTION 1: LLM-ENRICHED AUDIENCE SIGNALS (highest priority)
+    enrichment = metadata.get('llm_enrichment', {})
+
+    if enrichment.get('audience_profile'):
+        text_parts.append(f"Audience: {enrichment['audience_profile']}")
+
+    if enrichment.get('audience_types'):
+        types_str = ', '.join(enrichment['audience_types'][:6])
+        text_parts.append(f"User types: {types_str}")
+
+    if enrichment.get('user_intents'):
+        intents_str = ', '.join(enrichment['user_intents'][:6])
+        text_parts.append(f"They come here to: {intents_str}")
+
+    if enrichment.get('pain_points'):
+        pains_str = ', '.join(enrichment['pain_points'][:6])
+        text_parts.append(f"Pain points: {pains_str}")
+
+    if enrichment.get('content_themes'):
+        themes_str = ', '.join(enrichment['content_themes'][:6])
+        text_parts.append(f"Content themes: {themes_str}")
+
+    # SECTION 2: TOPIC CONTEXT (supporting information)
+    if metadata.get('title'):
+        text_parts.append(f"Subreddit: {metadata['title']}")
+
+    if metadata.get('public_description'):
+        desc = metadata['public_description'][:300].replace('\n', ' ').strip()
+        if desc:
+            text_parts.append(f"About: {desc}")
+
+    if metadata.get('sample_posts_titles'):
+        titles = metadata['sample_posts_titles'][:500]
+        if titles:
+            text_parts.append(f"Topics: {titles}")
+
+    if metadata.get('advertiser_category'):
+        text_parts.append(f"Category: {metadata['advertiser_category']}")
+
+    combined = "\n".join(text_parts)
+
+    if not combined.strip():
+        return f"Subreddit: {metadata.get('subreddit_name', 'unknown')}"
+
+    return combined
+
+
 class EmbeddingWorker:
     """
     Background worker that processes pending embeddings for subreddit metadata.
@@ -168,8 +282,11 @@ class EmbeddingWorker:
         self._stats = {
             "processed": 0,
             "failed": 0,
+            "enriched": 0,
+            "persona_generated": 0,
             "last_run": None,
-            "model_loaded": False
+            "model_loaded": False,
+            "enricher_loaded": False
         }
 
     def get_pending(self, limit: int = None) -> List[Dict]:
@@ -229,60 +346,177 @@ class EmbeddingWorker:
             logger.error(f"Embedding generation failed for r/{metadata.get('subreddit_name')}: {e}")
             return None, error_msg
 
-    def process_one(self, metadata: Dict) -> bool:
+    def generate_persona_embedding(self, metadata: Dict) -> tuple[Optional[List[float]], Optional[str]]:
         """
-        Process a single subreddit's embedding.
+        Generate persona-focused embedding vector for a subreddit.
+
+        Requires llm_enrichment data to be present.
+
+        Args:
+            metadata: Subreddit metadata document with llm_enrichment
+
+        Returns:
+            Tuple of (embedding_vector, error_message)
+        """
+        model = get_embedding_model()
+        if model is None:
+            return None, "Embedding model not loaded"
+
+        if not metadata.get('llm_enrichment'):
+            return None, "No LLM enrichment data available"
+
+        try:
+            combined_text = combine_text_for_persona_embedding(metadata)
+            if not combined_text or not combined_text.strip():
+                return None, "No text content available for persona embedding"
+
+            embedding = model.encode(combined_text, convert_to_numpy=True)
+            if embedding is None:
+                return None, "Model encode() returned None"
+            return embedding.tolist(), None
+        except Exception as e:
+            error_msg = f"Persona encoding failed: {str(e)}"
+            logger.error(f"Persona embedding failed for r/{metadata.get('subreddit_name')}: {e}")
+            return None, error_msg
+
+    def run_llm_enrichment(self, metadata: Dict) -> tuple[Optional[Dict], Optional[str]]:
+        """
+        Run LLM enrichment to generate audience profile.
 
         Args:
             metadata: Subreddit metadata document
 
         Returns:
-            True if successful, False otherwise
+            Tuple of (enrichment_data, error_message)
+        """
+        enricher = get_llm_enricher()
+        if enricher is None:
+            return None, "LLM enricher not available (check Azure OpenAI config)"
+
+        try:
+            enrichment = enricher.enrich_subreddit(metadata)
+            if enrichment:
+                return enrichment, None
+            else:
+                return None, "Enrichment returned None"
+        except Exception as e:
+            error_msg = f"LLM enrichment failed: {str(e)}"
+            logger.error(f"LLM enrichment failed for r/{metadata.get('subreddit_name')}: {e}")
+            return None, error_msg
+
+    def process_one(self, metadata: Dict) -> bool:
+        """
+        Process a single subreddit: combined embedding, LLM enrichment, persona embedding.
+
+        Pipeline:
+        1. Generate combined_embedding (if not exists)
+        2. Run LLM enrichment (if not exists)
+        3. Generate persona_embedding (if enrichment exists and persona not exists)
+
+        Args:
+            metadata: Subreddit metadata document
+
+        Returns:
+            True if all steps successful, False otherwise
         """
         subreddit_name = metadata.get("subreddit_name", "unknown")
         doc_id = metadata.get("_id")
+        success = True
 
         try:
-            logger.info(f"Generating embedding for r/{subreddit_name}...")
+            logger.info(f"Processing r/{subreddit_name}...")
 
-            embedding, error_msg = self.generate_embedding(metadata)
+            # STEP 1: Combined embedding (topic-focused)
+            has_combined = metadata.get('embeddings', {}).get('combined_embedding') is not None
 
-            if embedding:
-                # Success - save embedding and mark complete
-                self.collection.update_one(
-                    {"_id": doc_id},
-                    {"$set": {
-                        "embedding_status": "complete",
-                        "embedding_completed_at": datetime.now(UTC),
-                        "embeddings": {
-                            "combined_embedding": embedding,
-                            "model": EMBEDDING_CONFIG["model_name"],
-                            "dimensions": EMBEDDING_CONFIG["dimensions"],
-                            "generated_at": datetime.now(UTC)
-                        }
-                    },
-                    "$unset": {
-                        "embedding_error": "",
-                        "embedding_retry_count": ""
-                    }}
-                )
-                logger.info(f"✓ Embedding saved for r/{subreddit_name} ({EMBEDDING_CONFIG['dimensions']} dimensions)")
-                self._stats["processed"] += 1
-                return True
+            if not has_combined:
+                logger.info(f"  [1/3] Generating combined embedding...")
+                embedding, error_msg = self.generate_embedding(metadata)
+
+                if embedding:
+                    self.collection.update_one(
+                        {"_id": doc_id},
+                        {"$set": {
+                            "embeddings.combined_embedding": embedding,
+                            "embeddings.model": EMBEDDING_CONFIG["model_name"],
+                            "embeddings.dimensions": EMBEDDING_CONFIG["dimensions"],
+                            "embeddings.generated_at": datetime.now(UTC)
+                        }}
+                    )
+                    logger.info(f"  ✓ Combined embedding saved")
+                    self._stats["processed"] += 1
+                else:
+                    logger.warning(f"  ✗ Combined embedding failed: {error_msg}")
+                    success = False
             else:
-                # Failed - increment retry count with specific error
-                retry_count = metadata.get("embedding_retry_count", 0) + 1
-                self.collection.update_one(
-                    {"_id": doc_id},
-                    {"$set": {
-                        "embedding_status": "failed",
-                        "embedding_error": error_msg or "Unknown error",
-                        "embedding_retry_count": retry_count
-                    }}
-                )
-                logger.warning(f"✗ Embedding failed for r/{subreddit_name}: {error_msg} (retry {retry_count})")
-                self._stats["failed"] += 1
-                return False
+                logger.info(f"  [1/3] Combined embedding exists - skipped")
+
+            # STEP 2: LLM enrichment (audience profile)
+            has_enrichment = metadata.get('llm_enrichment') is not None
+
+            if not has_enrichment:
+                logger.info(f"  [2/3] Running LLM enrichment...")
+                enrichment, error_msg = self.run_llm_enrichment(metadata)
+
+                if enrichment:
+                    self.collection.update_one(
+                        {"_id": doc_id},
+                        {"$set": {
+                            "llm_enrichment": enrichment,
+                            "llm_enrichment_at": datetime.now(UTC)
+                        }}
+                    )
+                    # Update local metadata for persona embedding
+                    metadata['llm_enrichment'] = enrichment
+                    logger.info(f"  ✓ LLM enrichment saved")
+                    self._stats["enriched"] += 1
+                else:
+                    logger.warning(f"  ✗ LLM enrichment failed: {error_msg}")
+                    # Not marking as failure - enrichment is optional
+            else:
+                logger.info(f"  [2/3] LLM enrichment exists - skipped")
+
+            # STEP 3: Persona embedding (audience-focused)
+            has_persona = metadata.get('embeddings', {}).get('persona_embedding') is not None
+            has_enrichment_now = metadata.get('llm_enrichment') is not None
+
+            if has_enrichment_now and not has_persona:
+                logger.info(f"  [3/3] Generating persona embedding...")
+                persona_embedding, error_msg = self.generate_persona_embedding(metadata)
+
+                if persona_embedding:
+                    self.collection.update_one(
+                        {"_id": doc_id},
+                        {"$set": {
+                            "embeddings.persona_embedding": persona_embedding,
+                            "embeddings.persona_generated_at": datetime.now(UTC)
+                        }}
+                    )
+                    logger.info(f"  ✓ Persona embedding saved")
+                    self._stats["persona_generated"] += 1
+                else:
+                    logger.warning(f"  ✗ Persona embedding failed: {error_msg}")
+                    # Not marking as failure - persona is optional
+            elif not has_enrichment_now:
+                logger.info(f"  [3/3] No enrichment data - persona embedding skipped")
+            else:
+                logger.info(f"  [3/3] Persona embedding exists - skipped")
+
+            # Mark as complete
+            self.collection.update_one(
+                {"_id": doc_id},
+                {"$set": {
+                    "embedding_status": "complete",
+                    "embedding_completed_at": datetime.now(UTC)
+                },
+                "$unset": {
+                    "embedding_error": "",
+                    "embedding_retry_count": ""
+                }}
+            )
+
+            logger.info(f"✓ Processing complete for r/{subreddit_name}")
+            return success
 
         except Exception as e:
             # Error - mark as failed
@@ -376,18 +610,40 @@ class EmbeddingWorker:
         Get worker statistics.
 
         Returns:
-            Dict with worker stats
+            Dict with worker stats including enrichment and persona counts
         """
         model = get_embedding_model()
+        enricher = get_llm_enricher()
+
+        # Count documents with various embeddings/enrichments
+        total_docs = self.collection.count_documents({})
+        with_combined = self.collection.count_documents({
+            "embeddings.combined_embedding": {"$exists": True}
+        })
+        with_enrichment = self.collection.count_documents({
+            "llm_enrichment": {"$exists": True, "$ne": None}
+        })
+        with_persona = self.collection.count_documents({
+            "embeddings.persona_embedding": {"$exists": True}
+        })
 
         return {
             "running": self.running,
             "model_loaded": model is not None,
+            "enricher_loaded": enricher is not None,
             "total_processed": self._stats["processed"],
+            "total_enriched": self._stats["enriched"],
+            "total_persona_generated": self._stats["persona_generated"],
             "total_failed": self._stats["failed"],
             "last_run": self._stats["last_run"].isoformat() if self._stats["last_run"] else None,
             "pending_count": self.get_pending_count(),
             "complete_count": self.collection.count_documents({"embedding_status": "complete"}),
+            "database_stats": {
+                "total_subreddits": total_docs,
+                "with_combined_embedding": with_combined,
+                "with_llm_enrichment": with_enrichment,
+                "with_persona_embedding": with_persona
+            },
             "config": {
                 "check_interval": self.config.get("check_interval", 60),
                 "batch_size": self.config.get("batch_size", 10)
@@ -485,15 +741,31 @@ def main():
     if args.stats:
         stats = worker.get_stats()
         failed_count = worker.collection.count_documents({"embedding_status": "failed"})
+        db_stats = stats.get('database_stats', {})
+        total = db_stats.get('total_subreddits', 0)
+
         print("\n📊 Embedding Worker Statistics")
-        print("=" * 50)
-        print(f"Model loaded: {stats['model_loaded']}")
-        print(f"Pending: {stats['pending_count']}")
-        print(f"Failed: {failed_count}")
-        print(f"Complete: {stats['complete_count']}")
-        print(f"Total processed: {stats['total_processed']}")
-        print(f"Total failed: {stats['total_failed']}")
-        print("=" * 50)
+        print("=" * 60)
+        print(f"Model loaded:    {stats['model_loaded']}")
+        print(f"Enricher loaded: {stats['enricher_loaded']}")
+        print()
+        print("Pipeline Status:")
+        print(f"  Pending:  {stats['pending_count']}")
+        print(f"  Failed:   {failed_count}")
+        print(f"  Complete: {stats['complete_count']}")
+        print()
+        print("Database Coverage:")
+        print(f"  Total subreddits:       {total}")
+        print(f"  With combined embedding: {db_stats.get('with_combined_embedding', 0)} ({db_stats.get('with_combined_embedding', 0)/max(total,1)*100:.1f}%)")
+        print(f"  With LLM enrichment:     {db_stats.get('with_llm_enrichment', 0)} ({db_stats.get('with_llm_enrichment', 0)/max(total,1)*100:.1f}%)")
+        print(f"  With persona embedding:  {db_stats.get('with_persona_embedding', 0)} ({db_stats.get('with_persona_embedding', 0)/max(total,1)*100:.1f}%)")
+        print()
+        print("Session Stats:")
+        print(f"  Combined processed:  {stats['total_processed']}")
+        print(f"  LLM enriched:        {stats['total_enriched']}")
+        print(f"  Persona generated:   {stats['total_persona_generated']}")
+        print(f"  Failed:              {stats['total_failed']}")
+        print("=" * 60)
         return
 
     if args.reset_failed:
