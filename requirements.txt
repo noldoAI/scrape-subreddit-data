@@ -7,4 +7,5 @@ pydantic
 cryptography
 sentence-transformers>=3.0.0
 einops
-prometheus_client 
+prometheus_client
+openai>=1.0.0 
