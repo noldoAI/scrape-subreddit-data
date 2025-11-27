@@ -6,10 +6,12 @@ Creates vector search indexes for semantic subreddit search.
 This enables fast similarity searches using cosine distance.
 
 Usage:
-    python setup_vector_index.py                      # Create index on discovery collection
-    python setup_vector_index.py --collection metadata  # Create index on metadata collection
-    python setup_vector_index.py --collection both      # Create indexes on both collections
-    python setup_vector_index.py --drop                 # Drop existing index and recreate
+    python setup_vector_index.py                           # Create combined index on discovery
+    python setup_vector_index.py --collection metadata     # Create index on metadata collection
+    python setup_vector_index.py --collection both         # Create indexes on both collections
+    python setup_vector_index.py --embedding-type persona  # Create persona embedding index
+    python setup_vector_index.py --embedding-type all      # Create both combined and persona indexes
+    python setup_vector_index.py --drop                    # Drop existing index and recreate
 """
 
 import os
@@ -23,7 +25,7 @@ from pymongo.operations import SearchIndexModel
 
 # Add parent directory to path for imports when run from discovery/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS
+from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS, PERSONA_SEARCH_CONFIG
 
 # Setup logging
 logging.basicConfig(
@@ -58,6 +60,20 @@ COLLECTION_CONFIGS = {
     }
 }
 
+# Embedding type configurations
+EMBEDDING_CONFIGS = {
+    "combined": {
+        "path": "embeddings.combined_embedding",
+        "index_suffix": "",  # Uses default index name
+        "description": "Topic-focused embeddings (subreddit content)"
+    },
+    "persona": {
+        "path": "embeddings.persona_embedding",
+        "index_suffix": "_persona",  # Appends to make unique index name
+        "description": "Persona-focused embeddings (audience profiles)"
+    }
+}
+
 
 def list_existing_indexes(collection):
     """List all existing search indexes on the collection."""
@@ -87,53 +103,45 @@ def drop_index(collection, index_name: str):
         logger.error(f"   ✗ Error dropping index: {e}")
 
 
-def create_vector_search_index(collection, index_name: str):
+def create_vector_search_index(collection, index_name: str, embedding_type: str = "combined"):
     """
     Create MongoDB Atlas Vector Search index for subreddit embeddings.
 
     Index Configuration:
-    - Field: embeddings.combined_embedding (768 dimensions)
+    - Field: embeddings.combined_embedding or embeddings.persona_embedding (768 dimensions)
     - Similarity: cosine (best for normalized embeddings)
     - Filters: subreddit_type, over_18, subscribers (for hybrid search)
     """
+    embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
+    embedding_path = embedding_config["path"]
+
     logger.info(f"\n🔧 Creating vector search index...")
     logger.info(f"   Collection: {db.name}.{collection.name}")
     logger.info(f"   Index name: {index_name}")
+    logger.info(f"   Embedding type: {embedding_type} ({embedding_config['description']})")
+    logger.info(f"   Embedding path: {embedding_path}")
 
-    # Define the vector search index
+    # Define the vector search index for Atlas Vector Search
+    # Using mappings format for pre-7.0 Atlas clusters
     index_definition = {
         "name": index_name,
         "type": "vectorSearch",
         "definition": {
-            "fields": [
-                {
-                    "type": "vector",
-                    "path": "embeddings.combined_embedding",
-                    "numDimensions": 768,  # nomic-embed-text-v2
-                    "similarity": "cosine"  # cosine distance (best for normalized vectors)
-                },
-                # Add filters for hybrid search
-                {
-                    "type": "filter",
-                    "path": "subreddit_type"  # public/private/restricted
-                },
-                {
-                    "type": "filter",
-                    "path": "over_18"  # NSFW filter
-                },
-                {
-                    "type": "filter",
-                    "path": "subscribers"  # Min subscriber count filter
-                },
-                {
-                    "type": "filter",
-                    "path": "lang"  # Language filter
-                },
-                {
-                    "type": "filter",
-                    "path": "advertiser_category"  # Category filter
+            "mappings": {
+                "dynamic": True,
+                "fields": {
+                    "embeddings": {
+                        "type": "document",
+                        "fields": {
+                            embedding_path.split('.')[-1]: {
+                                "type": "knnVector",
+                                "dimensions": 768,
+                                "similarity": "cosine"
+                            }
+                        }
+                    }
                 }
-            ]
+            }
         }
     }
 
@@ -184,22 +192,29 @@ def create_vector_search_index(collection, index_name: str):
         return False
 
 
-def verify_index(collection, index_name: str):
+def verify_index(collection, index_name: str, embedding_type: str = "combined"):
     """Verify that the vector index is working with a test query."""
+    embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
+    embedding_path = embedding_config["path"]
+
     logger.info(f"\n🧪 Verifying vector search index on {collection.name}...")
+    logger.info(f"   Embedding path: {embedding_path}")
 
     # Get a sample embedding from the database
-    sample = collection.find_one({"embeddings.combined_embedding": {"$exists": True}})
+    sample = collection.find_one({embedding_path: {"$exists": True}})
 
     if not sample:
-        logger.error(f"   ✗ No documents with embeddings found in {collection.name}.")
-        if collection.name == "subreddit_discovery":
+        logger.error(f"   ✗ No documents with {embedding_type} embeddings found in {collection.name}.")
+        if embedding_type == "persona":
+            logger.error("   Run: python generate_embeddings.py --embedding-type persona")
+        elif collection.name == "subreddit_discovery":
             logger.error("   Run: python generate_embeddings.py")
         else:
             logger.error("   Wait for embedding worker to process pending subreddits.")
         return False
 
-    query_vector = sample['embeddings']['combined_embedding']
+    # Navigate to nested embedding field
+    query_vector = sample['embeddings'][embedding_path.split('.')[-1]]
 
     try:
         # Test vector search query
@@ -207,7 +222,7 @@ def verify_index(collection, index_name: str):
             {
                 "$vectorSearch": {
                     "index": index_name,
-                    "path": "embeddings.combined_embedding",
+                    "path": embedding_path,
                     "queryVector": query_vector,
                     "numCandidates": 10,
                     "limit": 3
@@ -238,15 +253,24 @@ def verify_index(collection, index_name: str):
         return False
 
 
-def setup_collection(collection_key: str, drop: bool = False, verify_only: bool = False):
+def setup_collection(collection_key: str, drop: bool = False, verify_only: bool = False, embedding_type: str = "combined"):
     """Setup vector index for a specific collection."""
     config = COLLECTION_CONFIGS[collection_key]
+    embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
     collection = config["collection"]
-    index_name = config["index_name"]
+
+    # Build index name based on embedding type
+    base_index_name = config["index_name"]
+    if embedding_type == "persona":
+        # Use the persona-specific index name from config
+        index_name = PERSONA_SEARCH_CONFIG.get("persona_vector_index_name", f"{base_index_name}_persona")
+    else:
+        index_name = base_index_name
 
     logger.info(f"\n{'='*80}")
     logger.info(f"Setting up: {config['description']}")
     logger.info(f"Collection: {collection.name}")
+    logger.info(f"Embedding type: {embedding_type} ({embedding_config['description']})")
     logger.info(f"Index: {index_name}")
     logger.info(f"{'='*80}")
 
@@ -254,7 +278,7 @@ def setup_collection(collection_key: str, drop: bool = False, verify_only: bool 
     existing_indexes = list_existing_indexes(collection)
 
     if verify_only:
-        verify_index(collection, index_name)
+        verify_index(collection, index_name, embedding_type)
         return
 
     # Drop index if requested
@@ -269,16 +293,16 @@ def setup_collection(collection_key: str, drop: bool = False, verify_only: bool 
     index_exists = any(idx.get('name') == index_name for idx in existing_indexes)
     if index_exists and not drop:
         logger.info(f"\n✓ Index '{index_name}' already exists. Use --drop to recreate.")
-        verify_index(collection, index_name)
+        verify_index(collection, index_name, embedding_type)
         return
 
     # Create index
-    success = create_vector_search_index(collection, index_name)
+    success = create_vector_search_index(collection, index_name, embedding_type)
 
     if success:
         # Verify index
         logger.info(f"\n{'='*80}\n")
-        verify_index(collection, index_name)
+        verify_index(collection, index_name, embedding_type)
 
 
 def main():
@@ -287,11 +311,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python setup_vector_index.py                        # Create index on discovery collection
-  python setup_vector_index.py --collection metadata  # Create index on metadata collection
-  python setup_vector_index.py --collection both      # Create indexes on both collections
-  python setup_vector_index.py --drop                 # Drop and recreate index
-  python setup_vector_index.py --verify-only          # Only verify existing index
+  python setup_vector_index.py                           # Create combined index on discovery
+  python setup_vector_index.py --collection metadata     # Create index on metadata collection
+  python setup_vector_index.py --collection both         # Create indexes on both collections
+  python setup_vector_index.py --embedding-type persona  # Create persona embedding index
+  python setup_vector_index.py --embedding-type all      # Create both combined and persona indexes
+  python setup_vector_index.py --drop                    # Drop and recreate index
+  python setup_vector_index.py --verify-only             # Only verify existing index
         """
     )
     parser.add_argument(
@@ -300,6 +326,13 @@ Examples:
         default='discovery',
         choices=['discovery', 'metadata', 'both'],
         help='Collection to create index on (default: discovery)'
+    )
+    parser.add_argument(
+        '--embedding-type',
+        type=str,
+        default='combined',
+        choices=['combined', 'persona', 'all'],
+        help='Embedding type to index: combined (topic), persona (audience), or all (default: combined)'
     )
     parser.add_argument(
         '--drop',
@@ -318,18 +351,29 @@ Examples:
     logger.info(f"MongoDB Atlas Vector Search Index Setup")
     logger.info(f"{'='*80}")
 
-    # Process collections
-    if args.collection == 'both':
-        setup_collection('discovery', args.drop, args.verify_only)
-        setup_collection('metadata', args.drop, args.verify_only)
+    # Determine embedding types to process
+    if args.embedding_type == 'all':
+        embedding_types = ['combined', 'persona']
     else:
-        setup_collection(args.collection, args.drop, args.verify_only)
+        embedding_types = [args.embedding_type]
+
+    # Process collections and embedding types
+    if args.collection == 'both':
+        for emb_type in embedding_types:
+            setup_collection('discovery', args.drop, args.verify_only, emb_type)
+            setup_collection('metadata', args.drop, args.verify_only, emb_type)
+    else:
+        for emb_type in embedding_types:
+            setup_collection(args.collection, args.drop, args.verify_only, emb_type)
 
     # Final summary
     logger.info(f"\n{'='*80}")
     logger.info(f"✅ Setup complete!")
     logger.info(f"\n🎯 Next steps:")
-    logger.info(f"   1. Test semantic search: python semantic_search_subreddits.py --query 'building b2b saas'")
+    if 'persona' in embedding_types:
+        logger.info(f"   1. Test persona search: python test_persona_search.py \"I'm building SaaS for startups\"")
+    else:
+        logger.info(f"   1. Test semantic search: python semantic_search_subreddits.py --query 'building b2b saas'")
     logger.info(f"   2. Or use the API: POST /search/subreddits")
     logger.info(f"{'='*80}\n")
 

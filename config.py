@@ -135,4 +135,28 @@ EMBEDDING_WORKER_CONFIG = {
     "metadata_vector_index_name": "metadata_vector_index",  # Vector index for subreddit_metadata
     "max_retries": 3,                               # Max retry attempts for failed embeddings
     "retry_delay": 300                              # Seconds to wait before retrying failed embeddings
+}
+
+# Azure OpenAI Configuration (for LLM enrichment)
+AZURE_OPENAI_CONFIG = {
+    "api_version": "2024-02-01",                    # Azure OpenAI API version
+    "deployment_name": "gpt-4o-mini",               # Default deployment name
+    "max_tokens": 500,                              # Max tokens for enrichment response
+    "temperature": 0.3,                             # Lower temperature for consistent output
+    "enrichment_delay": 0.5,                        # Delay between API calls (seconds)
+    "max_retries": 3                                # Max retry attempts for failed enrichment
+}
+
+# Persona Search Configuration
+PERSONA_SEARCH_CONFIG = {
+    "persona_vector_index_name": "subreddit_persona_vector_index",  # Vector index for persona embeddings
+    "default_min_subscribers": 1000,                # Default minimum subscriber filter
+    "num_candidates": 100,                          # Number of candidates for vector search
+    "enrichment_fields": [                          # Fields included in persona embedding
+        "audience_profile",
+        "audience_types",
+        "user_intents",
+        "pain_points",
+        "content_themes"
+    ]
 } 

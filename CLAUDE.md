@@ -789,7 +789,7 @@ The system includes a **semantic search engine** for discovering relevant subred
 Search for subreddits by meaning: `"building b2b saas"` → finds r/SaaS, r/startups, r/Entrepreneur
 
 **Technology Stack**:
-- **Embedding Model**: `nomic-ai/nomic-embed-text-v2` (768 dimensions, trained on Reddit data)
+- **Embedding Model**: `nomic-ai/nomic-embed-text-v1.5` (768 dimensions, trained on Reddit data)
 - **Vector Storage**: MongoDB Atlas Vector Search (HNSW indexing)
 - **Library**: `sentence-transformers` (100% open source)
 - **Cost**: $0 (local CPU inference, no API fees)
@@ -1050,7 +1050,7 @@ pip install sentence-transformers
 
 ```python
 EMBEDDING_CONFIG = {
-    "model_name": "nomic-ai/nomic-embed-text-v2",
+    "model_name": "nomic-ai/nomic-embed-text-v1.5",
     "dimensions": 768,
     "context_window": 8192,
     "batch_size": 32,

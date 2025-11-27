@@ -44,7 +44,7 @@ subreddit_discovery_collection = db.subreddit_discovery
 try:
     logger.info("Loading nomic-embed-text-v2 model...")
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer('nomic-ai/nomic-embed-text-v2', trust_remote_code=True)
+    model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
     logger.info("✅ Model loaded successfully")
     logger.info(f"   Model: nomic-embed-text-v2")
     logger.info(f"   Dimensions: 768")
@@ -112,17 +112,84 @@ def combine_text_fields(subreddit_doc: Dict) -> str:
     return combined
 
 
-def generate_subreddit_embedding(subreddit_doc: Dict) -> np.ndarray:
+def combine_text_for_persona_embedding(subreddit_doc: Dict) -> str:
+    """
+    Combine text fields optimized for persona-based search.
+
+    Prioritizes LLM-enriched audience signals over raw topic data.
+    Structure: audience signals first, then topic context.
+
+    Args:
+        subreddit_doc: MongoDB document with subreddit metadata and llm_enrichment
+
+    Returns:
+        Combined text string optimized for persona matching
+    """
+    text_parts = []
+
+    # SECTION 1: LLM-ENRICHED AUDIENCE SIGNALS (highest priority)
+    enrichment = subreddit_doc.get('llm_enrichment', {})
+
+    if enrichment.get('audience_profile'):
+        text_parts.append(f"Audience: {enrichment['audience_profile']}")
+
+    if enrichment.get('audience_types'):
+        types_str = ', '.join(enrichment['audience_types'][:6])
+        text_parts.append(f"User types: {types_str}")
+
+    if enrichment.get('user_intents'):
+        intents_str = ', '.join(enrichment['user_intents'][:6])
+        text_parts.append(f"They come here to: {intents_str}")
+
+    if enrichment.get('pain_points'):
+        pains_str = ', '.join(enrichment['pain_points'][:6])
+        text_parts.append(f"Pain points: {pains_str}")
+
+    if enrichment.get('content_themes'):
+        themes_str = ', '.join(enrichment['content_themes'][:6])
+        text_parts.append(f"Content themes: {themes_str}")
+
+    # SECTION 2: TOPIC CONTEXT (supporting information)
+    if subreddit_doc.get('title'):
+        text_parts.append(f"Subreddit: {subreddit_doc['title']}")
+
+    if subreddit_doc.get('public_description'):
+        desc = subreddit_doc['public_description'][:300].replace('\n', ' ').strip()
+        if desc:
+            text_parts.append(f"About: {desc}")
+
+    if subreddit_doc.get('sample_posts_titles'):
+        titles = subreddit_doc['sample_posts_titles'][:500]
+        if titles:
+            text_parts.append(f"Topics: {titles}")
+
+    if subreddit_doc.get('advertiser_category'):
+        text_parts.append(f"Category: {subreddit_doc['advertiser_category']}")
+
+    combined = "\n".join(text_parts)
+
+    if not combined.strip():
+        logger.warning(f"No text content for r/{subreddit_doc.get('subreddit_name', 'unknown')}")
+        return f"Subreddit: {subreddit_doc.get('subreddit_name', 'unknown')}"
+
+    return combined
+
+
+def generate_subreddit_embedding(subreddit_doc: Dict, embedding_type: str = "combined") -> np.ndarray:
     """
     Generate embedding vector for a subreddit.
 
     Args:
         subreddit_doc: MongoDB document with subreddit metadata
+        embedding_type: "combined" (topic-focused) or "persona" (audience-focused)
 
     Returns:
         768-dimensional embedding vector
     """
-    combined_text = combine_text_fields(subreddit_doc)
+    if embedding_type == "persona":
+        combined_text = combine_text_for_persona_embedding(subreddit_doc)
+    else:
+        combined_text = combine_text_fields(subreddit_doc)
 
     # Generate embedding
     embedding = model.encode(combined_text, convert_to_numpy=True)
@@ -130,7 +197,12 @@ def generate_subreddit_embedding(subreddit_doc: Dict) -> np.ndarray:
     return embedding
 
 
-def batch_generate_embeddings(batch_size: int = 32, force: bool = False, subreddit: str = None):
+def batch_generate_embeddings(
+    batch_size: int = 32,
+    force: bool = False,
+    subreddit: str = None,
+    embedding_type: str = "combined"
+):
     """
     Generate embeddings for all subreddits in the database.
 
@@ -138,13 +210,21 @@ def batch_generate_embeddings(batch_size: int = 32, force: bool = False, subredd
         batch_size: Number of subreddits to process in parallel
         force: Regenerate embeddings even if they already exist
         subreddit: Process only specific subreddit (optional)
+        embedding_type: "combined" (topic-focused) or "persona" (audience-focused)
     """
+    # Determine embedding field name
+    embedding_field = "embeddings.persona_embedding" if embedding_type == "persona" else "embeddings.combined_embedding"
+
     # Build query
     query = {}
     if not force:
-        query["embeddings.combined_embedding"] = {"$exists": False}
+        query[embedding_field] = {"$exists": False}
     if subreddit:
         query["subreddit_name"] = subreddit
+
+    # For persona embeddings, only process subreddits with LLM enrichment
+    if embedding_type == "persona" and not subreddit:
+        query["llm_enrichment"] = {"$exists": True, "$ne": None}
 
     # Get subreddits needing embeddings
     subreddits = list(subreddit_discovery_collection.find(query))
@@ -152,13 +232,17 @@ def batch_generate_embeddings(batch_size: int = 32, force: bool = False, subredd
     if not subreddits:
         if subreddit:
             logger.warning(f"Subreddit r/{subreddit} not found or already has embeddings (use --force to regenerate)")
+        elif embedding_type == "persona":
+            logger.info("✅ All enriched subreddits already have persona embeddings (use --force to regenerate)")
+            logger.info("   Run 'python enrich_existing.py' first to add LLM enrichment data")
         else:
             logger.info("✅ All subreddits already have embeddings (use --force to regenerate)")
         return
 
-    logger.info(f"\n📊 Generating embeddings for {len(subreddits)} subreddits")
+    logger.info(f"\n📊 Generating {embedding_type.upper()} embeddings for {len(subreddits)} subreddits")
     logger.info(f"   Batch size: {batch_size}")
     logger.info(f"   Model: nomic-embed-text-v2 (768 dimensions)")
+    logger.info(f"   Embedding type: {embedding_type}")
     logger.info(f"   Estimated time: ~{len(subreddits) * 2 // 60} minutes\n")
 
     successful = 0
@@ -170,23 +254,29 @@ def batch_generate_embeddings(batch_size: int = 32, force: bool = False, subredd
         try:
             logger.info(f"[{i}/{len(subreddits)}] Processing r/{subreddit_name}")
 
-            # Generate embedding
-            embedding = generate_subreddit_embedding(sub)
+            # Generate embedding with specified type
+            embedding = generate_subreddit_embedding(sub, embedding_type)
 
             # Store embedding in database
+            update_fields = {
+                embedding_field: embedding.tolist(),
+                "embeddings.generated_at": datetime.now(UTC),
+                "embeddings.model": "nomic-embed-text-v2",
+                "embeddings.dimensions": 768,
+                "embeddings.context_window": 8192
+            }
+
+            # Track embedding type
+            if embedding_type == "persona":
+                update_fields["embeddings.persona_generated_at"] = datetime.now(UTC)
+
             subreddit_discovery_collection.update_one(
                 {"_id": sub["_id"]},
-                {"$set": {
-                    "embeddings.combined_embedding": embedding.tolist(),
-                    "embeddings.generated_at": datetime.now(UTC),
-                    "embeddings.model": "nomic-embed-text-v2",
-                    "embeddings.dimensions": 768,
-                    "embeddings.context_window": 8192
-                }}
+                {"$set": update_fields}
             )
 
             successful += 1
-            logger.info(f"  ✓ Embedding generated and saved ({embedding.shape[0]} dimensions)")
+            logger.info(f"  ✓ {embedding_type.capitalize()} embedding saved ({embedding.shape[0]} dimensions)")
 
             # Progress update every 10 subreddits
             if i % 10 == 0:
@@ -262,6 +352,13 @@ def main():
         action='store_true',
         help='Show embedding statistics and exit'
     )
+    parser.add_argument(
+        '--embedding-type',
+        type=str,
+        choices=['combined', 'persona'],
+        default='combined',
+        help='Embedding type: "combined" (topic-focused) or "persona" (audience-focused, requires LLM enrichment)'
+    )
 
     args = parser.parse_args()
 
@@ -271,7 +368,8 @@ def main():
         batch_generate_embeddings(
             batch_size=args.batch_size,
             force=args.force,
-            subreddit=args.subreddit
+            subreddit=args.subreddit,
+            embedding_type=args.embedding_type
         )
 
 

@@ -3319,7 +3319,7 @@ def get_embedding_model():
     if _embedding_model is None:
         try:
             from sentence_transformers import SentenceTransformer
-            _embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v2', trust_remote_code=True)
+            _embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to load embedding model: {str(e)}")
     return _embedding_model
