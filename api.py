@@ -831,66 +831,325 @@ async def dashboard():
     """Enhanced web dashboard with credential input and persistent storage"""
     html = """
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>Reddit Scraper Dashboard</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Reddit Scraper · Mission Control</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                background: #000000;
-                color: #e5e5e5;
-                padding: 40px;
-                min-height: 100vh;
-            }
-            h1 {
-                font-size: 2.2em;
-                color: #ffffff;
-                margin-bottom: 8px;
-                font-weight: 600;
-                letter-spacing: -0.5px;
-            }
-            h2 {
-                color: #d4d4d4;
-                margin: 35px 0 18px 0;
-                font-size: 1.6em;
-                font-weight: 600;
-            }
-            h3 {
-                color: #b4b4b4;
-                margin: 20px 0 12px 0;
-                font-weight: 500;
-            }
-            p { line-height: 1.6; margin: 10px 0; color: #a3a3a3; }
-            a { color: #7c7c7c; text-decoration: none; transition: color 0.2s; }
-            a:hover { color: #ffffff; }
+            :root {
+                --bg-deep: #050810;
+                --bg-primary: #0a0f1a;
+                --bg-card: #0d1424;
+                --bg-elevated: #111b2e;
+                --bg-hover: #162033;
 
-            .scraper {
-                background: #0a0a0a;
-                border: 1px solid #1f1f1f;
-                margin: 8px 0;
-                border-radius: 6px;
-                transition: all 0.2s ease;
+                --border-subtle: rgba(255,255,255,0.06);
+                --border-default: rgba(255,255,255,0.1);
+                --border-hover: rgba(255,255,255,0.15);
+
+                --text-primary: #f0f4fc;
+                --text-secondary: #8892a6;
+                --text-muted: #5a6478;
+
+                --accent-cyan: #00e5ff;
+                --accent-cyan-glow: rgba(0,229,255,0.15);
+                --accent-green: #00ff88;
+                --accent-green-glow: rgba(0,255,136,0.15);
+                --accent-amber: #ffb800;
+                --accent-amber-glow: rgba(255,184,0,0.15);
+                --accent-red: #ff3366;
+                --accent-red-glow: rgba(255,51,102,0.15);
+                --accent-purple: #a855f7;
+                --accent-purple-glow: rgba(168,85,247,0.15);
+
+                --font-display: 'Syne', sans-serif;
+                --font-body: 'Outfit', sans-serif;
+                --font-mono: 'Fira Code', monospace;
+
+                --radius-sm: 6px;
+                --radius-md: 10px;
+                --radius-lg: 16px;
+
+                --shadow-glow: 0 0 40px rgba(0,229,255,0.1);
+            }
+
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+
+            body {
+                font-family: var(--font-body);
+                background: var(--bg-deep);
+                color: var(--text-primary);
+                min-height: 100vh;
+                line-height: 1.6;
+            }
+
+            /* Background grid pattern */
+            body::before {
+                content: '';
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-image:
+                    linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+                background-size: 50px 50px;
+                pointer-events: none;
+                z-index: 0;
+            }
+
+            .dashboard-container {
+                position: relative;
+                z-index: 1;
+                max-width: 1600px;
+                margin: 0 auto;
+                padding: 40px 48px;
+            }
+
+            /* Header Section */
+            .header {
+                margin-bottom: 48px;
+            }
+
+            .header-top {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 24px;
+                margin-bottom: 32px;
+            }
+
+            .header-brand {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+            }
+
+            .logo-mark {
+                width: 56px;
+                height: 56px;
+                background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+                border-radius: var(--radius-md);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-family: var(--font-display);
+                font-size: 24px;
+                font-weight: 800;
+                color: var(--bg-deep);
+                box-shadow: 0 0 30px var(--accent-cyan-glow);
+            }
+
+            .header-title {
+                font-family: var(--font-display);
+                font-size: 2.4rem;
+                font-weight: 800;
+                letter-spacing: -1px;
+                background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-cyan) 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+
+            .header-subtitle {
+                font-size: 0.95rem;
+                color: var(--text-muted);
+                margin-top: 4px;
+            }
+
+            .header-features {
+                display: flex;
+                gap: 20px;
+                flex-wrap: wrap;
+            }
+
+            .feature-tag {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 14px;
+                background: var(--bg-card);
+                border: 1px solid var(--border-subtle);
+                border-radius: 100px;
+                font-size: 0.8rem;
+                color: var(--text-secondary);
+            }
+
+            .feature-tag .dot {
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: var(--accent-green);
+            }
+
+            /* Health Status Cards */
+            .health-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                gap: 16px;
+                margin-bottom: 40px;
+            }
+
+            .health-card {
+                background: var(--bg-card);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-md);
+                padding: 20px;
+                position: relative;
                 overflow: hidden;
             }
+
+            .health-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 3px;
+                background: linear-gradient(90deg, var(--accent-cyan), transparent);
+            }
+
+            .health-card.success::before { background: linear-gradient(90deg, var(--accent-green), transparent); }
+            .health-card.warning::before { background: linear-gradient(90deg, var(--accent-amber), transparent); }
+            .health-card.error::before { background: linear-gradient(90deg, var(--accent-red), transparent); }
+
+            .health-label {
+                font-size: 0.75rem;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: var(--text-muted);
+                margin-bottom: 8px;
+            }
+
+            .health-value {
+                font-family: var(--font-mono);
+                font-size: 1.8rem;
+                font-weight: 600;
+                color: var(--text-primary);
+            }
+
+            .health-value.accent-cyan { color: var(--accent-cyan); }
+            .health-value.accent-green { color: var(--accent-green); }
+            .health-value.accent-red { color: var(--accent-red); }
+
+            .health-status-indicator {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-top: 8px;
+                font-size: 0.85rem;
+            }
+
+            .status-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: var(--accent-green);
+                box-shadow: 0 0 10px var(--accent-green-glow);
+                animation: pulse 2s infinite;
+            }
+
+            .status-dot.offline { background: var(--accent-red); box-shadow: 0 0 10px var(--accent-red-glow); animation: none; }
+
+            @keyframes pulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.7; transform: scale(1.1); }
+            }
+
+            /* Section Titles */
+            .section-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 20px;
+                flex-wrap: wrap;
+                gap: 16px;
+            }
+
+            .section-title {
+                font-family: var(--font-display);
+                font-size: 1.5rem;
+                font-weight: 700;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+
+            .section-title .count {
+                font-family: var(--font-mono);
+                font-size: 0.9rem;
+                padding: 4px 12px;
+                background: var(--bg-elevated);
+                border-radius: 100px;
+                color: var(--accent-cyan);
+            }
+
+            .section-stats {
+                display: flex;
+                align-items: center;
+                gap: 24px;
+            }
+
+            .stat-item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .stat-value {
+                font-family: var(--font-mono);
+                font-size: 1.1rem;
+                font-weight: 600;
+            }
+
+            .stat-value.green { color: var(--accent-green); }
+            .stat-value.blue { color: var(--accent-cyan); }
+
+            .stat-label {
+                font-size: 0.85rem;
+                color: var(--text-muted);
+            }
+
+            .section-actions {
+                display: flex;
+                gap: 8px;
+            }
+
+            /* Scraper Cards */
+            .scraper {
+                background: var(--bg-card);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-lg);
+                margin-bottom: 12px;
+                overflow: hidden;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+
             .scraper:hover {
-                border-color: #2a2a2a;
+                border-color: var(--border-hover);
+                transform: translateY(-2px);
+                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
             }
-            .running {
-                border-left: 3px solid #22c55e;
+
+            .scraper.running {
+                border-left: 4px solid var(--accent-green);
             }
-            .stopped {
-                border-left: 3px solid #525252;
+
+            .scraper.stopped {
+                border-left: 4px solid var(--text-muted);
             }
-            .error {
-                border-left: 3px solid #ef4444;
-            }
-            .failed {
-                border-left: 3px solid #dc2626;
+
+            .scraper.error, .scraper.failed {
+                border-left: 4px solid var(--accent-red);
             }
 
             .scraper-header {
-                padding: 16px 20px;
+                padding: 20px 24px;
                 cursor: pointer;
                 display: flex;
                 justify-content: space-between;
@@ -898,129 +1157,283 @@ async def dashboard():
                 user-select: none;
                 transition: background 0.2s;
             }
+
             .scraper-header:hover {
-                background: #0d0d0d;
+                background: var(--bg-hover);
             }
+
             .scraper-title {
                 display: flex;
                 align-items: center;
-                gap: 12px;
+                gap: 14px;
                 flex: 1;
             }
+
             .scraper-title h3 {
                 margin: 0;
-                font-size: 1.1em;
-                color: #e5e5e5;
+                font-family: var(--font-body);
+                font-size: 1.15rem;
+                font-weight: 600;
+                color: var(--text-primary);
             }
+
             .scraper-summary {
                 display: flex;
                 align-items: center;
-                gap: 16px;
-                font-size: 0.9em;
-                color: #737373;
+                gap: 20px;
+                font-size: 0.9rem;
+                color: var(--text-secondary);
                 flex-wrap: wrap;
             }
+
             .scraper-stat {
                 display: flex;
                 align-items: center;
-                gap: 4px;
+                gap: 6px;
+                font-family: var(--font-mono);
             }
+
+            .scraper-stat .value {
+                color: var(--accent-green);
+                font-weight: 500;
+            }
+
+            .scraper-stat .value.blue {
+                color: var(--accent-cyan);
+            }
+
             .expand-icon {
-                font-size: 1.2em;
-                transition: transform 0.2s;
-                color: #737373;
+                width: 32px;
+                height: 32px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 8px;
+                background: var(--bg-elevated);
+                color: var(--text-muted);
+                transition: all 0.3s;
+                font-size: 0.8rem;
             }
+
             .expanded .expand-icon {
                 transform: rotate(180deg);
+                background: var(--accent-cyan-glow);
+                color: var(--accent-cyan);
             }
 
             .scraper-details {
                 max-height: 0;
                 overflow: hidden;
-                transition: max-height 0.3s ease-out;
-                border-top: 1px solid #1f1f1f;
-            }
-            .scraper-details.show {
-                max-height: 2000px;
-                transition: max-height 0.5s ease-in;
-            }
-            .scraper-content {
-                padding: 20px;
+                transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+                border-top: 1px solid transparent;
             }
 
+            .scraper-details.show {
+                max-height: 2000px;
+                border-top-color: var(--border-subtle);
+            }
+
+            .scraper-content {
+                padding: 24px;
+                background: rgba(0,0,0,0.2);
+            }
+
+            .scraper-meta-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 16px;
+                margin-bottom: 20px;
+            }
+
+            .meta-item {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .meta-label {
+                font-size: 0.75rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                color: var(--text-muted);
+            }
+
+            .meta-value {
+                font-family: var(--font-mono);
+                font-size: 0.9rem;
+                color: var(--text-primary);
+            }
+
+            /* Subreddit Grid in Details */
+            .subreddit-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                gap: 8px;
+                margin: 16px 0;
+            }
+
+            .subreddit-chip {
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-sm);
+                padding: 10px 14px;
+                font-size: 0.85rem;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            .subreddit-chip .name {
+                color: var(--accent-purple);
+                font-weight: 500;
+            }
+
+            .subreddit-chip .stats {
+                font-family: var(--font-mono);
+                font-size: 0.75rem;
+                color: var(--text-muted);
+            }
+
+            /* Database Stats Box */
+            .db-stats-box {
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-md);
+                padding: 16px 20px;
+                margin: 16px 0;
+            }
+
+            .db-stats-title {
+                font-size: 0.8rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                color: var(--text-muted);
+                margin-bottom: 12px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .db-stats-row {
+                display: flex;
+                gap: 32px;
+                flex-wrap: wrap;
+            }
+
+            .db-stat {
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+            }
+
+            .db-stat .num {
+                font-family: var(--font-mono);
+                font-size: 1.2rem;
+                font-weight: 600;
+            }
+
+            .db-stat .num.green { color: var(--accent-green); }
+            .db-stat .num.blue { color: var(--accent-cyan); }
+
+            .db-stat .label {
+                font-size: 0.85rem;
+                color: var(--text-muted);
+            }
+
+            .db-stats-meta {
+                font-size: 0.8rem;
+                color: var(--text-muted);
+                margin-top: 12px;
+                line-height: 1.6;
+            }
+
+            /* Buttons */
             button {
+                font-family: var(--font-body);
                 padding: 10px 18px;
                 margin: 4px 4px 4px 0;
-                border: 1px solid #2a2a2a;
-                border-radius: 4px;
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-sm);
                 cursor: pointer;
                 transition: all 0.2s ease;
                 font-weight: 500;
-                font-size: 13px;
-                background: #0a0a0a;
-                color: #e5e5e5;
+                font-size: 0.85rem;
+                background: var(--bg-elevated);
+                color: var(--text-primary);
             }
+
             button:hover {
-                background: #1a1a1a;
-                border-color: #3a3a3a;
+                background: var(--bg-hover);
+                border-color: var(--border-hover);
+                transform: translateY(-1px);
             }
-            button:active { transform: scale(0.98); }
-            button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+            button:active { transform: translateY(0) scale(0.98); }
+            button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+            .btn-primary {
+                background: linear-gradient(135deg, var(--accent-cyan), #00b8d4);
+                border: none;
+                color: var(--bg-deep);
+                font-weight: 600;
+                box-shadow: 0 4px 20px var(--accent-cyan-glow);
+            }
+
+            .btn-primary:hover {
+                box-shadow: 0 6px 30px var(--accent-cyan-glow);
+                transform: translateY(-2px);
+            }
 
             .start {
-                background: #16a34a;
-                border-color: #16a34a;
-                color: #ffffff;
+                background: linear-gradient(135deg, var(--accent-green), #00cc6a);
+                border: none;
+                color: var(--bg-deep);
+                font-weight: 600;
+                box-shadow: 0 4px 20px var(--accent-green-glow);
             }
+
             .start:hover {
-                background: #15803d;
-                border-color: #15803d;
+                box-shadow: 0 6px 30px var(--accent-green-glow);
             }
 
             .stop {
-                background: #dc2626;
-                border-color: #dc2626;
-                color: #ffffff;
+                background: var(--accent-red);
+                border-color: var(--accent-red);
+                color: white;
             }
+
             .stop:hover {
-                background: #b91c1c;
-                border-color: #b91c1c;
+                box-shadow: 0 4px 20px var(--accent-red-glow);
             }
 
             .restart {
-                background: #ea580c;
-                border-color: #ea580c;
-                color: #ffffff;
+                background: var(--accent-amber);
+                border-color: var(--accent-amber);
+                color: var(--bg-deep);
             }
+
             .restart:hover {
-                background: #c2410c;
-                border-color: #c2410c;
+                box-shadow: 0 4px 20px var(--accent-amber-glow);
             }
 
             .delete {
-                background: #7c2d12;
-                border-color: #7c2d12;
-                color: #fca5a5;
+                background: transparent;
+                border-color: var(--accent-red);
+                color: var(--accent-red);
             }
+
             .delete:hover {
-                background: #991b1b;
-                border-color: #991b1b;
-                color: #ffffff;
+                background: var(--accent-red-glow);
             }
 
             .stats {
-                background: #0a0a0a;
-                border-color: #2a2a2a;
-                color: #e5e5e5;
-            }
-            .stats:hover {
-                background: #1a1a1a;
-                border-color: #3a3a3a;
+                background: var(--bg-elevated);
+                border-color: var(--border-default);
             }
 
             .loading {
-                background: #171717 !important;
-                border-color: #2a2a2a !important;
+                background: var(--bg-hover) !important;
+                border-color: var(--border-subtle) !important;
                 cursor: wait !important;
             }
 
@@ -1028,148 +1441,183 @@ async def dashboard():
                 display: inline-block;
                 width: 14px;
                 height: 14px;
-                border: 2px solid #404040;
+                border: 2px solid var(--border-default);
                 border-radius: 50%;
-                border-top-color: #e5e5e5;
+                border-top-color: var(--accent-cyan);
                 animation: spin 0.8s linear infinite;
                 margin-right: 8px;
                 vertical-align: middle;
             }
+
             @keyframes spin { to { transform: rotate(360deg); } }
 
+            /* Form Elements */
             input, select, textarea {
-                padding: 10px 14px;
+                font-family: var(--font-body);
+                padding: 12px 16px;
                 margin: 5px 8px 5px 0;
-                border: 1px solid #333;
-                border-radius: 6px;
-                background: #0d0d0d;
-                color: #e5e5e5;
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-sm);
+                background: var(--bg-elevated);
+                color: var(--text-primary);
                 transition: all 0.2s ease;
-                font-size: 14px;
+                font-size: 0.9rem;
             }
+
             input:focus, select:focus, textarea:focus {
                 outline: none;
-                border-color: #22c55e;
-                background: #111;
-                box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15);
-            }
-            input::placeholder, textarea::placeholder { color: #555; }
-
-            input[type="text"], input[type="password"] {
-                min-width: 220px;
-            }
-            input[type="number"] {
-                width: 100px;
-            }
-            select {
-                min-width: 180px;
-                cursor: pointer;
+                border-color: var(--accent-cyan);
+                background: var(--bg-hover);
+                box-shadow: 0 0 0 3px var(--accent-cyan-glow);
             }
 
+            input::placeholder, textarea::placeholder { color: var(--text-muted); }
+
+            input[type="text"], input[type="password"] { min-width: 220px; }
+            input[type="number"] { width: 120px; font-family: var(--font-mono); }
+            select { min-width: 180px; cursor: pointer; }
+
+            /* Form Sections */
             .form-section {
-                background: linear-gradient(135deg, #0a0a0a 0%, #111 100%);
-                padding: 24px;
-                border-radius: 10px;
+                background: var(--bg-card);
+                border: 1px solid var(--border-subtle);
+                padding: 28px;
+                border-radius: var(--radius-lg);
                 margin: 20px 0;
-                border: 1px solid #222;
+                position: relative;
             }
+
             .form-section h3 {
-                margin: 0 0 16px 0;
-                color: #fff;
-                font-size: 16px;
+                margin: 0 0 20px 0;
+                font-family: var(--font-display);
+                font-size: 1.1rem;
+                font-weight: 700;
+                color: var(--text-primary);
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
             }
+
             .form-section h3::before {
                 content: '';
                 width: 4px;
-                height: 18px;
-                background: #22c55e;
+                height: 20px;
+                background: var(--accent-cyan);
                 border-radius: 2px;
             }
 
             .credentials-section {
-                background: #0a0a0a;
-                padding: 20px;
-                border-radius: 8px;
-                margin: 15px 0;
-                border: 1px solid #222;
+                background: var(--bg-elevated);
+                padding: 24px;
+                border-radius: var(--radius-md);
+                margin: 16px 0;
+                border: 1px solid var(--border-subtle);
             }
 
             .form-row {
-                margin: 14px 0;
+                margin: 16px 0;
                 display: flex;
                 align-items: center;
                 flex-wrap: wrap;
-                gap: 8px;
+                gap: 12px;
             }
+
             .form-row label {
                 display: inline-block;
                 min-width: 130px;
-                color: #a3a3a3;
+                color: var(--text-secondary);
                 font-weight: 500;
-                font-size: 13px;
+                font-size: 0.85rem;
                 text-transform: uppercase;
-                letter-spacing: 0.3px;
+                letter-spacing: 0.5px;
             }
-            .form-row small { color: #666; margin-left: 4px; font-size: 12px; }
+
+            .form-row small { color: var(--text-muted); margin-left: 8px; font-size: 0.8rem; }
 
             .form-grid {
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 16px;
+                gap: 20px;
             }
+
             .form-grid .form-row {
                 flex-direction: column;
                 align-items: flex-start;
                 margin: 0;
             }
+
             .form-grid .form-row label {
-                margin-bottom: 6px;
+                margin-bottom: 8px;
             }
+
             .form-grid .form-row input,
             .form-grid .form-row select {
                 width: 100%;
                 margin: 0;
             }
 
+            /* Badges */
             .mode-badge {
-                display: inline-block;
-                padding: 3px 10px;
-                border-radius: 12px;
-                font-size: 11px;
+                display: inline-flex;
+                align-items: center;
+                padding: 5px 14px;
+                border-radius: 100px;
+                font-family: var(--font-mono);
+                font-size: 0.75rem;
+                font-weight: 500;
+                margin-left: 10px;
+            }
+
+            .mode-badge.single {
+                background: rgba(0,229,255,0.15);
+                color: var(--accent-cyan);
+                border: 1px solid rgba(0,229,255,0.3);
+            }
+
+            .mode-badge.multi {
+                background: rgba(168,85,247,0.15);
+                color: var(--accent-purple);
+                border: 1px solid rgba(168,85,247,0.3);
+            }
+
+            .status-badge {
+                padding: 5px 12px;
+                border-radius: var(--radius-sm);
+                font-family: var(--font-mono);
+                font-size: 0.7rem;
                 font-weight: 600;
                 text-transform: uppercase;
-                margin-left: 8px;
-            }
-            .mode-badge.single { background: #1e3a5f; color: #60a5fa; }
-            .mode-badge.multi { background: #3f2c5f; color: #c084fc; }
-
-            .collapsible {
-                cursor: pointer;
-                background: #0a0a0a;
-                padding: 12px;
-                border: 1px solid #2a2a2a;
-                text-align: left;
-                width: 100%;
-                border-radius: 4px;
-                color: #e5e5e5;
-                transition: all 0.2s ease;
-            }
-            .collapsible:hover { background: #171717; }
-
-            .content {
-                display: none;
-                padding: 15px;
-                background: #0a0a0a;
-                border: 1px solid #1f1f1f;
-                border-radius: 4px;
-                margin-top: 10px;
+                letter-spacing: 0.5px;
             }
 
-            .toggle { position: relative; display: inline-block; width: 50px; height: 28px; }
+            .badge-running {
+                background: var(--accent-green-glow);
+                color: var(--accent-green);
+                border: 1px solid var(--accent-green);
+                animation: pulse-badge 2s infinite;
+            }
+
+            @keyframes pulse-badge {
+                0%, 100% { box-shadow: 0 0 0 0 var(--accent-green-glow); }
+                50% { box-shadow: 0 0 0 6px transparent; }
+            }
+
+            .badge-stopped {
+                background: rgba(90,100,120,0.2);
+                color: var(--text-muted);
+                border: 1px solid var(--text-muted);
+            }
+
+            .badge-error, .badge-failed {
+                background: var(--accent-red-glow);
+                color: var(--accent-red);
+                border: 1px solid var(--accent-red);
+            }
+
+            /* Toggle Switch */
+            .toggle { position: relative; display: inline-block; width: 52px; height: 28px; }
             .toggle input { opacity: 0; width: 0; height: 0; }
+
             .slider {
                 position: absolute;
                 cursor: pointer;
@@ -1177,54 +1625,77 @@ async def dashboard():
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background-color: #1f1f1f;
+                background-color: var(--bg-elevated);
+                border: 1px solid var(--border-default);
                 transition: .3s;
                 border-radius: 28px;
             }
+
             .slider:before {
                 position: absolute;
                 content: "";
                 height: 20px;
                 width: 20px;
-                left: 4px;
-                bottom: 4px;
-                background-color: #737373;
+                left: 3px;
+                bottom: 3px;
+                background-color: var(--text-muted);
                 transition: .3s;
                 border-radius: 50%;
             }
+
             input:checked + .slider {
-                background-color: #16a34a;
+                background-color: var(--accent-green);
+                border-color: var(--accent-green);
             }
+
             input:checked + .slider:before {
-                transform: translateX(22px);
-                background-color: #ffffff;
+                transform: translateX(24px);
+                background-color: white;
             }
 
-            .status-badge {
-                padding: 4px 10px;
-                border-radius: 3px;
-                font-size: 11px;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
-            .badge-running {
-                background: #166534;
-                color: #86efac;
-            }
-            .badge-stopped {
-                background: #1f1f1f;
-                color: #a3a3a3;
-            }
-            .badge-error {
-                background: #7f1d1d;
-                color: #fca5a5;
-            }
-            .badge-failed {
-                background: #991b1b;
-                color: #fecaca;
+            /* Sorting Options */
+            .sorting-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                gap: 12px;
+                margin-top: 8px;
             }
 
+            .sorting-option {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 12px 16px;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-sm);
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+
+            .sorting-option:hover {
+                border-color: var(--accent-cyan);
+                background: var(--bg-hover);
+            }
+
+            .sorting-option input {
+                width: 18px;
+                height: 18px;
+                margin: 0;
+                accent-color: var(--accent-cyan);
+            }
+
+            .sorting-option .sort-name {
+                font-weight: 500;
+                color: var(--text-primary);
+            }
+
+            .sorting-option .sort-desc {
+                font-size: 0.75rem;
+                color: var(--text-muted);
+            }
+
+            /* Loading Overlay */
             .loading-overlay {
                 display: none;
                 position: fixed;
@@ -1232,26 +1703,131 @@ async def dashboard():
                 left: 0;
                 width: 100%;
                 height: 100%;
-                background-color: rgba(0, 0, 0, 0.85);
+                background-color: rgba(5,8,16,0.9);
+                backdrop-filter: blur(8px);
                 z-index: 1000;
             }
+
             .loading-message {
                 position: absolute;
                 top: 50%;
                 left: 50%;
                 transform: translate(-50%, -50%);
-                background: #0a0a0a;
-                padding: 30px 40px;
-                border-radius: 6px;
+                background: var(--bg-card);
+                padding: 40px 50px;
+                border-radius: var(--radius-lg);
                 text-align: center;
-                border: 1px solid #2a2a2a;
-                color: #e5e5e5;
+                border: 1px solid var(--border-subtle);
+                box-shadow: var(--shadow-glow);
             }
 
-            #health-status > div {
-                background: #0a0a0a !important;
-                border: 1px solid #1f1f1f !important;
-                border-radius: 6px;
+            .loading-message .spinner {
+                width: 24px;
+                height: 24px;
+                border-width: 3px;
+            }
+
+            /* Modal */
+            .modal-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(5,8,16,0.9);
+                backdrop-filter: blur(8px);
+                z-index: 1001;
+            }
+
+            .modal-content {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: var(--bg-card);
+                padding: 32px;
+                border-radius: var(--radius-lg);
+                width: 90%;
+                max-width: 680px;
+                max-height: 85%;
+                overflow-y: auto;
+                border: 1px solid var(--border-subtle);
+                box-shadow: var(--shadow-glow);
+            }
+
+            .modal-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 28px;
+                padding-bottom: 20px;
+                border-bottom: 1px solid var(--border-subtle);
+            }
+
+            .modal-header h2 {
+                font-family: var(--font-display);
+                font-size: 1.4rem;
+                font-weight: 700;
+            }
+
+            .modal-close {
+                background: none;
+                border: none;
+                color: var(--text-muted);
+                font-size: 28px;
+                cursor: pointer;
+                padding: 0;
+                line-height: 1;
+                transition: color 0.2s;
+            }
+
+            .modal-close:hover {
+                color: var(--text-primary);
+            }
+
+            /* Empty State */
+            .empty-state {
+                text-align: center;
+                padding: 60px 20px;
+                color: var(--text-muted);
+            }
+
+            .empty-state-icon {
+                font-size: 48px;
+                margin-bottom: 16px;
+                opacity: 0.5;
+            }
+
+            .empty-state-text {
+                font-size: 1.1rem;
+                margin-bottom: 8px;
+            }
+
+            .empty-state-hint {
+                font-size: 0.9rem;
+                color: var(--text-muted);
+            }
+
+            /* Links */
+            a { color: var(--accent-cyan); text-decoration: none; transition: all 0.2s; }
+            a:hover { color: var(--text-primary); text-decoration: underline; }
+
+            /* Utility classes */
+            .text-muted { color: var(--text-muted); }
+
+            /* Scrollbar */
+            ::-webkit-scrollbar { width: 8px; height: 8px; }
+            ::-webkit-scrollbar-track { background: var(--bg-primary); }
+            ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
+            ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+            /* Responsive */
+            @media (max-width: 768px) {
+                .dashboard-container { padding: 20px; }
+                .header-top { flex-direction: column; }
+                .header-title { font-size: 1.8rem; }
+                .section-header { flex-direction: column; align-items: flex-start; }
             }
         </style>
     </head>
@@ -1262,70 +1838,92 @@ async def dashboard():
                 <span id="loadingText">Processing...</span>
             </div>
         </div>
-        
-        <h1>Reddit Scraper Management Dashboard</h1>
-        <p><strong>Features:</strong> Persistent storage, unique credentials per scraper, automatic restart on failure</p>
-        
-        <div id="health-status"></div>
-        
-        <div id="scrapers"></div>
-        
-        <h2>Start New Scraper</h2>
 
-        <!-- Target Selection -->
-        <div class="form-section">
-            <h3>Target Selection</h3>
-            <div class="form-row">
-                <label>Mode:</label>
-                <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 240px;">
-                    <option value="single">Single Subreddit</option>
-                    <option value="multi">Multi-Subreddit (up to 30)</option>
-                </select>
-                <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
-            </div>
-
-            <div id="single-subreddit-input">
-                <div class="form-row">
-                    <label>Subreddit:</label>
-                    <input type="text" id="subreddit" placeholder="e.g. wallstreetbets" style="min-width: 280px;" />
-                    <select id="preset" style="min-width: 260px;">
-                        <option value="custom">Custom Settings</option>
-                        <option value="high">High Activity (wsb, stocks)</option>
-                        <option value="medium">Medium Activity (investing)</option>
-                        <option value="low">Low Activity (niche subs)</option>
-                    </select>
-                </div>
-            </div>
-
-            <div id="multi-subreddit-input" style="display: none;">
-                <div class="form-row" style="align-items: flex-start;">
-                    <label style="padding-top: 10px;">Subreddits:</label>
-                    <div style="flex: 1; max-width: 500px;">
-                        <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket, pennystocks, daytrading, thetagang, valueinvesting, dividends"
-                            style="width: 100%; height: 80px; resize: vertical;"></textarea>
-                        <small style="display: block; margin-top: 6px; color: #666;">Comma-separated list. Max 10 subreddits per container. First subreddit is used for naming.</small>
+        <div class="dashboard-container">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-top">
+                    <div class="header-brand">
+                        <div class="logo-mark">R</div>
+                        <div>
+                            <h1 class="header-title">Reddit Scraper</h1>
+                            <p class="header-subtitle">Mission Control Dashboard</p>
+                        </div>
+                    </div>
+                    <div class="header-features">
+                        <div class="feature-tag"><span class="dot"></span> Persistent Storage</div>
+                        <div class="feature-tag"><span class="dot"></span> Auto-Restart</div>
+                        <div class="feature-tag"><span class="dot"></span> Multi-Account</div>
                     </div>
                 </div>
-            </div>
-        </div>
+            </header>
 
-        <!-- Scraper Configuration -->
-        <div class="form-section">
-            <h3>Configuration</h3>
-            <div class="form-row">
-                <label>Scraper Type:</label>
-                <select id="scraper_type">
-                    <option value="posts">Posts Scraper</option>
-                    <option value="comments">Comments Scraper</option>
-                </select>
-            </div>
+            <!-- Health Status -->
+            <div id="health-status"></div>
 
-            <div class="form-grid" style="margin-top: 16px;">
-                <div class="form-row">
-                    <label>Posts Limit</label>
-                    <input type="number" id="posts_limit" value="1000" />
+            <!-- Scrapers List -->
+            <div id="scrapers"></div>
+
+            <!-- Start New Scraper -->
+            <section style="margin-top: 48px;">
+                <div class="section-header">
+                    <h2 class="section-title">Launch New Scraper</h2>
                 </div>
-                <div class="form-row">
+
+                <!-- Target Selection -->
+                <div class="form-section">
+                    <h3>Target Selection</h3>
+                    <div class="form-row">
+                        <label>Mode:</label>
+                        <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 260px;">
+                            <option value="single">Single Subreddit</option>
+                            <option value="multi">Multi-Subreddit (up to 30)</option>
+                        </select>
+                        <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
+                    </div>
+
+                    <div id="single-subreddit-input">
+                        <div class="form-row">
+                            <label>Subreddit:</label>
+                            <input type="text" id="subreddit" placeholder="e.g. wallstreetbets" style="min-width: 300px;" />
+                            <select id="preset" style="min-width: 280px;">
+                                <option value="custom">Custom Settings</option>
+                                <option value="high">High Activity (wsb, stocks)</option>
+                                <option value="medium">Medium Activity (investing)</option>
+                                <option value="low">Low Activity (niche subs)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="multi-subreddit-input" style="display: none;">
+                        <div class="form-row" style="align-items: flex-start;">
+                            <label style="padding-top: 12px;">Subreddits:</label>
+                            <div style="flex: 1; max-width: 550px;">
+                                <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket, pennystocks, daytrading, thetagang, valueinvesting, dividends"
+                                    style="width: 100%; height: 90px; resize: vertical;"></textarea>
+                                <small style="display: block; margin-top: 8px;">Comma-separated list. Max 30 subreddits per container.</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scraper Configuration -->
+                <div class="form-section">
+                    <h3>Configuration</h3>
+                    <div class="form-row">
+                        <label>Scraper Type:</label>
+                        <select id="scraper_type">
+                            <option value="posts">Posts Scraper</option>
+                            <option value="comments">Comments Scraper</option>
+                        </select>
+                    </div>
+
+                    <div class="form-grid" style="margin-top: 20px;">
+                        <div class="form-row">
+                            <label>Posts Limit</label>
+                            <input type="number" id="posts_limit" value="1000" />
+                        </div>
+                        <div class="form-row">
                     <label>Interval (sec)</label>
                     <input type="number" id="interval" value="60" />
                 </div>
@@ -1343,32 +1941,42 @@ async def dashboard():
             </div>
 
             <div class="form-row" style="margin-top: 20px; align-items: flex-start;">
-                <label style="padding-top: 4px;">Sorting:</label>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; flex: 1;">
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
-                        <input type="checkbox" name="sorting" value="new" checked style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
-                        <span>new</span>
-                        <small style="color: #555; margin-left: 6px;">100% coverage</small>
+                <label style="padding-top: 8px;">Sorting:</label>
+                <div class="sorting-grid">
+                    <label class="sorting-option">
+                        <input type="checkbox" name="sorting" value="new" checked>
+                        <div>
+                            <span class="sort-name">new</span>
+                            <span class="sort-desc">100% coverage</span>
+                        </div>
                     </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
-                        <input type="checkbox" name="sorting" value="hot" checked style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
-                        <span>hot</span>
-                        <small style="color: #555; margin-left: 6px;">trending</small>
+                    <label class="sorting-option">
+                        <input type="checkbox" name="sorting" value="hot" checked>
+                        <div>
+                            <span class="sort-name">hot</span>
+                            <span class="sort-desc">trending</span>
+                        </div>
                     </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
-                        <input type="checkbox" name="sorting" value="rising" checked style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
-                        <span>rising</span>
-                        <small style="color: #555; margin-left: 6px;">early detection</small>
+                    <label class="sorting-option">
+                        <input type="checkbox" name="sorting" value="rising" checked>
+                        <div>
+                            <span class="sort-name">rising</span>
+                            <span class="sort-desc">early detection</span>
+                        </div>
                     </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
-                        <input type="checkbox" name="sorting" value="top" style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
-                        <span>top</span>
-                        <small style="color: #555; margin-left: 6px;">daily best</small>
+                    <label class="sorting-option">
+                        <input type="checkbox" name="sorting" value="top">
+                        <div>
+                            <span class="sort-name">top</span>
+                            <span class="sort-desc">daily best</span>
+                        </div>
                     </label>
-                    <label style="color: #e5e5e5; font-weight: normal; cursor: pointer; display: flex; align-items: center; min-width: auto; text-transform: none;">
-                        <input type="checkbox" name="sorting" value="controversial" style="cursor: pointer; margin-right: 8px; width: 16px; height: 16px;">
-                        <span>controversial</span>
-                        <small style="color: #555; margin-left: 6px;">divisive</small>
+                    <label class="sorting-option">
+                        <input type="checkbox" name="sorting" value="controversial">
+                        <div>
+                            <span class="sort-name">controversial</span>
+                            <span class="sort-desc">divisive</span>
+                        </div>
                     </label>
                 </div>
             </div>
@@ -1427,7 +2035,7 @@ async def dashboard():
                         <input type="text" id="save_account_as" placeholder="Account name (optional)" />
                         <small>Save for future use</small>
                     </div>
-                    <p style="margin: 12px 0 0 0;"><small style="color: #666;">Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank" style="color: #22c55e;">reddit.com/prefs/apps</a></small></p>
+                    <p style="margin: 12px 0 0 0;"><small style="color: var(--text-muted);">Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">reddit.com/prefs/apps</a></small></p>
                 </div>
             </div>
         </div>
@@ -1437,11 +2045,11 @@ async def dashboard():
         </div>
         
         <!-- Account Manager Modal -->
-        <div id="accountManagerModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); z-index: 1001;">
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #111; padding: 30px; border-radius: 12px; width: 90%; max-width: 650px; max-height: 85%; overflow-y: auto; border: 1px solid #333;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-                    <h2 style="margin: 0; color: #fff;">Account Manager</h2>
-                    <button onclick="hideAccountManager()" style="background: none; border: none; color: #666; font-size: 24px; cursor: pointer; padding: 0; line-height: 1;">&times;</button>
+        <div id="accountManagerModal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Account Manager</h2>
+                    <button onclick="hideAccountManager()" class="modal-close">&times;</button>
                 </div>
 
                 <div class="form-section" style="margin-top: 0;">
@@ -1482,7 +2090,7 @@ async def dashboard():
                     <div id="savedAccountsList" style="min-height: 60px;"></div>
                 </div>
 
-                <div style="text-align: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #222;">
+                <div style="text-align: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-subtle);">
                     <button onclick="hideAccountManager()" class="stats" style="padding: 10px 30px;">Close</button>
                 </div>
             </div>
@@ -1587,18 +2195,70 @@ async def dashboard():
                     const response = await fetch('/health');
                     const health = await response.json();
                     const healthDiv = document.getElementById('health-status');
+
+                    const dbStatus = health.database_connected;
+                    const dockerStatus = health.docker_available;
+
                     healthDiv.innerHTML = `
-                        <div style="padding: 15px; border-radius: 6px; margin: 10px 0;">
-                            <h3>System Health</h3>
-                            <p><strong>Total Scrapers:</strong> ${health.total_scrapers} |
-                               <strong>Running:</strong> ${health.running_containers} |
-                               <strong>Failed:</strong> ${health.failed_scrapers}</p>
-                            <p><strong>Database:</strong> ${health.database_connected ? 'Connected' : 'Disconnected'} |
-                               <strong>Docker:</strong> ${health.docker_available ? 'Available' : 'Not Available'}</p>
+                        <div class="health-grid">
+                            <div class="health-card ${dbStatus ? 'success' : 'error'}">
+                                <div class="health-label">Database</div>
+                                <div class="health-value ${dbStatus ? 'accent-green' : 'accent-red'}">${dbStatus ? 'Online' : 'Offline'}</div>
+                                <div class="health-status-indicator">
+                                    <span class="status-dot ${dbStatus ? '' : 'offline'}"></span>
+                                    <span>${dbStatus ? 'MongoDB Connected' : 'Connection Failed'}</span>
+                                </div>
+                            </div>
+
+                            <div class="health-card ${dockerStatus ? 'success' : 'error'}">
+                                <div class="health-label">Docker</div>
+                                <div class="health-value ${dockerStatus ? 'accent-green' : 'accent-red'}">${dockerStatus ? 'Ready' : 'Unavailable'}</div>
+                                <div class="health-status-indicator">
+                                    <span class="status-dot ${dockerStatus ? '' : 'offline'}"></span>
+                                    <span>${dockerStatus ? 'Engine Running' : 'Not Available'}</span>
+                                </div>
+                            </div>
+
+                            <div class="health-card">
+                                <div class="health-label">Total Scrapers</div>
+                                <div class="health-value accent-cyan">${health.total_scrapers || 0}</div>
+                                <div class="health-status-indicator">
+                                    <span>Configured instances</span>
+                                </div>
+                            </div>
+
+                            <div class="health-card success">
+                                <div class="health-label">Running</div>
+                                <div class="health-value accent-green">${health.running_containers || 0}</div>
+                                <div class="health-status-indicator">
+                                    <span class="status-dot"></span>
+                                    <span>Active containers</span>
+                                </div>
+                            </div>
+
+                            <div class="health-card ${health.failed_scrapers > 0 ? 'error' : ''}">
+                                <div class="health-label">Failed</div>
+                                <div class="health-value ${health.failed_scrapers > 0 ? 'accent-red' : ''}">${health.failed_scrapers || 0}</div>
+                                <div class="health-status-indicator">
+                                    <span>${health.failed_scrapers > 0 ? 'Needs attention' : 'All healthy'}</span>
+                                </div>
+                            </div>
                         </div>
                     `;
                 } catch (error) {
                     console.error('Error loading health status:', error);
+                    document.getElementById('health-status').innerHTML = `
+                        <div class="health-grid">
+                            <div class="health-card error">
+                                <div class="health-label">System Status</div>
+                                <div class="health-value accent-red">Error</div>
+                                <div class="health-status-indicator">
+                                    <span class="status-dot offline"></span>
+                                    <span>Failed to load health status</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
                 }
             }
             
@@ -1656,28 +2316,35 @@ async def dashboard():
                     });
 
                     container.innerHTML = `
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
-                            <h2 style="margin: 0;">Active Scrapers (${scraperCount})</h2>
-                            <div style="display: flex; align-items: center; gap: 20px;">
-                                <div style="text-align: right;">
-                                    <span style="color: #22c55e; font-size: 18px; font-weight: 600;">${globalTotalPosts.toLocaleString()}</span>
-                                    <span style="color: #666; font-size: 13px;"> posts</span>
-                                    <span style="color: #444; margin: 0 8px;">|</span>
-                                    <span style="color: #3b82f6; font-size: 18px; font-weight: 600;">${globalTotalComments.toLocaleString()}</span>
-                                    <span style="color: #666; font-size: 13px;"> comments</span>
+                        <div class="section-header">
+                            <h2 class="section-title">Active Scrapers <span class="count">${scraperCount}</span></h2>
+                            <div class="section-stats">
+                                <div class="stat-item">
+                                    <span class="stat-value green">${globalTotalPosts.toLocaleString()}</span>
+                                    <span class="stat-label">posts</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-value blue">${globalTotalComments.toLocaleString()}</span>
+                                    <span class="stat-label">comments</span>
                                 </div>
                                 ${scraperCount > 0 ? `
-                                    <div>
-                                        <button onclick="expandAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Expand All</button>
-                                        <button onclick="collapseAllScrapers()" class="stats" style="padding: 8px 14px; font-size: 12px;">Collapse All</button>
-                                    </div>
+                                <div class="section-actions">
+                                    <button onclick="expandAllScrapers()" class="stats">Expand All</button>
+                                    <button onclick="collapseAllScrapers()" class="stats">Collapse All</button>
+                                </div>
                                 ` : ''}
                             </div>
                         </div>
                     `;
 
                     if (scraperCount === 0) {
-                        container.innerHTML += '<p>No active scrapers. Start one above!</p>';
+                        container.innerHTML += `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">📡</div>
+                                <p class="empty-state-text">No active scrapers</p>
+                                <p class="empty-state-hint">Launch a new scraper using the form below</p>
+                            </div>
+                        `;
                         return;
                     }
                     
@@ -1695,13 +2362,10 @@ async def dashboard():
                         const allSubreddits = info.subreddits || [subreddit];
                         const isMulti = allSubreddits.length > 1;
                         const displayTitle = isMulti
-                            ? `r/${subreddit} <span style="color: #666; font-size: 13px; font-weight: 400;">+${allSubreddits.length - 1} more</span>`
+                            ? `r/${subreddit} <span class="text-muted" style="font-size: 0.85rem; font-weight: 400;">+${allSubreddits.length - 1} more</span>`
                             : `r/${subreddit}`;
-                        const subredditList = isMulti
-                            ? allSubreddits.map(s => `r/${s}`).join(', ')
-                            : null;
                         const multiBadge = isMulti
-                            ? `<span class="mode-badge multi" style="margin-left: 8px;">${allSubreddits.length} subs</span>`
+                            ? `<span class="mode-badge multi">${allSubreddits.length} subs</span>`
                             : '';
 
                         const div = document.createElement('div');
@@ -1715,11 +2379,11 @@ async def dashboard():
                                 </div>
                                 <div class="scraper-summary">
                                     <div class="scraper-stat">
-                                        <span style="color: #22c55e;">📊 ${totalPosts}</span>
+                                        <span class="value">📊 ${totalPosts}</span>
                                         <span>posts</span>
                                     </div>
                                     <div class="scraper-stat">
-                                        <span style="color: #3b82f6;">${totalComments}</span>
+                                        <span class="value blue">${totalComments}</span>
                                         <span>comments</span>
                                     </div>
                                     <div class="scraper-stat">
@@ -1731,49 +2395,90 @@ async def dashboard():
                             <div class="scraper-details">
                                 <div class="scraper-content">
                                     ${isMulti ? `
-                                    <div style="margin-bottom: 12px;">
-                                        <strong>Subreddits (${allSubreddits.length}):</strong>
-                                        <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px;">
+                                    <div class="meta-item" style="margin-bottom: 16px;">
+                                        <span class="meta-label">Subreddits (${allSubreddits.length})</span>
+                                        <div class="subreddit-grid">
                                             ${allSubreddits.map(s => {
                                                 const stats = info.subreddit_stats?.[s] || { posts: 0, comments: 0 };
-                                                return `<div style="background: #1a1a1a; padding: 6px 10px; border-radius: 4px; font-size: 13px;">
-                                                    <span style="color: #a78bfa;">r/${s}</span>
-                                                    <span style="color: #666; margin-left: 6px;">${stats.posts} / ${stats.comments}</span>
+                                                return `<div class="subreddit-chip">
+                                                    <span class="name">r/${s}</span>
+                                                    <span class="stats">${stats.posts} / ${stats.comments}</span>
                                                 </div>`;
                                             }).join('')}
                                         </div>
-                                        <small style="color: #666; display: block; margin-top: 4px;">posts / comments</small>
                                     </div>
-                                ` : ''}
-                                    <p><strong>Reddit User:</strong> ${info.config?.credentials?.username || 'N/A'}</p>
-                                    <p><strong>Container:</strong> ${info.container_name || 'N/A'}</p>
-                                    <p><strong>Config:</strong> ${info.config?.posts_limit || 'N/A'} posts, ${info.config?.interval || 'N/A'}s interval, ${info.config?.comment_batch || 'N/A'} batch</p>
+                                    ` : ''}
 
-                                    <div style="margin-top: 12px; padding: 10px; background: #0d0d0d; border-radius: 4px;">
-                                        <strong>📊 Database Totals:</strong><br>
-                                        <span style="color: #22c55e;">▸ ${totalPosts} posts</span> |
-                                        <span style="color: #3b82f6;">▸ ${totalComments} comments</span>
+                                    <div class="scraper-meta-grid">
+                                        <div class="meta-item">
+                                            <span class="meta-label">Reddit User</span>
+                                            <span class="meta-value">${info.config?.credentials?.username || 'N/A'}</span>
+                                        </div>
+                                        <div class="meta-item">
+                                            <span class="meta-label">Container</span>
+                                            <span class="meta-value">${info.container_name || 'N/A'}</span>
+                                        </div>
+                                        <div class="meta-item">
+                                            <span class="meta-label">Posts Limit</span>
+                                            <span class="meta-value">${info.config?.posts_limit || 'N/A'}</span>
+                                        </div>
+                                        <div class="meta-item">
+                                            <span class="meta-label">Interval</span>
+                                            <span class="meta-value">${info.config?.interval || 'N/A'}s</span>
+                                        </div>
+                                    </div>
+
+                                    <div class="db-stats-box">
+                                        <div class="db-stats-title">📊 Database Totals</div>
+                                        <div class="db-stats-row">
+                                            <div class="db-stat">
+                                                <span class="num green">${totalPosts}</span>
+                                                <span class="label">posts</span>
+                                            </div>
+                                            <div class="db-stat">
+                                                <span class="num blue">${totalComments}</span>
+                                                <span class="label">comments</span>
+                                            </div>
+                                        </div>
                                         ${info.metrics ? `
-                                        <br><small style="color: #737373;">Scraper collected: ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts (${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr), ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments (${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)</small>
-                                        <br><small style="color: #737373;">
+                                        <div class="db-stats-meta">
+                                            Scraper collected: ${(info.metrics.total_posts_collected || 0).toLocaleString()} posts (${(info.metrics.posts_per_hour || 0).toFixed(1)}/hr), ${(info.metrics.total_comments_collected || 0).toLocaleString()} comments (${(info.metrics.comments_per_hour || 0).toFixed(1)}/hr)<br>
                                             Last cycle: ${info.metrics.last_cycle_posts || 0} posts, ${info.metrics.last_cycle_comments || 0} comments
-                                            ${info.metrics.last_cycle_time ? `at ${new Date(info.metrics.last_cycle_time).toLocaleTimeString()}` : ''}
+                                            ${info.metrics.last_cycle_time ? ` at ${new Date(info.metrics.last_cycle_time).toLocaleTimeString()}` : ''}
                                             ${info.metrics.total_cycles ? ` • ${info.metrics.total_cycles} cycles` : ''}
-                                        </small>
+                                        </div>
                                         ` : ''}
                                     </div>
 
-                                    <p><strong>Restarts:</strong> ${restartCount} | <strong>Auto-restart:</strong>
-                                       <label class="toggle">
-                                           <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
-                                           <span class="slider"></span>
-                                       </label>
-                                    </p>
-                                    ${info.started_at ? `<p><strong>Started:</strong> ${new Date(info.started_at).toLocaleString()}</p>` : ''}
-                                    ${info.last_updated ? `<p><strong>Last Updated:</strong> ${new Date(info.last_updated).toLocaleString()}</p>` : ''}
-                                    ${info.last_error ? `<p><strong>Error:</strong> ${info.last_error}</p>` : ''}
+                                    <div class="scraper-meta-grid" style="margin-top: 16px;">
+                                        <div class="meta-item">
+                                            <span class="meta-label">Restarts</span>
+                                            <span class="meta-value">${restartCount}</span>
+                                        </div>
+                                        <div class="meta-item">
+                                            <span class="meta-label">Auto-restart</span>
+                                            <label class="toggle">
+                                                <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
+                                                <span class="slider"></span>
+                                            </label>
+                                        </div>
+                                        ${info.started_at ? `
+                                        <div class="meta-item">
+                                            <span class="meta-label">Started</span>
+                                            <span class="meta-value">${new Date(info.started_at).toLocaleString()}</span>
+                                        </div>
+                                        ` : ''}
+                                        ${info.last_updated ? `
+                                        <div class="meta-item">
+                                            <span class="meta-label">Last Updated</span>
+                                            <span class="meta-value">${new Date(info.last_updated).toLocaleString()}</span>
+                                        </div>
+                                        ` : ''}
+                                    </div>
 
-                                    <div style="margin-top: 16px;">
+                                    ${info.last_error ? `<p style="color: var(--accent-red); margin-top: 12px;"><strong>Error:</strong> ${info.last_error}</p>` : ''}
+
+                                    <div style="margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap;">
                                         <button onclick="event.stopPropagation(); stopScraper(this, '${subreddit}')" class="stop">Stop</button>
                                         <button onclick="event.stopPropagation(); restartScraper(this, '${subreddit}')" class="restart">Restart</button>
                                         <button onclick="event.stopPropagation(); getStats(this, '${subreddit}')" class="stats">Stats</button>
@@ -1937,22 +2642,23 @@ async def dashboard():
                     const response = await fetch('/accounts');
                     const accounts = await response.json();
                     const container = document.getElementById('savedAccountsList');
-                    
+
                     if (Object.keys(accounts).length === 0) {
-                        container.innerHTML = '<p>No saved accounts yet.</p>';
+                        container.innerHTML = '<p style="color: var(--text-muted);">No saved accounts yet.</p>';
                         return;
                     }
-                    
+
                     container.innerHTML = '';
                     Object.entries(accounts).forEach(([accountName, account]) => {
                         const div = document.createElement('div');
-                        div.style.cssText = 'border: 1px solid #ddd; padding: 10px; margin: 5px 0; border-radius: 3px; display: flex; justify-content: space-between; align-items: center;';
+                        div.className = 'subreddit-chip';
+                        div.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 14px 16px;';
                         div.innerHTML = `
                             <div>
-                                <strong>${accountName}</strong><br>
-                                <small>User: ${account.username} | Created: ${new Date(account.created_at).toLocaleDateString()}</small>
+                                <span class="name" style="color: var(--accent-cyan); font-weight: 600;">${accountName}</span><br>
+                                <small style="color: var(--text-muted);">User: ${account.username} | Created: ${new Date(account.created_at).toLocaleDateString()}</small>
                             </div>
-                            <button onclick="deleteAccount('${accountName}')" class="delete" style="padding: 5px 10px;">Delete</button>
+                            <button onclick="deleteAccount('${accountName}')" class="delete" style="padding: 6px 12px;">Delete</button>
                         `;
                         container.appendChild(div);
                     });
