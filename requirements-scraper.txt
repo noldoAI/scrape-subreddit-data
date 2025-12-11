@@ -1,4 +1,0 @@
-praw==7.7.1
-pymongo==4.6.1
-python-dotenv==1.0.0
-prometheus_client

@@ -3,13 +3,14 @@
 Semantic Subreddit Search Engine
 
 Search for subreddits by semantic meaning rather than keywords.
-Uses Azure OpenAI text-embedding-3-small and MongoDB Atlas Vector Search.
+Uses Azure OpenAI text-embedding-3-small and MongoDB Atlas or Azure Cosmos DB Vector Search.
 
 Usage:
     python discovery/semantic_search.py --query "building b2b saas"
     python discovery/semantic_search.py --query "cryptocurrency trading" --limit 20
     python discovery/semantic_search.py --query "indie game dev" --min-subscribers 10000
     python discovery/semantic_search.py --query "stocks" --source all  # Search both collections
+    python discovery/semantic_search.py --query "gaming" --backend cosmos  # Force Cosmos DB
 """
 
 import os
@@ -19,6 +20,7 @@ import logging
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from pymongo.errors import OperationFailure
 
 # Add parent directory to path for imports when run from discovery/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,6 +59,9 @@ SEARCH_SOURCES = {
     }
 }
 
+# Global backend detection (cached)
+_detected_backend = None
+
 # Initialize Azure OpenAI client for query embedding
 azure_client = None
 try:
@@ -83,6 +88,35 @@ except Exception as e:
     sys.exit(1)
 
 
+def detect_backend() -> str:
+    """
+    Detect whether we're connected to MongoDB Atlas or Azure Cosmos DB.
+
+    Returns:
+        str: "atlas" or "cosmos"
+    """
+    global _detected_backend
+
+    if _detected_backend is not None:
+        return _detected_backend
+
+    try:
+        # Check if it's Azure Cosmos DB by trying an Atlas-specific command
+        try:
+            db.command("listSearchIndexes", "test")
+            _detected_backend = "atlas"
+        except OperationFailure as e:
+            if "CommandNotFound" in str(e) or "UnrecognizedCommand" in str(e):
+                _detected_backend = "cosmos"
+            else:
+                _detected_backend = "atlas"
+    except Exception as e:
+        logger.warning(f"Could not detect backend, assuming cosmos: {e}")
+        _detected_backend = "cosmos"
+
+    return _detected_backend
+
+
 def generate_query_embedding(query: str) -> List[float]:
     """Generate embedding for a search query using Azure OpenAI."""
     deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
@@ -93,7 +127,7 @@ def generate_query_embedding(query: str) -> List[float]:
     return response.data[0].embedding
 
 
-def search_collection(
+def search_collection_atlas(
     collection,
     index_name: str,
     query_embedding: List[float],
@@ -107,23 +141,7 @@ def search_collection(
     source_label: str = "unknown"
 ) -> List[Dict]:
     """
-    Search a single collection for subreddits.
-
-    Args:
-        collection: MongoDB collection to search
-        index_name: Vector search index name
-        query_embedding: Pre-computed query embedding
-        limit: Number of results to return
-        min_subscribers: Minimum subscriber count
-        max_subscribers: Maximum subscriber count
-        exclude_nsfw: Filter out NSFW subreddits
-        language: Language filter
-        subreddit_type: Subreddit type filter
-        num_candidates: Number of candidates for vector search
-        source_label: Label for the source collection
-
-    Returns:
-        List of matching subreddit dictionaries with similarity scores
+    Search using MongoDB Atlas Vector Search ($vectorSearch).
     """
     # Build MongoDB filters
     filters = {}
@@ -189,8 +207,135 @@ def search_collection(
         return results
 
     except Exception as e:
-        logger.warning(f"Search failed on {collection.name}: {e}")
+        logger.warning(f"Atlas search failed on {collection.name}: {e}")
         return []
+
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    import math
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    magnitude1 = math.sqrt(sum(a * a for a in vec1))
+    magnitude2 = math.sqrt(sum(b * b for b in vec2))
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+    return dot_product / (magnitude1 * magnitude2)
+
+
+def search_collection_cosmos(
+    collection,
+    index_name: str,
+    query_embedding: List[float],
+    limit: int = 10,
+    min_subscribers: Optional[int] = 1000,
+    max_subscribers: Optional[int] = None,
+    exclude_nsfw: bool = True,
+    language: Optional[str] = None,
+    subreddit_type: str = "public",
+    num_candidates: int = 100,
+    source_label: str = "unknown"
+) -> List[Dict]:
+    """
+    Search using application-level cosine similarity for Cosmos DB RU-based
+    (which doesn't support native vector search).
+
+    Falls back to fetching documents with embeddings and computing similarity in Python.
+    """
+    try:
+        # Build MongoDB query filters
+        query = {"embeddings.combined_embedding": {"$exists": True}}
+
+        if subreddit_type:
+            query["subreddit_type"] = subreddit_type
+
+        if exclude_nsfw:
+            query["over_18"] = False
+
+        if language:
+            query["lang"] = language
+
+        if min_subscribers is not None:
+            query["subscribers"] = query.get("subscribers", {})
+            query["subscribers"]["$gte"] = min_subscribers
+
+        if max_subscribers is not None:
+            query["subscribers"] = query.get("subscribers", {})
+            query["subscribers"]["$lte"] = max_subscribers
+
+        # Fetch all documents with embeddings (limited for performance)
+        # For large datasets, consider pagination or a real vector DB
+        cursor = collection.find(
+            query,
+            {
+                "subreddit_name": 1,
+                "title": 1,
+                "public_description": 1,
+                "subscribers": 1,
+                "active_user_count": 1,
+                "advertiser_category": 1,
+                "over_18": 1,
+                "subreddit_type": 1,
+                "lang": 1,
+                "url": 1,
+                "embeddings.combined_embedding": 1
+            }
+        ).limit(num_candidates * 10)  # Fetch more for better results
+
+        # Compute similarity scores
+        results = []
+        for doc in cursor:
+            embedding = doc.get("embeddings", {}).get("combined_embedding")
+            if embedding:
+                score = cosine_similarity(query_embedding, embedding)
+                doc["score"] = score
+                doc["source"] = source_label
+                # Remove embedding from result to save memory
+                if "embeddings" in doc:
+                    del doc["embeddings"]
+                results.append(doc)
+
+        # Sort by score descending and limit
+        results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return results[:limit]
+
+    except Exception as e:
+        logger.warning(f"Cosmos search failed on {collection.name}: {e}")
+        return []
+
+
+def search_collection(
+    collection,
+    index_name: str,
+    query_embedding: List[float],
+    limit: int = 10,
+    min_subscribers: Optional[int] = 1000,
+    max_subscribers: Optional[int] = None,
+    exclude_nsfw: bool = True,
+    language: Optional[str] = None,
+    subreddit_type: str = "public",
+    num_candidates: int = 100,
+    source_label: str = "unknown",
+    backend: str = "auto"
+) -> List[Dict]:
+    """
+    Search a single collection for subreddits.
+    Automatically detects and uses the appropriate backend (Atlas or Cosmos DB).
+    """
+    if backend == "auto":
+        backend = detect_backend()
+
+    if backend == "atlas":
+        return search_collection_atlas(
+            collection, index_name, query_embedding, limit,
+            min_subscribers, max_subscribers, exclude_nsfw, language,
+            subreddit_type, num_candidates, source_label
+        )
+    else:  # cosmos
+        return search_collection_cosmos(
+            collection, index_name, query_embedding, limit,
+            min_subscribers, max_subscribers, exclude_nsfw, language,
+            subreddit_type, num_candidates, source_label
+        )
 
 
 def search_subreddits(
@@ -202,7 +347,8 @@ def search_subreddits(
     exclude_nsfw: bool = True,
     language: Optional[str] = None,
     subreddit_type: str = "public",
-    num_candidates: int = 100
+    num_candidates: int = 100,
+    backend: str = "auto"
 ) -> List[Dict]:
     """
     Semantic search for subreddits using natural language queries.
@@ -217,12 +363,18 @@ def search_subreddits(
         language: Language filter (e.g., "en")
         subreddit_type: Filter by type (public/private/restricted)
         num_candidates: Number of candidates to consider (higher = more accurate but slower)
+        backend: Database backend - "auto", "atlas", or "cosmos"
 
     Returns:
         List of matching subreddit dictionaries with similarity scores
     """
+    # Auto-detect backend
+    if backend == "auto":
+        backend = detect_backend()
+
     logger.info(f"🔍 Searching for: '{query}'")
     logger.info(f"   Source: {source}")
+    logger.info(f"   Backend: {backend}")
     logger.info(f"   Filters: min_subs={min_subscribers}, exclude_nsfw={exclude_nsfw}, type={subreddit_type}\n")
 
     # Generate query embedding using Azure OpenAI
@@ -252,7 +404,8 @@ def search_subreddits(
             language=language,
             subreddit_type=subreddit_type,
             num_candidates=num_candidates,
-            source_label=src
+            source_label=src,
+            backend=backend
         )
 
         all_results.extend(results)
@@ -263,9 +416,9 @@ def search_subreddits(
         seen = {}
         for r in all_results:
             name = r["subreddit_name"]
-            if name not in seen or r["score"] > seen[name]["score"]:
+            if name not in seen or r.get("score", 0) > seen[name].get("score", 0):
                 seen[name] = r
-        all_results = sorted(seen.values(), key=lambda x: x["score"], reverse=True)[:limit]
+        all_results = sorted(seen.values(), key=lambda x: x.get("score", 0), reverse=True)[:limit]
 
     logger.info(f"\n✅ Total results: {len(all_results)}\n")
     return all_results
@@ -338,12 +491,13 @@ def print_results(results: List[Dict], detailed: bool = False, show_source: bool
         print()
 
 
-def interactive_search(source: str = "discovery"):
+def interactive_search(source: str = "discovery", backend: str = "auto"):
     """Interactive search mode - keep asking for queries."""
     print("\n" + "="*80)
     print("INTERACTIVE SEMANTIC SUBREDDIT SEARCH")
     print("="*80)
     print(f"\nSource: {source}")
+    print(f"Backend: {backend}")
     print("Enter your search queries (or 'quit' to exit)")
     print("Examples:")
     print("  - building b2b saas")
@@ -362,7 +516,7 @@ def interactive_search(source: str = "discovery"):
             if not query:
                 continue
 
-            results = search_subreddits(query, source=source, limit=10)
+            results = search_subreddits(query, source=source, limit=10, backend=backend)
             print_results(results, detailed=False, show_source=(source == "all"))
 
         except KeyboardInterrupt:
@@ -378,16 +532,22 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python semantic_search_subreddits.py --query "building b2b saas"
-  python semantic_search_subreddits.py --query "crypto trading" --limit 20 --min-subscribers 10000
-  python semantic_search_subreddits.py --query "stocks" --source all  # Search both collections
-  python semantic_search_subreddits.py --query "gaming" --source active  # Search only active scrapers
-  python semantic_search_subreddits.py --interactive
+  python semantic_search.py --query "building b2b saas"
+  python semantic_search.py --query "crypto trading" --limit 20 --min-subscribers 10000
+  python semantic_search.py --query "stocks" --source all  # Search both collections
+  python semantic_search.py --query "gaming" --source active  # Search only active scrapers
+  python semantic_search.py --query "tech" --backend cosmos  # Force Cosmos DB backend
+  python semantic_search.py --interactive
 
 Sources:
   discovery  - Subreddits discovered via discover_subreddits.py (default)
   active     - Subreddits actively being scraped (from reddit_scraper.py)
   all        - Search both collections and deduplicate
+
+Backends:
+  auto       - Auto-detect (default)
+  atlas      - MongoDB Atlas Vector Search
+  cosmos     - Azure Cosmos DB for MongoDB vCore
         """
     )
     parser.add_argument(
@@ -401,6 +561,13 @@ Sources:
         default='discovery',
         choices=['discovery', 'active', 'all'],
         help='Search source: discovery (default), active, or all'
+    )
+    parser.add_argument(
+        '--backend',
+        type=str,
+        default='auto',
+        choices=['auto', 'atlas', 'cosmos'],
+        help='Database backend: auto (default), atlas, or cosmos'
     )
     parser.add_argument(
         '--limit',
@@ -451,7 +618,7 @@ Sources:
 
     # Interactive mode
     if args.interactive:
-        interactive_search(source=args.source)
+        interactive_search(source=args.source, backend=args.backend)
         return
 
     # Single query mode
@@ -471,7 +638,8 @@ Sources:
         max_subscribers=args.max_subscribers,
         exclude_nsfw=not args.include_nsfw,
         language=args.language,
-        subreddit_type=subreddit_type
+        subreddit_type=subreddit_type,
+        backend=args.backend
     )
 
     # Display results

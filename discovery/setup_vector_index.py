@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-MongoDB Atlas Vector Search Index Setup
+Vector Search Index Setup for MongoDB Atlas or Azure Cosmos DB
 
 Creates vector search indexes for semantic subreddit search.
-This enables fast similarity searches using cosine distance.
+Supports both MongoDB Atlas and Azure Cosmos DB for MongoDB vCore.
 
 Usage:
     python setup_vector_index.py                           # Create combined index on metadata (default)
@@ -12,6 +12,7 @@ Usage:
     python setup_vector_index.py --collection discovery    # Create index on discovery collection
     python setup_vector_index.py --collection both         # Create indexes on both collections
     python setup_vector_index.py --drop                    # Drop existing index and recreate
+    python setup_vector_index.py --backend cosmos          # Use Azure Cosmos DB backend
 """
 
 import os
@@ -21,7 +22,7 @@ import logging
 import time
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from pymongo.operations import SearchIndexModel
+from pymongo.errors import OperationFailure
 
 # Add parent directory to path for imports when run from discovery/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,8 +76,38 @@ EMBEDDING_CONFIGS = {
 }
 
 
-def list_existing_indexes(collection):
-    """List all existing search indexes on the collection."""
+def detect_backend():
+    """
+    Detect whether we're connected to MongoDB Atlas or Azure Cosmos DB.
+
+    Returns:
+        str: "atlas" or "cosmos"
+    """
+    try:
+        # Try to get server info
+        server_info = client.server_info()
+        version = server_info.get('version', '')
+
+        # Azure Cosmos DB typically shows version like "4.0.0" or "3.6.0"
+        # and has specific modules
+        if 'cosmosdb' in str(server_info).lower():
+            return "cosmos"
+
+        # Check if it's Azure by trying an Atlas-specific command
+        try:
+            db.command("listSearchIndexes", "test")
+            return "atlas"
+        except OperationFailure as e:
+            if "CommandNotFound" in str(e) or "UnrecognizedCommand" in str(e):
+                return "cosmos"
+            return "atlas"
+    except Exception as e:
+        logger.warning(f"Could not detect backend, assuming cosmos: {e}")
+        return "cosmos"
+
+
+def list_existing_indexes_atlas(collection):
+    """List all existing search indexes on the collection (MongoDB Atlas)."""
     try:
         indexes = list(collection.list_search_indexes())
         if indexes:
@@ -88,44 +119,70 @@ def list_existing_indexes(collection):
             logger.info(f"\n📋 No existing search indexes found on {collection.name}")
             return []
     except Exception as e:
-        logger.warning(f"Could not list indexes (might not be supported on this MongoDB version): {e}")
+        logger.warning(f"Could not list Atlas indexes: {e}")
         return []
 
 
-def drop_index(collection, index_name: str):
-    """Drop an existing search index."""
+def list_existing_indexes_cosmos(collection):
+    """List all existing indexes on the collection (Azure Cosmos DB)."""
     try:
-        logger.info(f"\n🗑️  Dropping index: {index_name} from {collection.name}")
+        indexes = list(collection.list_indexes())
+        vector_indexes = []
+        if indexes:
+            logger.info(f"\n📋 Existing indexes on {collection.name}:")
+            for idx in indexes:
+                idx_name = idx.get('name', 'unnamed')
+                # Check if it's a vector index
+                if 'cosmosSearchOptions' in idx or idx_name.endswith('_vector'):
+                    vector_indexes.append(idx)
+                    logger.info(f"   - {idx_name} (vector index)")
+                else:
+                    logger.info(f"   - {idx_name}")
+            return vector_indexes
+        else:
+            logger.info(f"\n📋 No indexes found on {collection.name}")
+            return []
+    except Exception as e:
+        logger.warning(f"Could not list indexes: {e}")
+        return []
+
+
+def drop_index_atlas(collection, index_name: str):
+    """Drop an existing search index (MongoDB Atlas)."""
+    try:
+        logger.info(f"\n🗑️  Dropping Atlas index: {index_name} from {collection.name}")
         collection.drop_search_index(index_name)
         logger.info(f"   ✓ Index dropped successfully")
-        time.sleep(2)  # Wait a bit before recreating
+        time.sleep(2)
     except Exception as e:
         logger.error(f"   ✗ Error dropping index: {e}")
 
 
-def create_vector_search_index(collection, index_name: str, embedding_type: str = "combined"):
+def drop_index_cosmos(collection, index_name: str):
+    """Drop an existing index (Azure Cosmos DB)."""
+    try:
+        logger.info(f"\n🗑️  Dropping Cosmos index: {index_name} from {collection.name}")
+        collection.drop_index(index_name)
+        logger.info(f"   ✓ Index dropped successfully")
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"   ✗ Error dropping index: {e}")
+
+
+def create_vector_search_index_atlas(collection, index_name: str, embedding_type: str = "combined"):
     """
     Create MongoDB Atlas Vector Search index for subreddit embeddings.
-
-    Index Configuration:
-    - Field: embeddings.combined_embedding or embeddings.persona_embedding
-    - Dimensions: Configured via EMBEDDING_CONFIG (1536 for text-embedding-3-small)
-    - Similarity: cosine (best for normalized embeddings)
-    - Filters: subreddit_type, over_18, subscribers (for hybrid search)
     """
     embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
     embedding_path = embedding_config["path"]
     dimensions = EMBEDDING_CONFIG["dimensions"]
 
-    logger.info(f"\n🔧 Creating vector search index...")
+    logger.info(f"\n🔧 Creating Atlas vector search index...")
     logger.info(f"   Collection: {db.name}.{collection.name}")
     logger.info(f"   Index name: {index_name}")
-    logger.info(f"   Embedding type: {embedding_type} ({embedding_config['description']})")
     logger.info(f"   Embedding path: {embedding_path}")
     logger.info(f"   Dimensions: {dimensions}")
 
-    # Define the vector search index for Atlas Vector Search
-    # Using mappings format for pre-7.0 Atlas clusters
     index_definition = {
         "name": index_name,
         "type": "vectorSearch",
@@ -149,78 +206,123 @@ def create_vector_search_index(collection, index_name: str, embedding_type: str 
     }
 
     try:
-        # Create the index using dict format
         result = collection.create_search_index(index_definition)
         logger.info(f"   ✓ Index creation initiated: {result}")
-        logger.info(f"\n⏳ Index is being built (this may take 1-5 minutes)...")
-        logger.info(f"   You can check status in MongoDB Atlas UI or wait for confirmation below\n")
-
-        # Wait for index to become ready
-        max_wait = 300  # 5 minutes
-        wait_interval = 10  # Check every 10 seconds
-        elapsed = 0
-
-        while elapsed < max_wait:
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-
-            try:
-                indexes = list(collection.list_search_indexes())
-                for idx in indexes:
-                    if idx.get('name') == index_name:
-                        status = idx.get('status', 'UNKNOWN')
-                        logger.info(f"   Index status: {status} (elapsed: {elapsed}s)")
-
-                        if status == 'READY':
-                            logger.info(f"\n✅ Vector search index created successfully!")
-                            logger.info(f"   Status: READY")
-                            logger.info(f"   Time taken: {elapsed} seconds")
-                            return True
-                        elif status in ['FAILED', 'DOES NOT EXIST']:
-                            logger.error(f"\n❌ Index creation failed with status: {status}")
-                            return False
-            except Exception as e:
-                logger.warning(f"   Could not check status: {e}")
-
-        logger.warning(f"\n⚠️  Index creation timeout ({max_wait}s)")
-        logger.warning(f"   Index may still be building. Check MongoDB Atlas UI.")
-        return False
-
+        return True
     except Exception as e:
-        logger.error(f"\n❌ Error creating index: {e}")
-        logger.error(f"\n💡 Troubleshooting:")
-        logger.error(f"   1. Ensure you're using MongoDB Atlas (vector search not available in self-hosted MongoDB)")
-        logger.error(f"   2. Check that you have embeddings in the collection")
-        logger.error(f"   3. Verify cluster version supports vector search (M10+ recommended)")
+        logger.error(f"\n❌ Error creating Atlas index: {e}")
         return False
 
 
-def verify_index(collection, index_name: str, embedding_type: str = "combined"):
-    """Verify that the vector index is working with a test query."""
+def create_vector_search_index_cosmos(collection, index_name: str, embedding_type: str = "combined"):
+    """
+    Create Azure Cosmos DB for MongoDB vCore vector search index.
+
+    Supports multiple syntax formats for different MongoDB versions.
+    """
+    embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
+    embedding_path = embedding_config["path"]
+    dimensions = EMBEDDING_CONFIG["dimensions"]
+
+    logger.info(f"\n🔧 Creating Cosmos DB vector search index...")
+    logger.info(f"   Collection: {db.name}.{collection.name}")
+    logger.info(f"   Index name: {index_name}")
+    logger.info(f"   Embedding path: {embedding_path}")
+    logger.info(f"   Dimensions: {dimensions}")
+
+    # Try multiple syntaxes for different Cosmos DB/MongoDB versions
+
+    # Syntax 1: MongoDB 7.0+ / Cosmos DB vCore with vector-hnsw
+    index_definitions = [
+        # Format 1: vector-hnsw (newer, faster)
+        {
+            "name": index_name,
+            "key": {embedding_path: "cosmosSearch"},
+            "cosmosSearchOptions": {
+                "kind": "vector-hnsw",
+                "m": 16,
+                "efConstruction": 64,
+                "similarity": "COS",
+                "dimensions": dimensions
+            }
+        },
+        # Format 2: vector-ivf (older, more compatible)
+        {
+            "name": index_name,
+            "key": {embedding_path: "cosmosSearch"},
+            "cosmosSearchOptions": {
+                "kind": "vector-ivf",
+                "numLists": 100,
+                "similarity": "COS",
+                "dimensions": dimensions
+            }
+        },
+        # Format 3: Simple vector index (MongoDB 8.0 native)
+        {
+            "name": index_name,
+            "key": {embedding_path: "vector"},
+            "vectorOptions": {
+                "type": "hnsw",
+                "dimensions": dimensions,
+                "similarity": "cosine"
+            }
+        }
+    ]
+
+    for i, index_definition in enumerate(index_definitions):
+        try:
+            logger.info(f"   Trying syntax {i+1}...")
+            result = db.command({
+                "createIndexes": collection.name,
+                "indexes": [index_definition]
+            })
+
+            if result.get('ok') == 1:
+                logger.info(f"   ✓ Index created successfully with syntax {i+1}!")
+                logger.info(f"   Response: {result}")
+                return True
+
+        except OperationFailure as e:
+            error_str = str(e).lower()
+            if "already exists" in error_str:
+                logger.info(f"   ✓ Index already exists")
+                return True
+            elif "not valid" in error_str or "not supported" in error_str:
+                logger.info(f"   Syntax {i+1} not supported, trying next...")
+                continue
+            else:
+                logger.warning(f"   Syntax {i+1} failed: {e}")
+                continue
+        except Exception as e:
+            logger.warning(f"   Syntax {i+1} error: {e}")
+            continue
+
+    # All syntaxes failed
+    logger.error(f"\n❌ All index creation attempts failed")
+    logger.error(f"\n💡 Vector search may not be enabled. To enable:")
+    logger.error(f"   1. Go to Azure Portal → your Cosmos DB account")
+    logger.error(f"   2. Settings → Features")
+    logger.error(f"   3. Enable 'Vector Search' feature")
+    logger.error(f"   4. Wait a few minutes for it to take effect")
+    logger.info(f"\n📝 Falling back to application-level similarity search (no index needed)")
+    return False
+
+
+def verify_index_atlas(collection, index_name: str, embedding_type: str = "combined"):
+    """Verify that the Atlas vector index is working."""
     embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
     embedding_path = embedding_config["path"]
 
-    logger.info(f"\n🧪 Verifying vector search index on {collection.name}...")
-    logger.info(f"   Embedding path: {embedding_path}")
+    logger.info(f"\n🧪 Verifying Atlas vector search index...")
 
-    # Get a sample embedding from the database
     sample = collection.find_one({embedding_path: {"$exists": True}})
-
     if not sample:
-        logger.error(f"   ✗ No documents with {embedding_type} embeddings found in {collection.name}.")
-        if embedding_type == "persona":
-            logger.error("   Run: python generate_embeddings.py --embedding-type persona")
-        elif collection.name == "subreddit_discovery":
-            logger.error("   Run: python generate_embeddings.py")
-        else:
-            logger.error("   Wait for embedding worker to process pending subreddits.")
+        logger.error(f"   ✗ No documents with embeddings found")
         return False
 
-    # Navigate to nested embedding field
     query_vector = sample['embeddings'][embedding_path.split('.')[-1]]
 
     try:
-        # Test vector search query
         results = list(collection.aggregate([
             {
                 "$vectorSearch": {
@@ -234,7 +336,6 @@ def verify_index(collection, index_name: str, embedding_type: str = "combined"):
             {
                 "$project": {
                     "subreddit_name": 1,
-                    "title": 1,
                     "score": {"$meta": "vectorSearchScore"}
                 }
             }
@@ -242,21 +343,66 @@ def verify_index(collection, index_name: str, embedding_type: str = "combined"):
 
         if results:
             logger.info(f"   ✓ Vector search is working!")
-            logger.info(f"   Found {len(results)} results:")
             for r in results:
-                logger.info(f"      - r/{r['subreddit_name']} (score: {r['score']:.3f})")
+                logger.info(f"      - r/{r['subreddit_name']} (score: {r.get('score', 'N/A')})")
             return True
-        else:
-            logger.warning("   ⚠️  Vector search returned no results (index may still be building)")
-            return False
-
+        return False
     except Exception as e:
         logger.error(f"   ✗ Vector search failed: {e}")
-        logger.error(f"   Index may not be ready yet. Wait a few minutes and try again.")
         return False
 
 
-def setup_collection(collection_key: str, drop: bool = False, verify_only: bool = False, embedding_type: str = "combined"):
+def verify_index_cosmos(collection, index_name: str, embedding_type: str = "combined"):
+    """Verify that the Cosmos DB vector index is working."""
+    embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
+    embedding_path = embedding_config["path"]
+
+    logger.info(f"\n🧪 Verifying Cosmos DB vector search index...")
+
+    sample = collection.find_one({embedding_path: {"$exists": True}})
+    if not sample:
+        logger.error(f"   ✗ No documents with embeddings found")
+        return False
+
+    query_vector = sample['embeddings'][embedding_path.split('.')[-1]]
+
+    try:
+        # Azure Cosmos DB for MongoDB vCore uses $search with cosmosSearch
+        results = list(collection.aggregate([
+            {
+                "$search": {
+                    "cosmosSearch": {
+                        "vector": query_vector,
+                        "path": embedding_path,
+                        "k": 3
+                    },
+                    "returnStoredSource": True
+                }
+            },
+            {
+                "$project": {
+                    "subreddit_name": 1,
+                    "similarityScore": {"$meta": "searchScore"}
+                }
+            }
+        ]))
+
+        if results:
+            logger.info(f"   ✓ Vector search is working!")
+            for r in results:
+                logger.info(f"      - r/{r.get('subreddit_name', 'unknown')} (score: {r.get('similarityScore', 'N/A')})")
+            return True
+        else:
+            logger.warning("   ⚠️  Vector search returned no results")
+            return False
+    except Exception as e:
+        logger.error(f"   ✗ Vector search failed: {e}")
+        logger.error(f"   This might be expected if index is still building")
+        return False
+
+
+def setup_collection(collection_key: str, drop: bool = False, verify_only: bool = False,
+                     embedding_type: str = "combined", backend: str = "auto"):
     """Setup vector index for a specific collection."""
     config = COLLECTION_CONFIGS[collection_key]
     embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
@@ -265,20 +411,37 @@ def setup_collection(collection_key: str, drop: bool = False, verify_only: bool 
     # Build index name based on embedding type
     base_index_name = config["index_name"]
     if embedding_type == "persona":
-        # Use the persona-specific index name from config
         index_name = PERSONA_SEARCH_CONFIG.get("persona_vector_index_name", f"{base_index_name}_persona")
     else:
         index_name = base_index_name
+
+    # Auto-detect backend if not specified
+    if backend == "auto":
+        backend = detect_backend()
+        logger.info(f"\n🔍 Detected backend: {backend.upper()}")
 
     logger.info(f"\n{'='*80}")
     logger.info(f"Setting up: {config['description']}")
     logger.info(f"Collection: {collection.name}")
     logger.info(f"Embedding type: {embedding_type} ({embedding_config['description']})")
     logger.info(f"Index: {index_name}")
+    logger.info(f"Backend: {backend}")
     logger.info(f"{'='*80}")
 
+    # Backend-specific functions
+    if backend == "atlas":
+        list_indexes = list_existing_indexes_atlas
+        drop_index = drop_index_atlas
+        create_index = create_vector_search_index_atlas
+        verify_index = verify_index_atlas
+    else:  # cosmos
+        list_indexes = list_existing_indexes_cosmos
+        drop_index = drop_index_cosmos
+        create_index = create_vector_search_index_cosmos
+        verify_index = verify_index_cosmos
+
     # List existing indexes
-    existing_indexes = list_existing_indexes(collection)
+    existing_indexes = list_indexes(collection)
 
     if verify_only:
         verify_index(collection, index_name, embedding_type)
@@ -300,17 +463,20 @@ def setup_collection(collection_key: str, drop: bool = False, verify_only: bool 
         return
 
     # Create index
-    success = create_vector_search_index(collection, index_name, embedding_type)
+    success = create_index(collection, index_name, embedding_type)
 
     if success:
-        # Verify index
         logger.info(f"\n{'='*80}\n")
+        # Give Cosmos DB a moment to build the index
+        if backend == "cosmos":
+            logger.info("   Waiting 5 seconds for index to be ready...")
+            time.sleep(5)
         verify_index(collection, index_name, embedding_type)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Setup MongoDB Atlas Vector Search index for subreddit semantic search',
+        description='Setup vector search index for MongoDB Atlas or Azure Cosmos DB',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -321,6 +487,7 @@ Examples:
   python setup_vector_index.py --collection both         # Create indexes on both collections
   python setup_vector_index.py --drop                    # Drop and recreate index
   python setup_vector_index.py --verify-only             # Only verify existing index
+  python setup_vector_index.py --backend cosmos          # Force Azure Cosmos DB backend
         """
     )
     parser.add_argument(
@@ -347,11 +514,18 @@ Examples:
         action='store_true',
         help='Only verify existing index without creating'
     )
+    parser.add_argument(
+        '--backend',
+        type=str,
+        default='auto',
+        choices=['auto', 'atlas', 'cosmos'],
+        help='Database backend: auto (detect), atlas (MongoDB Atlas), cosmos (Azure Cosmos DB)'
+    )
 
     args = parser.parse_args()
 
     logger.info(f"\n{'='*80}")
-    logger.info(f"MongoDB Atlas Vector Search Index Setup")
+    logger.info(f"Vector Search Index Setup")
     logger.info(f"{'='*80}")
 
     # Determine embedding types to process
@@ -363,11 +537,11 @@ Examples:
     # Process collections and embedding types
     if args.collection == 'both':
         for emb_type in embedding_types:
-            setup_collection('discovery', args.drop, args.verify_only, emb_type)
-            setup_collection('metadata', args.drop, args.verify_only, emb_type)
+            setup_collection('discovery', args.drop, args.verify_only, emb_type, args.backend)
+            setup_collection('metadata', args.drop, args.verify_only, emb_type, args.backend)
     else:
         for emb_type in embedding_types:
-            setup_collection(args.collection, args.drop, args.verify_only, emb_type)
+            setup_collection(args.collection, args.drop, args.verify_only, emb_type, args.backend)
 
     # Final summary
     logger.info(f"\n{'='*80}")
@@ -376,7 +550,7 @@ Examples:
     if 'persona' in embedding_types:
         logger.info(f"   1. Test persona search: python test_persona_search.py \"I'm building SaaS for startups\"")
     else:
-        logger.info(f"   1. Test semantic search: python semantic_search_subreddits.py --query 'building b2b saas'")
+        logger.info(f"   1. Test semantic search: python semantic_search.py --query 'building b2b saas'")
     logger.info(f"   2. Or use the API: POST /search/subreddits")
     logger.info(f"{'='*80}\n")
 
