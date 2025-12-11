@@ -31,7 +31,7 @@ import logging
 from config import (
     DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG,
     MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG,
-    EMBEDDING_WORKER_CONFIG
+    EMBEDDING_WORKER_CONFIG, AZURE_OPENAI_CONFIG
 )
 
 # Import Prometheus metrics
@@ -3311,19 +3311,46 @@ async def get_status_summary():
 
 # ======================= SEMANTIC SEARCH ENDPOINTS =======================
 
-# Lazy loading of embedding model (only when needed)
-_embedding_model = None
+# Lazy loading of Azure OpenAI embedding client (only when needed)
+_embedding_client = None
 
-def get_embedding_model():
-    """Lazy load the embedding model to avoid startup delay."""
-    global _embedding_model
-    if _embedding_model is None:
+def get_embedding_client():
+    """Lazy load the Azure OpenAI embedding client to avoid startup delay."""
+    global _embedding_client
+    if _embedding_client is None:
         try:
-            from sentence_transformers import SentenceTransformer
-            _embedding_model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+            api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+            if not endpoint or not api_key:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Azure OpenAI not configured. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY."
+                )
+
+            from openai import AzureOpenAI
+            _embedding_client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                api_key=api_key,
+                api_version=AZURE_OPENAI_CONFIG.get("api_version", "2024-02-01")
+            )
+        except ImportError:
+            raise HTTPException(status_code=500, detail="openai package not installed")
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to load embedding model: {str(e)}")
-    return _embedding_model
+            raise HTTPException(status_code=500, detail=f"Failed to initialize Azure OpenAI client: {str(e)}")
+    return _embedding_client
+
+
+def generate_query_embedding(query: str) -> list:
+    """Generate embedding for a search query using Azure OpenAI."""
+    client = get_embedding_client()
+    deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
+
+    response = client.embeddings.create(
+        input=query,
+        model=deployment
+    )
+    return response.data[0].embedding
 
 @app.post("/search/subreddits")
 async def semantic_search_subreddits(
@@ -3352,11 +3379,8 @@ async def semantic_search_subreddits(
         POST /search/subreddits?query=building%20b2b%20saas&limit=10
     """
     try:
-        # Get embedding model
-        model = get_embedding_model()
-
-        # Generate query embedding
-        query_embedding = model.encode(query, convert_to_numpy=True).tolist()
+        # Generate query embedding using Azure OpenAI
+        query_embedding = generate_query_embedding(query)
 
         # Build MongoDB filters
         filters = {}

@@ -25,7 +25,7 @@ from pymongo.operations import SearchIndexModel
 
 # Add parent directory to path for imports when run from discovery/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS, PERSONA_SEARCH_CONFIG
+from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, EMBEDDING_CONFIG, COLLECTIONS, PERSONA_SEARCH_CONFIG
 
 # Setup logging
 logging.basicConfig(
@@ -108,18 +108,21 @@ def create_vector_search_index(collection, index_name: str, embedding_type: str 
     Create MongoDB Atlas Vector Search index for subreddit embeddings.
 
     Index Configuration:
-    - Field: embeddings.combined_embedding or embeddings.persona_embedding (768 dimensions)
+    - Field: embeddings.combined_embedding or embeddings.persona_embedding
+    - Dimensions: Configured via EMBEDDING_CONFIG (1536 for text-embedding-3-small)
     - Similarity: cosine (best for normalized embeddings)
     - Filters: subreddit_type, over_18, subscribers (for hybrid search)
     """
     embedding_config = EMBEDDING_CONFIGS.get(embedding_type, EMBEDDING_CONFIGS["combined"])
     embedding_path = embedding_config["path"]
+    dimensions = EMBEDDING_CONFIG["dimensions"]
 
     logger.info(f"\n🔧 Creating vector search index...")
     logger.info(f"   Collection: {db.name}.{collection.name}")
     logger.info(f"   Index name: {index_name}")
     logger.info(f"   Embedding type: {embedding_type} ({embedding_config['description']})")
     logger.info(f"   Embedding path: {embedding_path}")
+    logger.info(f"   Dimensions: {dimensions}")
 
     # Define the vector search index for Atlas Vector Search
     # Using mappings format for pre-7.0 Atlas clusters
@@ -135,7 +138,7 @@ def create_vector_search_index(collection, index_name: str, embedding_type: str 
                         "fields": {
                             embedding_path.split('.')[-1]: {
                                 "type": "knnVector",
-                                "dimensions": 768,
+                                "dimensions": dimensions,
                                 "similarity": "cosine"
                             }
                         }

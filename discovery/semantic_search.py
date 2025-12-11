@@ -3,7 +3,7 @@
 Semantic Subreddit Search Engine
 
 Search for subreddits by semantic meaning rather than keywords.
-Uses nomic-embed-text-v1.5 embeddings and MongoDB Atlas Vector Search.
+Uses Azure OpenAI text-embedding-3-small and MongoDB Atlas Vector Search.
 
 Usage:
     python discovery/semantic_search.py --query "building b2b saas"
@@ -22,7 +22,7 @@ from pymongo import MongoClient
 
 # Add parent directory to path for imports when run from discovery/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, EMBEDDING_CONFIG, COLLECTIONS
+from config import DISCOVERY_CONFIG, EMBEDDING_WORKER_CONFIG, EMBEDDING_CONFIG, AZURE_OPENAI_CONFIG, COLLECTIONS
 
 # Setup logging
 logging.basicConfig(
@@ -57,16 +57,40 @@ SEARCH_SOURCES = {
     }
 }
 
-# Load embedding model
+# Initialize Azure OpenAI client for query embedding
+azure_client = None
 try:
-    logger.info(f"Loading {EMBEDDING_CONFIG['model_name']} model...")
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(EMBEDDING_CONFIG['model_name'], trust_remote_code=True)
-    logger.info("✅ Model loaded\n")
-except Exception as e:
-    logger.error(f"Failed to load model: {e}")
-    logger.error("Run: pip install sentence-transformers")
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+    if not endpoint or not api_key:
+        logger.error("Azure OpenAI not configured")
+        logger.error("Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY environment variables")
+        sys.exit(1)
+
+    from openai import AzureOpenAI
+    azure_client = AzureOpenAI(
+        azure_endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_CONFIG.get("api_version", "2024-02-01")
+    )
+    logger.info(f"✅ Azure OpenAI client initialized ({EMBEDDING_CONFIG['model_name']})\n")
+except ImportError:
+    logger.error("openai package not installed. Run: pip install openai")
     sys.exit(1)
+except Exception as e:
+    logger.error(f"Failed to initialize Azure OpenAI client: {e}")
+    sys.exit(1)
+
+
+def generate_query_embedding(query: str) -> List[float]:
+    """Generate embedding for a search query using Azure OpenAI."""
+    deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
+    response = azure_client.embeddings.create(
+        input=query,
+        model=deployment
+    )
+    return response.data[0].embedding
 
 
 def search_collection(
@@ -201,8 +225,8 @@ def search_subreddits(
     logger.info(f"   Source: {source}")
     logger.info(f"   Filters: min_subs={min_subscribers}, exclude_nsfw={exclude_nsfw}, type={subreddit_type}\n")
 
-    # Generate query embedding
-    query_embedding = model.encode(query, convert_to_numpy=True).tolist()
+    # Generate query embedding using Azure OpenAI
+    query_embedding = generate_query_embedding(query)
 
     all_results = []
 

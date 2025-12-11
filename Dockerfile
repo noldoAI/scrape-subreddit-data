@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy scraper-specific requirements (no PyTorch needed)
+COPY requirements-scraper.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (lightweight - no ML packages)
+RUN pip install --no-cache-dir -r requirements-scraper.txt
 
 # Copy application files
 COPY posts_scraper.py .

@@ -43,10 +43,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger('embedding-worker')
 
-# Thread-safe singleton for embedding model
-_model = None
-_model_lock = threading.Lock()
-_model_load_attempted = False
+# Thread-safe singleton for Azure OpenAI embedding client
+_embedding_client = None
+_embedding_client_lock = threading.Lock()
+_embedding_client_load_attempted = False
 
 # Thread-safe singleton for LLM enricher
 _enricher = None
@@ -54,42 +54,50 @@ _enricher_lock = threading.Lock()
 _enricher_load_attempted = False
 
 
-def get_embedding_model():
+def get_embedding_client():
     """
-    Lazy load the embedding model (thread-safe singleton).
+    Lazy load the Azure OpenAI embedding client (thread-safe singleton).
 
-    Returns model on success, None on failure (graceful degradation).
+    Returns client on success, None on failure (graceful degradation).
     """
-    global _model, _model_load_attempted
+    global _embedding_client, _embedding_client_load_attempted
 
-    if _model is not None:
-        return _model
+    if _embedding_client is not None:
+        return _embedding_client
 
-    with _model_lock:
+    with _embedding_client_lock:
         # Double-check after acquiring lock
-        if _model is not None:
-            return _model
+        if _embedding_client is not None:
+            return _embedding_client
 
-        if _model_load_attempted:
+        if _embedding_client_load_attempted:
             # Already tried and failed
             return None
 
-        _model_load_attempted = True
+        _embedding_client_load_attempted = True
 
         try:
-            logger.info("Loading nomic-embed-text-v2 model (this may take 10-30 seconds)...")
-            from sentence_transformers import SentenceTransformer
-            _model = SentenceTransformer(
-                EMBEDDING_CONFIG["model_name"],
-                trust_remote_code=EMBEDDING_CONFIG.get("trust_remote_code", True)
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+            api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+            if not endpoint or not api_key:
+                logger.warning("Azure OpenAI not configured - embedding generation disabled")
+                logger.warning("Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY environment variables")
+                return None
+
+            from openai import AzureOpenAI
+            _embedding_client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                api_key=api_key,
+                api_version=AZURE_OPENAI_CONFIG.get("api_version", "2024-02-01")
             )
-            logger.info(f"Embedding model loaded successfully ({EMBEDDING_CONFIG['dimensions']} dimensions)")
-            return _model
+            logger.info(f"Azure OpenAI embedding client initialized ({EMBEDDING_CONFIG['dimensions']} dimensions)")
+            return _embedding_client
         except ImportError:
-            logger.warning("sentence-transformers not installed, embedding generation disabled")
+            logger.warning("openai package not installed, embedding generation disabled")
             return None
         except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
+            logger.error(f"Failed to initialize Azure OpenAI client: {e}")
             return None
 
 
@@ -318,7 +326,7 @@ class EmbeddingWorker:
 
     def generate_embedding(self, metadata: Dict) -> tuple[Optional[List[float]], Optional[str]]:
         """
-        Generate embedding vector for a subreddit.
+        Generate embedding vector for a subreddit using Azure OpenAI.
 
         Args:
             metadata: Subreddit metadata document
@@ -328,27 +336,36 @@ class EmbeddingWorker:
             - (embedding, None) on success
             - (None, error_message) on failure
         """
-        model = get_embedding_model()
-        if model is None:
-            return None, "Embedding model not loaded (check sentence-transformers installation)"
+        client = get_embedding_client()
+        if client is None:
+            return None, "Azure OpenAI client not initialized (check AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY)"
 
         try:
             combined_text = combine_text_fields(metadata)
             if not combined_text or not combined_text.strip():
                 return None, "No text content available for embedding"
 
-            embedding = model.encode(combined_text, convert_to_numpy=True)
-            if embedding is None:
-                return None, "Model encode() returned None"
-            return embedding.tolist(), None
+            # Get deployment name from config or env
+            deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
+
+            response = client.embeddings.create(
+                input=combined_text,
+                model=deployment
+            )
+
+            if not response.data or len(response.data) == 0:
+                return None, "Azure OpenAI returned empty embedding response"
+
+            embedding = response.data[0].embedding
+            return embedding, None
         except Exception as e:
-            error_msg = f"Encoding failed: {str(e)}"
+            error_msg = f"Embedding generation failed: {str(e)}"
             logger.error(f"Embedding generation failed for r/{metadata.get('subreddit_name')}: {e}")
             return None, error_msg
 
     def generate_persona_embedding(self, metadata: Dict) -> tuple[Optional[List[float]], Optional[str]]:
         """
-        Generate persona-focused embedding vector for a subreddit.
+        Generate persona-focused embedding vector for a subreddit using Azure OpenAI.
 
         Requires llm_enrichment data to be present.
 
@@ -358,9 +375,9 @@ class EmbeddingWorker:
         Returns:
             Tuple of (embedding_vector, error_message)
         """
-        model = get_embedding_model()
-        if model is None:
-            return None, "Embedding model not loaded"
+        client = get_embedding_client()
+        if client is None:
+            return None, "Azure OpenAI client not initialized"
 
         if not metadata.get('llm_enrichment'):
             return None, "No LLM enrichment data available"
@@ -370,12 +387,21 @@ class EmbeddingWorker:
             if not combined_text or not combined_text.strip():
                 return None, "No text content available for persona embedding"
 
-            embedding = model.encode(combined_text, convert_to_numpy=True)
-            if embedding is None:
-                return None, "Model encode() returned None"
-            return embedding.tolist(), None
+            # Get deployment name from config or env
+            deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
+
+            response = client.embeddings.create(
+                input=combined_text,
+                model=deployment
+            )
+
+            if not response.data or len(response.data) == 0:
+                return None, "Azure OpenAI returned empty embedding response"
+
+            embedding = response.data[0].embedding
+            return embedding, None
         except Exception as e:
-            error_msg = f"Persona encoding failed: {str(e)}"
+            error_msg = f"Persona embedding generation failed: {str(e)}"
             logger.error(f"Persona embedding failed for r/{metadata.get('subreddit_name')}: {e}")
             return None, error_msg
 
@@ -612,7 +638,7 @@ class EmbeddingWorker:
         Returns:
             Dict with worker stats including enrichment and persona counts
         """
-        model = get_embedding_model()
+        client = get_embedding_client()
         enricher = get_llm_enricher()
 
         # Count documents with various embeddings/enrichments
@@ -629,7 +655,7 @@ class EmbeddingWorker:
 
         return {
             "running": self.running,
-            "model_loaded": model is not None,
+            "embedding_client_ready": client is not None,
             "enricher_loaded": enricher is not None,
             "total_processed": self._stats["processed"],
             "total_enriched": self._stats["enriched"],
@@ -746,8 +772,8 @@ def main():
 
         print("\n📊 Embedding Worker Statistics")
         print("=" * 60)
-        print(f"Model loaded:    {stats['model_loaded']}")
-        print(f"Enricher loaded: {stats['enricher_loaded']}")
+        print(f"Azure OpenAI client ready: {stats['embedding_client_ready']}")
+        print(f"Enricher loaded:           {stats['enricher_loaded']}")
         print()
         print("Pipeline Status:")
         print(f"  Pending:  {stats['pending_count']}")

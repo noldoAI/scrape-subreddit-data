@@ -2,7 +2,7 @@
 """
 Subreddit Embedding Generation Script
 
-Generates semantic embeddings for subreddits using nomic-embed-text-v2 model.
+Generates semantic embeddings for subreddits using Azure OpenAI text-embedding-3-small.
 Embeddings enable semantic search to find relevant subreddits by meaning rather than keywords.
 
 Usage:
@@ -15,10 +15,13 @@ import sys
 import argparse
 import logging
 from datetime import datetime, UTC
-from typing import List, Dict
+from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from pymongo import MongoClient
-import numpy as np
+
+# Add parent directory to path for imports when run from discovery/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import EMBEDDING_CONFIG, AZURE_OPENAI_CONFIG
 
 # Setup logging
 logging.basicConfig(
@@ -45,18 +48,31 @@ COLLECTIONS = {
     'metadata': db.subreddit_metadata
 }
 
-# Load sentence-transformers model
+# Initialize Azure OpenAI client
+azure_client = None
 try:
-    logger.info("Loading nomic-embed-text-v2 model...")
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
-    logger.info("✅ Model loaded successfully")
-    logger.info(f"   Model: nomic-embed-text-v2")
-    logger.info(f"   Dimensions: 768")
-    logger.info(f"   Context window: 8192 tokens")
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+    if not endpoint or not api_key:
+        logger.error("Azure OpenAI not configured")
+        logger.error("Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY environment variables")
+        sys.exit(1)
+
+    from openai import AzureOpenAI
+    azure_client = AzureOpenAI(
+        azure_endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_CONFIG.get("api_version", "2024-02-01")
+    )
+    logger.info("✅ Azure OpenAI client initialized")
+    logger.info(f"   Model: {EMBEDDING_CONFIG['model_name']}")
+    logger.info(f"   Dimensions: {EMBEDDING_CONFIG['dimensions']}")
+except ImportError:
+    logger.error("openai package not installed. Run: pip install openai")
+    sys.exit(1)
 except Exception as e:
-    logger.error(f"Failed to load model: {e}")
-    logger.error("Run: pip install sentence-transformers")
+    logger.error(f"Failed to initialize Azure OpenAI client: {e}")
     sys.exit(1)
 
 
@@ -180,26 +196,35 @@ def combine_text_for_persona_embedding(subreddit_doc: Dict) -> str:
     return combined
 
 
-def generate_subreddit_embedding(subreddit_doc: Dict, embedding_type: str = "combined") -> np.ndarray:
+def generate_subreddit_embedding(subreddit_doc: Dict, embedding_type: str = "combined") -> Optional[List[float]]:
     """
-    Generate embedding vector for a subreddit.
+    Generate embedding vector for a subreddit using Azure OpenAI.
 
     Args:
         subreddit_doc: MongoDB document with subreddit metadata
         embedding_type: "combined" (topic-focused) or "persona" (audience-focused)
 
     Returns:
-        768-dimensional embedding vector
+        1536-dimensional embedding vector (or None on failure)
     """
     if embedding_type == "persona":
         combined_text = combine_text_for_persona_embedding(subreddit_doc)
     else:
         combined_text = combine_text_fields(subreddit_doc)
 
-    # Generate embedding
-    embedding = model.encode(combined_text, convert_to_numpy=True)
+    # Get deployment name from config or env
+    deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
 
-    return embedding
+    # Generate embedding via Azure OpenAI
+    response = azure_client.embeddings.create(
+        input=combined_text,
+        model=deployment
+    )
+
+    if not response.data or len(response.data) == 0:
+        raise ValueError("Azure OpenAI returned empty embedding response")
+
+    return response.data[0].embedding
 
 
 def batch_generate_embeddings(
@@ -250,9 +275,9 @@ def batch_generate_embeddings(
 
     logger.info(f"\n📊 Generating {embedding_type.upper()} embeddings for {len(subreddits)} subreddits")
     logger.info(f"   Batch size: {batch_size}")
-    logger.info(f"   Model: nomic-embed-text-v2 (768 dimensions)")
+    logger.info(f"   Model: {EMBEDDING_CONFIG['model_name']} ({EMBEDDING_CONFIG['dimensions']} dimensions)")
     logger.info(f"   Embedding type: {embedding_type}")
-    logger.info(f"   Estimated time: ~{len(subreddits) * 2 // 60} minutes\n")
+    logger.info(f"   Estimated time: ~{len(subreddits) * 1 // 60} minutes\n")
 
     successful = 0
     failed = 0
@@ -266,13 +291,12 @@ def batch_generate_embeddings(
             # Generate embedding with specified type
             embedding = generate_subreddit_embedding(sub, embedding_type)
 
-            # Store embedding in database
+            # Store embedding in database (embedding is already a list from Azure OpenAI)
             update_fields = {
-                embedding_field: embedding.tolist(),
+                embedding_field: embedding,
                 "embeddings.generated_at": datetime.now(UTC),
-                "embeddings.model": "nomic-embed-text-v2",
-                "embeddings.dimensions": 768,
-                "embeddings.context_window": 8192
+                "embeddings.model": EMBEDDING_CONFIG["model_name"],
+                "embeddings.dimensions": EMBEDDING_CONFIG["dimensions"],
             }
 
             # Track embedding type
@@ -285,7 +309,7 @@ def batch_generate_embeddings(
             )
 
             successful += 1
-            logger.info(f"  ✓ {embedding_type.capitalize()} embedding saved ({embedding.shape[0]} dimensions)")
+            logger.info(f"  ✓ {embedding_type.capitalize()} embedding saved ({len(embedding)} dimensions)")
 
             # Progress update every 10 subreddits
             if i % 10 == 0:

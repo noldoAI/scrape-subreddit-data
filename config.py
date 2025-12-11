@@ -106,14 +106,13 @@ LOGGING_CONFIG = {
     "level": "INFO"
 }
 
-# Semantic Search & Embedding Configuration
+# Semantic Search & Embedding Configuration (Azure OpenAI)
 EMBEDDING_CONFIG = {
-    "model_name": "nomic-ai/nomic-embed-text-v1.5",  # Open source embedding model (v2 requires HF auth)
-    "dimensions": 768,                              # nomic-embed-text-v2 output dimensions
-    "context_window": 8192,                         # Maximum tokens per text
+    "model_name": "text-embedding-3-small",         # Azure OpenAI embedding model
+    "dimensions": 1536,                             # text-embedding-3-small output dimensions
+    "context_window": 8191,                         # Maximum tokens per text
     "batch_size": 32,                               # Batch size for embedding generation
     "similarity_metric": "cosine",                  # Distance metric for vector search
-    "trust_remote_code": True                       # Required for nomic-embed-text-v2
 }
 
 # Subreddit Discovery Configuration
@@ -137,10 +136,11 @@ EMBEDDING_WORKER_CONFIG = {
     "retry_delay": 300                              # Seconds to wait before retrying failed embeddings
 }
 
-# Azure OpenAI Configuration (for LLM enrichment)
+# Azure OpenAI Configuration (for LLM enrichment and embeddings)
 AZURE_OPENAI_CONFIG = {
     "api_version": "2024-02-01",                    # Azure OpenAI API version
-    "deployment_name": "gpt-4o-mini",               # Default deployment name
+    "deployment_name": "gpt-4o-mini",               # Default deployment name for chat
+    "embedding_deployment": "text-embedding-3-small",  # Deployment name for embeddings
     "max_tokens": 500,                              # Max tokens for enrichment response
     "temperature": 0.3,                             # Lower temperature for consistent output
     "enrichment_delay": 0.5,                        # Delay between API calls (seconds)
