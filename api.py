@@ -394,6 +394,7 @@ def load_scraper_from_db(subreddit: str, scraper_type: str = "posts") -> Optiona
         # Reconstruct ScraperConfig
         config = ScraperConfig(
             subreddit=subreddit,
+            subreddits=scraper_doc.get("subreddits", [subreddit]),  # Preserve multi-subreddit config
             scraper_type=scraper_doc.get("scraper_type", "posts"),
             posts_limit=scraper_doc["config"]["posts_limit"],
             interval=scraper_doc["config"]["interval"],
