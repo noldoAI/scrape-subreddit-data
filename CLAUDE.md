@@ -792,17 +792,17 @@ The system includes a **semantic search engine** for discovering relevant subred
 Search for subreddits by meaning: `"building b2b saas"` → finds r/SaaS, r/startups, r/Entrepreneur
 
 **Technology Stack**:
-- **Embedding Model**: `nomic-ai/nomic-embed-text-v1.5` (768 dimensions, trained on Reddit data)
+- **Embedding Model**: Azure OpenAI `text-embedding-3-small` (1536 dimensions)
 - **Vector Storage**: MongoDB Atlas Vector Search (HNSW indexing)
-- **Library**: `sentence-transformers` (100% open source)
-- **Cost**: $0 (local CPU inference, no API fees)
+- **Library**: `openai` (Azure OpenAI SDK)
+- **Cost**: ~$0.00002 per 1K tokens (very low cost API)
 
 ### **Key Features**
 
 1. **Semantic Understanding**: Finds relevant subreddits even without exact keyword matches
 2. **Context-Rich Embeddings**: Uses rules, guidelines, descriptions, and sample posts
 3. **Hybrid Search**: Combines semantic similarity with metadata filters (subscribers, NSFW, language)
-4. **100% Open Source**: No API costs, full control, runs on your infrastructure
+4. **Lightweight Deployment**: No local ML models, ~200MB Docker image (vs ~1.5GB with PyTorch)
 
 ### **Usage**
 
@@ -835,10 +835,10 @@ python discovery/generate_embeddings.py --force
 python discovery/generate_embeddings.py --stats
 ```
 
-**Performance** (CPU):
-- 10 subreddits: ~30 seconds
-- 100 subreddits: ~5 minutes
-- 1000 subreddits: ~45 minutes
+**Performance** (Azure OpenAI API):
+- 10 subreddits: ~5 seconds
+- 100 subreddits: ~30 seconds
+- 1000 subreddits: ~5 minutes
 
 #### **3. Setup Vector Search Index**
 
@@ -956,11 +956,11 @@ Shows embedding coverage and model information.
   "lang": "en",
   "advertiser_category": "Business / Finance",
 
-  // Embeddings (768 dimensions)
+  // Embeddings (1536 dimensions)
   "embeddings": {
-    "combined_embedding": [0.123, -0.456, ...],  // 768 floats
-    "model": "nomic-embed-text-v2",
-    "dimensions": 768,
+    "combined_embedding": [0.123, -0.456, ...],  // 1536 floats
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
     "generated_at": ISODate("2025-11-23...")
   }
 }
@@ -976,14 +976,13 @@ Shows embedding coverage and model information.
 
 ### **Embedding Model Details**
 
-**nomic-embed-text-v2**:
-- **Parameters**: 475M (MoE architecture)
-- **Dimensions**: 768
-- **Context Window**: 8,192 tokens
-- **Training Data**: 1.6B contrastive pairs including **Reddit posts/comments**
-- **MTEB Score**: 81.2% (excellent accuracy)
-- **Performance**: ~2-3 embeddings/second on CPU
-- **Advantage**: Explicitly trained on Reddit data, optimized for social media text
+**Azure OpenAI text-embedding-3-small**:
+- **Dimensions**: 1536
+- **Context Window**: 8,191 tokens
+- **MTEB Score**: 62.3% (good accuracy, optimized for speed/cost)
+- **Performance**: Very fast API calls (~100+ embeddings/second)
+- **Cost**: ~$0.00002 per 1K tokens
+- **Advantage**: Lightweight deployment, no local GPU/CPU inference needed
 
 ### **Example Queries**
 
@@ -998,43 +997,47 @@ Shows embedding coverage and model information.
 ### **Cost Analysis**
 
 **One-Time Setup**:
-- Model download: ~1.8 GB (cached locally)
-- PyTorch dependencies: ~6.9 GB total disk space
+- No model download required
+- Minimal disk space (~200MB Docker image)
 
 **Ongoing Costs**:
-- **Embedding generation**: $0 (CPU inference)
-- **Storage**: ~3 KB per subreddit (768 floats × 4 bytes)
-- **API calls**: $0 (no external APIs)
-- **Total**: Effectively **free** after initial setup
+- **Embedding generation**: ~$0.00002 per 1K tokens
+- **Storage**: ~6 KB per subreddit (1536 floats × 4 bytes)
+- **For 1000 subreddits × 2K tokens**: ~$0.04 (one-time)
+- **Total**: Very low cost (~$0.04 per 1000 subreddits)
 
-**Compare to OpenAI Embeddings**:
-- OpenAI: $0.0001 per 1K tokens
-- For 1000 subreddits × 2K tokens: ~$0.20/month
-- **Open source: $0** (infinite times cheaper)
+**Benefits vs Local Models**:
+- No GPU/large CPU required
+- Docker image: ~200MB (vs ~1.5GB with PyTorch)
+- Faster deployment and scaling
+- No model download/update management
 
 ### **Performance Expectations**
 
-**Embedding Generation** (CPU, batch_size=32):
-- 10 subreddits: ~30 seconds
-- 100 subreddits: ~5 minutes
-- 1000 subreddits: ~45 minutes
+**Embedding Generation** (Azure OpenAI API):
+- 10 subreddits: ~5 seconds
+- 100 subreddits: ~30 seconds
+- 1000 subreddits: ~5 minutes
 
 **Search Latency**:
-- Query embedding: ~20-50ms
+- Query embedding: ~50-100ms (API call)
 - Vector search (10K docs): <100ms
-- **Total**: <150ms per query
+- **Total**: <200ms per query
 
 **Accuracy**:
-- MTEB score: 81.2%
-- Trained on Reddit data
+- MTEB score: 62.3%
+- High-quality embeddings for semantic search
 - Captures semantic meaning effectively
 
 ### **Troubleshooting**
 
-**"Failed to load model"**:
+**"Failed to connect to Azure OpenAI"**:
 ```bash
-pip install sentence-transformers
-# Model will download automatically (~1.8GB)
+# Check environment variables are set
+echo $AZURE_OPENAI_ENDPOINT
+echo $AZURE_OPENAI_API_KEY
+# Verify deployment name (optional, defaults to text-embedding-3-small)
+echo $AZURE_EMBEDDING_DEPLOYMENT
 ```
 
 **"Vector search failed"**:
@@ -1053,9 +1056,9 @@ pip install sentence-transformers
 
 ```python
 EMBEDDING_CONFIG = {
-    "model_name": "nomic-ai/nomic-embed-text-v1.5",
-    "dimensions": 768,
-    "context_window": 8192,
+    "model_name": "text-embedding-3-small",
+    "dimensions": 1536,
+    "context_window": 8191,
     "batch_size": 32,
     "similarity_metric": "cosine"
 }
@@ -1178,10 +1181,10 @@ python discovery/setup_vector_index.py --collection metadata --embedding-type al
 
   // Embeddings
   "embeddings": {
-    "combined_embedding": [/* 768 floats - topic focused */],
-    "persona_embedding": [/* 768 floats - audience focused */],
-    "model": "nomic-embed-text-v2",
-    "dimensions": 768,
+    "combined_embedding": [/* 1536 floats - topic focused */],
+    "persona_embedding": [/* 1536 floats - audience focused */],
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
     "generated_at": ISODate("..."),
     "persona_generated_at": ISODate("...")
   }
@@ -1190,8 +1193,9 @@ python discovery/setup_vector_index.py --collection metadata --embedding-type al
 
 **Required Environment Variables:**
 ```bash
-# For LLM enrichment (Azure OpenAI)
+# For embeddings and LLM enrichment (Azure OpenAI)
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-api-key
+AZURE_EMBEDDING_DEPLOYMENT=text-embedding-3-small  # Optional, defaults to text-embedding-3-small
 AZURE_DEPLOYMENT_NAME=gpt-4o-mini  # Optional, defaults to gpt-4o-mini
 ```
