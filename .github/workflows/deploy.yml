@@ -1,0 +1,89 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'api.py'
+      - 'config.py'
+      - 'posts_scraper.py'
+      - 'comments_scraper.py'
+      - 'embedding_worker.py'
+      - 'rate_limits.py'
+      - 'metrics.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'Dockerfile.api'
+      - 'discovery/**'
+      - 'api/**'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need previous commit to detect changes
+
+      - name: Check if scraper files changed
+        id: changes
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -qE '^(posts_scraper\.py|comments_scraper\.py|config\.py|rate_limits\.py|metrics\.py|requirements\.txt|Dockerfile)$'; then
+            echo "scrapers_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "scrapers_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy to Azure VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AZURE_HOST }}
+          username: ${{ secrets.AZURE_USER }}
+          key: ${{ secrets.AZURE_SSH_KEY }}
+          script: |
+            cd ~/scrape-subreddit-data
+            git pull origin main
+
+            # Rebuild both images
+            echo "Building Docker images..."
+            docker build -f Dockerfile -t reddit-scraper .
+            docker compose -f docker-compose.api.yml build --no-cache
+
+            # Restart API
+            echo "Restarting API container..."
+            docker compose -f docker-compose.api.yml up -d
+
+            # Wait for API to be healthy
+            sleep 15
+            curl -f http://localhost:8000/health || exit 1
+            echo "API deployment successful!"
+
+      - name: Restart scrapers (if needed)
+        if: steps.changes.outputs.scrapers_changed == 'true'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AZURE_HOST }}
+          username: ${{ secrets.AZURE_USER }}
+          key: ${{ secrets.AZURE_SSH_KEY }}
+          script: |
+            echo "Scraper code changed - restarting all scrapers..."
+
+            # Get list of running scraper containers
+            POSTS_SCRAPERS=$(docker ps --filter "name=reddit-posts-scraper-" -q)
+            COMMENTS_SCRAPERS=$(docker ps --filter "name=reddit-comments-scraper-" -q)
+
+            # Stop all scrapers
+            if [ -n "$POSTS_SCRAPERS" ]; then
+              docker stop $POSTS_SCRAPERS
+              echo "Stopped posts scrapers"
+            fi
+            if [ -n "$COMMENTS_SCRAPERS" ]; then
+              docker stop $COMMENTS_SCRAPERS
+              echo "Stopped comments scrapers"
+            fi
+
+            # Scrapers will auto-restart via API's auto_restart feature
+            # Or user can restart them from dashboard
+            echo "Scrapers stopped. They will auto-restart or can be started from dashboard."
