@@ -832,6 +832,46 @@ def run_multi_subreddit_scraping(subreddit_names, config):
 
 
 def main():
+    # ===== DEBUG STARTUP BANNER =====
+    print("=" * 60)
+    print("🚀 REDDIT POSTS SCRAPER STARTING")
+    print("=" * 60)
+    print(f"📅 Timestamp: {datetime.now(UTC).isoformat()}")
+    print(f"🐍 Python version: {sys.version}")
+    print(f"📁 Working directory: {os.getcwd()}")
+    print()
+
+    # Debug environment variables (masked)
+    print("🔧 Environment Variables:")
+    print(f"   MONGODB_URI: {'✅ Set' if os.getenv('MONGODB_URI') else '❌ NOT SET'}")
+    print(f"   R_CLIENT_ID: {'✅ Set' if os.getenv('R_CLIENT_ID') else '❌ NOT SET'}")
+    print(f"   R_CLIENT_SECRET: {'✅ Set' if os.getenv('R_CLIENT_SECRET') else '❌ NOT SET'}")
+    print(f"   R_USERNAME: {os.getenv('R_USERNAME', 'NOT SET')}")
+    print(f"   R_USER_AGENT: {os.getenv('R_USER_AGENT', 'NOT SET')[:50]}...")
+    print()
+
+    # Test MongoDB connection
+    print("🔌 Testing MongoDB connection...")
+    try:
+        db_info = client.server_info()
+        print(f"   ✅ Connected to MongoDB {db_info.get('version', 'unknown')}")
+        print(f"   Database: {DATABASE_NAME}")
+        print(f"   Posts collection: {COLLECTIONS['POSTS']}")
+    except Exception as e:
+        print(f"   ❌ MongoDB connection failed: {e}")
+    print()
+
+    # Test Reddit connection
+    print("🔌 Testing Reddit API connection...")
+    try:
+        me = reddit.user.me()
+        print(f"   ✅ Reddit authenticated as: u/{me}")
+    except Exception as e:
+        print(f"   ❌ Reddit authentication failed: {e}")
+    print("=" * 60)
+    print()
+    # ===== END DEBUG BANNER =====
+
     parser = argparse.ArgumentParser(description="Reddit Posts Scraper")
     parser.add_argument("subreddits", help="Subreddit name(s) to scrape - single name or comma-separated (e.g., 'stocks,investing,wallstreetbets')")
     parser.add_argument("--stats", action="store_true", help="Show statistics only")
@@ -842,6 +882,8 @@ def main():
     parser.add_argument("--metrics-port", type=int, default=9100, help="Port for Prometheus metrics server")
 
     args = parser.parse_args()
+
+    print(f"📋 Parsed arguments: subreddits={args.subreddits}, posts_limit={args.posts_limit}, interval={args.interval}")
 
     # Start Prometheus metrics server if available
     if PROMETHEUS_ENABLED and not args.stats and not args.metadata_only:
