@@ -1637,10 +1637,8 @@ async def dashboard():
                     // Save expanded state before refresh
                     const expandedScrapers = new Set();
                     document.querySelectorAll('.scraper.expanded').forEach(el => {
-                        const h3 = el.querySelector('h3');
-                        if (h3) {
-                            const match = h3.textContent.match(/r\/([^\s+]+)/);
-                            if (match) expandedScrapers.add(match[1]);
+                        if (el.dataset.subreddit) {
+                            expandedScrapers.add(el.dataset.subreddit);
                         }
                     });
 
@@ -1708,6 +1706,7 @@ async def dashboard():
 
                         const div = document.createElement('div');
                         div.className = `scraper ${statusClass}`;
+                        div.dataset.subreddit = subreddit;
                         div.innerHTML = `
                             <div class="scraper-header" onclick="toggleScraper(this)">
                                 <div class="scraper-title">
@@ -1789,6 +1788,8 @@ async def dashboard():
                         // Restore expanded state
                         if (expandedScrapers.has(subreddit)) {
                             div.classList.add('expanded');
+                            const details = div.querySelector('.scraper-details');
+                            if (details) details.classList.add('show');
                         }
                     });
                 } catch (error) {
