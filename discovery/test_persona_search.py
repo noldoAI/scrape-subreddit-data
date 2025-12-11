@@ -23,6 +23,10 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from openai import AzureOpenAI
 
+# Add parent directory to path for imports when run from discovery/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import AZURE_OPENAI_CONFIG, EMBEDDING_CONFIG
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +47,7 @@ client = MongoClient(MONGODB_URI)
 db = client.noldo
 subreddit_metadata_collection = db.subreddit_metadata
 
-# Azure OpenAI client for query expansion
+# Azure OpenAI client for query expansion and embeddings
 azure_client = None
 try:
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -52,21 +56,25 @@ try:
         azure_client = AzureOpenAI(
             azure_endpoint=endpoint,
             api_key=api_key,
-            api_version="2024-02-01"
+            api_version=AZURE_OPENAI_CONFIG.get("api_version", "2024-02-01")
         )
-        logger.info("Azure OpenAI client initialized for query expansion")
+        logger.info(f"Azure OpenAI client initialized ({EMBEDDING_CONFIG['model_name']})")
+    else:
+        logger.error("Azure OpenAI not configured. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY")
+        sys.exit(1)
 except Exception as e:
-    logger.warning(f"Azure OpenAI not available: {e}")
-
-# Load embedding model
-try:
-    from sentence_transformers import SentenceTransformer
-    logger.info("Loading embedding model...")
-    model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
-    logger.info("Model loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load model: {e}")
+    logger.error(f"Failed to initialize Azure OpenAI: {e}")
     sys.exit(1)
+
+
+def generate_query_embedding(query: str) -> List[float]:
+    """Generate embedding for a search query using Azure OpenAI."""
+    deployment = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", AZURE_OPENAI_CONFIG.get("embedding_deployment", "text-embedding-3-small"))
+    response = azure_client.embeddings.create(
+        input=query,
+        model=deployment
+    )
+    return response.data[0].embedding
 
 
 def expand_product_query(product: str) -> Optional[str]:
@@ -141,8 +149,8 @@ def search_persona(
     Returns:
         List of matching subreddits with scores
     """
-    # Generate query embedding
-    query_embedding = model.encode(query, convert_to_numpy=True).tolist()
+    # Generate query embedding using Azure OpenAI
+    query_embedding = generate_query_embedding(query)
 
     # Determine which embedding field to search
     embedding_field = "embeddings.persona_embedding" if embedding_type == "persona" else "embeddings.combined_embedding"

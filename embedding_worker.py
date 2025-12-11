@@ -3,9 +3,9 @@
 Background Embedding Worker
 
 Processes subreddit metadata that has embedding_status: "pending" and generates:
-1. Combined embeddings (topic-focused) using nomic-embed-text-v2
+1. Combined embeddings (topic-focused) using Azure OpenAI text-embedding-3-small
 2. LLM enrichment (audience profiles) using Azure GPT-4o-mini
-3. Persona embeddings (audience-focused) using nomic-embed-text-v2
+3. Persona embeddings (audience-focused) using Azure OpenAI text-embedding-3-small
 
 This module can be:
 1. Imported and run as a background thread in the API server
