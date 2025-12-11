@@ -12,6 +12,7 @@ on:
       - 'rate_limits.py'
       - 'metrics.py'
       - 'requirements.txt'
+      - 'requirements-scraper.txt'
       - 'Dockerfile'
       - 'Dockerfile.api'
       - 'discovery/**'
@@ -30,7 +31,7 @@ jobs:
       - name: Check if scraper files changed
         id: changes
         run: |
-          if git diff --name-only HEAD~1 HEAD | grep -qE '^(posts_scraper\.py|comments_scraper\.py|config\.py|rate_limits\.py|metrics\.py|requirements\.txt|Dockerfile)$'; then
+          if git diff --name-only HEAD~1 HEAD | grep -qE '^(posts_scraper\.py|comments_scraper\.py|config\.py|rate_limits\.py|metrics\.py|requirements\.txt|requirements-scraper\.txt|Dockerfile)$'; then
             echo "scrapers_changed=true" >> $GITHUB_OUTPUT
           else
             echo "scrapers_changed=false" >> $GITHUB_OUTPUT
