@@ -1269,7 +1269,7 @@ async def dashboard():
             /* Subreddit Grid in Details */
             .subreddit-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
                 gap: 8px;
                 margin: 16px 0;
             }
@@ -1278,22 +1278,32 @@ async def dashboard():
                 background: var(--bg-elevated);
                 border: 1px solid var(--border-subtle);
                 border-radius: var(--radius-sm);
-                padding: 10px 14px;
-                font-size: 0.85rem;
+                padding: 8px 12px;
+                font-size: 0.8rem;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+                gap: 8px;
+                overflow: hidden;
+                min-width: 0;
             }
 
             .subreddit-chip .name {
                 color: var(--accent-purple);
                 font-weight: 500;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
+                flex: 1;
             }
 
             .subreddit-chip .stats {
                 font-family: var(--font-mono);
-                font-size: 0.75rem;
+                font-size: 0.7rem;
                 color: var(--text-muted);
+                white-space: nowrap;
+                flex-shrink: 0;
             }
 
             /* Database Stats Box */
@@ -1824,6 +1834,68 @@ async def dashboard():
                 color: var(--text-primary);
             }
 
+            /* Account Cards */
+            .account-card {
+                background: var(--bg-card);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-md);
+                padding: 16px 20px;
+                margin-bottom: 8px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 16px;
+                transition: all 0.2s;
+            }
+
+            .account-card:hover {
+                border-color: var(--border-hover);
+                background: var(--bg-hover);
+            }
+
+            .account-info {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+
+            .account-name {
+                font-family: var(--font-display);
+                font-weight: 600;
+                color: var(--text-primary);
+                font-size: 1rem;
+            }
+
+            .account-username {
+                color: var(--text-muted);
+                font-size: 0.8rem;
+                font-family: var(--font-mono);
+            }
+
+            .account-stats {
+                display: flex;
+                gap: 24px;
+            }
+
+            .account-stat {
+                text-align: center;
+                min-width: 60px;
+            }
+
+            .account-stat-value {
+                font-family: var(--font-mono);
+                font-size: 1.25rem;
+                font-weight: 600;
+                color: var(--text-primary);
+            }
+
+            .account-stat-label {
+                font-size: 0.65rem;
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
             /* Empty State */
             .empty-state {
                 text-align: center;
@@ -1901,6 +1973,9 @@ async def dashboard():
 
             <!-- Scrapers List -->
             <div id="scrapers"></div>
+
+            <!-- Reddit Accounts -->
+            <section id="accounts" style="margin-top: 32px;"></section>
 
             <!-- Start New Scraper -->
             <section style="margin-top: 48px;">
@@ -2284,7 +2359,66 @@ async def dashboard():
                     `;
                 }
             }
-            
+
+            async function loadAccountStats() {
+                const container = document.getElementById('accounts');
+                if (!container) return;
+
+                try {
+                    const response = await fetch('/accounts/stats');
+                    const stats = await response.json();
+                    const accounts = Object.values(stats);
+
+                    container.innerHTML = `
+                        <div class="section-header">
+                            <h2 class="section-title">Reddit Accounts <span class="count">${accounts.length}</span></h2>
+                            <button onclick="showAccountManager()" class="stats">Manage</button>
+                        </div>
+                    `;
+
+                    if (accounts.length === 0) {
+                        container.innerHTML += `
+                            <div class="empty-state" style="padding: 40px 20px;">
+                                <div class="empty-state-icon">🔑</div>
+                                <p class="empty-state-text">No saved accounts</p>
+                                <p class="empty-state-hint">Add an account to start scraping</p>
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    accounts.forEach(account => {
+                        const statusColor = account.running_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)';
+                        container.innerHTML += `
+                            <div class="account-card">
+                                <div class="account-info">
+                                    <div>
+                                        <div class="account-name">${account.account_name}</div>
+                                        <div class="account-username">u/${account.username}</div>
+                                    </div>
+                                </div>
+                                <div class="account-stats">
+                                    <div class="account-stat">
+                                        <div class="account-stat-value" style="color: ${statusColor}">${account.running_count}</div>
+                                        <div class="account-stat-label">Active</div>
+                                    </div>
+                                    <div class="account-stat">
+                                        <div class="account-stat-value">${account.scraper_count}</div>
+                                        <div class="account-stat-label">Scrapers</div>
+                                    </div>
+                                    <div class="account-stat">
+                                        <div class="account-stat-value">${account.subreddit_count}</div>
+                                        <div class="account-stat-label">Subreddits</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } catch (error) {
+                    console.error('Error loading account stats:', error);
+                }
+            }
+
             function toggleScraper(header) {
                 const scraper = header.closest('.scraper');
                 const details = scraper.querySelector('.scraper-details');
@@ -2493,7 +2627,7 @@ async def dashboard():
                                             <span class="meta-label">Restarts</span>
                                             <span class="meta-value">${restartCount}</span>
                                         </div>
-                                        <div class="meta-item">
+                                        <div class="meta-item" style="width: 70px;">
                                             <span class="meta-label">Auto-restart</span>
                                             <label class="toggle">
                                                 <input type="checkbox" ${autoRestart ? 'checked' : ''} onchange="toggleAutoRestart('${subreddit}', this.checked)">
@@ -2979,9 +3113,11 @@ ${logs.logs}
             loadScrapers();
             loadHealthStatus();
             loadSavedAccounts();
+            loadAccountStats();
             setInterval(() => {
                 loadScrapers();
                 loadHealthStatus();
+                loadAccountStats();
             }, 15000);
         </script>
     </body>
@@ -4003,6 +4139,45 @@ async def get_account_info(account_name: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting account info: {str(e)}")
+
+@app.get("/accounts/stats")
+async def get_accounts_stats():
+    """Get account usage statistics - scrapers and subreddits per account"""
+    try:
+        accounts = list(accounts_collection.find({}))
+        scrapers = list(scrapers_collection.find({}))
+
+        stats = {}
+        for account in accounts:
+            username = account["username"]
+            account_name = account["account_name"]
+
+            # Find scrapers using this account (match by username)
+            using_scrapers = [s for s in scrapers if s.get("credentials", {}).get("username") == username]
+
+            # Count subreddits (handle multi-subreddit scrapers)
+            subreddits = set()
+            for s in using_scrapers:
+                subs = s.get("subreddits", [s.get("subreddit")])
+                if subs:
+                    subreddits.update([sub for sub in subs if sub])
+
+            running_count = sum(1 for s in using_scrapers if s.get("status") == "running")
+
+            stats[account_name] = {
+                "account_name": account_name,
+                "username": username,
+                "scraper_count": len(using_scrapers),
+                "subreddit_count": len(subreddits),
+                "running_count": running_count,
+                "subreddits": sorted(list(subreddits)),
+                "created_at": account.get("created_at")
+            }
+
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting account stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting account stats: {str(e)}")
 
 @app.post("/scrapers/restart-all-failed")
 async def restart_all_failed_scrapers(background_tasks: BackgroundTasks):
