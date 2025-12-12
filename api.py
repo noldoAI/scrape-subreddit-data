@@ -4111,35 +4111,6 @@ async def save_account(account_name: str, credentials: RedditCredentials):
     else:
         raise HTTPException(status_code=500, detail="Failed to save account")
 
-@app.delete("/accounts/{account_name}")
-async def delete_account(account_name: str):
-    """Delete a saved Reddit account"""
-    success = delete_reddit_account(account_name)
-    if success:
-        return {"message": f"Account '{account_name}' deleted successfully"}
-    else:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-@app.get("/accounts/{account_name}")
-async def get_account_info(account_name: str):
-    """Get account info (without sensitive credentials)"""
-    try:
-        accounts = load_saved_accounts()
-        if account_name not in accounts:
-            raise HTTPException(status_code=404, detail="Account not found")
-        
-        account = accounts[account_name]
-        return {
-            "account_name": account_name,
-            "username": account["username"],
-            "user_agent": account["user_agent"],
-            "created_at": account.get("created_at")
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting account info: {str(e)}")
-
 @app.get("/accounts/stats")
 async def get_accounts_stats():
     """Get account usage statistics - scrapers and subreddits per account"""
@@ -4178,6 +4149,35 @@ async def get_accounts_stats():
     except Exception as e:
         logger.error(f"Error getting account stats: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting account stats: {str(e)}")
+
+@app.delete("/accounts/{account_name}")
+async def delete_account(account_name: str):
+    """Delete a saved Reddit account"""
+    success = delete_reddit_account(account_name)
+    if success:
+        return {"message": f"Account '{account_name}' deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+@app.get("/accounts/{account_name}")
+async def get_account_info(account_name: str):
+    """Get account info (without sensitive credentials)"""
+    try:
+        accounts = load_saved_accounts()
+        if account_name not in accounts:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        account = accounts[account_name]
+        return {
+            "account_name": account_name,
+            "username": account["username"],
+            "user_agent": account["user_agent"],
+            "created_at": account.get("created_at")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting account info: {str(e)}")
 
 @app.post("/scrapers/restart-all-failed")
 async def restart_all_failed_scrapers(background_tasks: BackgroundTasks):
