@@ -837,6 +837,7 @@ async def dashboard():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Reddit Scraper · Mission Control</title>
+        <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%23050810' width='32' height='32' rx='6'/><circle cx='16' cy='16' r='8' fill='none' stroke='%2300e5ff' stroke-width='2'/><circle cx='16' cy='16' r='4' fill='%2300e5ff'/><line x1='16' y1='8' x2='16' y2='2' stroke='%2300e5ff' stroke-width='2' stroke-linecap='round'/></svg>">
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
@@ -1451,6 +1452,38 @@ async def dashboard():
             }
 
             @keyframes spin { to { transform: rotate(360deg); } }
+
+            /* Skeleton Loading */
+            .scrapers-loading {
+                display: flex;
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .skeleton-card {
+                background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-secondary) 50%, var(--bg-tertiary) 75%);
+                background-size: 200% 100%;
+                animation: shimmer 1.5s infinite;
+                border-radius: var(--radius-md);
+                height: 80px;
+                border: 1px solid var(--border-subtle);
+            }
+
+            @keyframes shimmer {
+                0% { background-position: 200% 0; }
+                100% { background-position: -200% 0; }
+            }
+
+            .error-state {
+                text-align: center;
+                padding: 3rem;
+                color: var(--text-secondary);
+            }
+
+            .error-state p {
+                margin: 1rem 0;
+                color: var(--text-secondary);
+            }
 
             /* Form Elements */
             input, select, textarea {
@@ -2294,6 +2327,8 @@ async def dashboard():
             }
 
             async function loadScrapers() {
+                const container = document.getElementById('scrapers');
+
                 try {
                     // Save expanded state before refresh
                     const expandedScrapers = new Set();
@@ -2303,9 +2338,22 @@ async def dashboard():
                         }
                     });
 
+                    // Show skeleton loading on first load
+                    if (!container.querySelector('.scraper')) {
+                        container.innerHTML = `
+                            <div class="section-header">
+                                <h2 class="section-title">Active Scrapers</h2>
+                            </div>
+                            <div class="scrapers-loading">
+                                <div class="skeleton-card"></div>
+                                <div class="skeleton-card"></div>
+                                <div class="skeleton-card"></div>
+                            </div>
+                        `;
+                    }
+
                     const response = await fetch('/scrapers');
                     const scrapers = await response.json();
-                    const container = document.getElementById('scrapers');
                     const scraperCount = Object.keys(scrapers).length;
 
                     // Calculate totals across all scrapers
@@ -2500,6 +2548,16 @@ async def dashboard():
                     });
                 } catch (error) {
                     console.error('Error loading scrapers:', error);
+                    container.innerHTML = `
+                        <div class="section-header">
+                            <h2 class="section-title">Active Scrapers</h2>
+                        </div>
+                        <div class="error-state">
+                            <span style="font-size: 2rem;">⚠️</span>
+                            <p>Failed to load scrapers</p>
+                            <button onclick="loadScrapers()" class="btn btn-secondary">Retry</button>
+                        </div>
+                    `;
                 }
             }
             
