@@ -1648,8 +1648,8 @@ async def dashboard():
                 border: 1px solid var(--accent-red);
             }
 
-            /* Toggle Switch */
-            .toggle { position: relative; display: inline-block; width: 52px; height: 28px; }
+            /* Toggle Switch - Compact */
+            .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
             .toggle input { opacity: 0; width: 0; height: 0; }
 
             .slider {
@@ -1662,16 +1662,16 @@ async def dashboard():
                 background-color: var(--bg-elevated);
                 border: 1px solid var(--border-default);
                 transition: .3s;
-                border-radius: 28px;
+                border-radius: 20px;
             }
 
             .slider:before {
                 position: absolute;
                 content: "";
-                height: 20px;
-                width: 20px;
-                left: 3px;
-                bottom: 3px;
+                height: 14px;
+                width: 14px;
+                left: 2px;
+                bottom: 2px;
                 background-color: var(--text-muted);
                 transition: .3s;
                 border-radius: 50%;
@@ -1683,28 +1683,29 @@ async def dashboard():
             }
 
             input:checked + .slider:before {
-                transform: translateX(24px);
+                transform: translateX(16px);
                 background-color: white;
             }
 
-            /* Sorting Options */
+            /* Sorting Options - Compact Chips */
             .sorting-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-                gap: 12px;
-                margin-top: 8px;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin-top: 4px;
             }
 
             .sorting-option {
-                display: flex;
+                display: inline-flex;
                 align-items: center;
-                gap: 10px;
-                padding: 12px 16px;
+                gap: 6px;
+                padding: 6px 12px;
                 background: var(--bg-elevated);
                 border: 1px solid var(--border-subtle);
-                border-radius: var(--radius-sm);
+                border-radius: 16px;
                 cursor: pointer;
                 transition: all 0.2s;
+                font-size: 0.8rem;
             }
 
             .sorting-option:hover {
@@ -1712,9 +1713,14 @@ async def dashboard():
                 background: var(--bg-hover);
             }
 
+            .sorting-option:has(input:checked) {
+                border-color: var(--accent-cyan);
+                background: rgba(0, 229, 255, 0.1);
+            }
+
             .sorting-option input {
-                width: 18px;
-                height: 18px;
+                width: 14px;
+                height: 14px;
                 margin: 0;
                 accent-color: var(--accent-cyan);
             }
@@ -1722,11 +1728,9 @@ async def dashboard():
             .sorting-option .sort-name {
                 font-weight: 500;
                 color: var(--text-primary);
-            }
-
-            .sorting-option .sort-desc {
-                font-size: 0.75rem;
-                color: var(--text-muted);
+                text-transform: uppercase;
+                font-size: 0.7rem;
+                letter-spacing: 0.5px;
             }
 
             /* Loading Overlay */
@@ -1974,43 +1978,28 @@ async def dashboard():
                 </div>
             </div>
 
-            <div class="form-row" style="margin-top: 20px; align-items: flex-start;">
-                <label style="padding-top: 8px;">Sorting:</label>
+            <div class="form-row" style="margin-top: 16px;">
+                <label>Sorting:</label>
                 <div class="sorting-grid">
                     <label class="sorting-option">
                         <input type="checkbox" name="sorting" value="new" checked>
-                        <div>
-                            <span class="sort-name">new</span>
-                            <span class="sort-desc">100% coverage</span>
-                        </div>
+                        <span class="sort-name">new</span>
                     </label>
                     <label class="sorting-option">
                         <input type="checkbox" name="sorting" value="hot" checked>
-                        <div>
-                            <span class="sort-name">hot</span>
-                            <span class="sort-desc">trending</span>
-                        </div>
+                        <span class="sort-name">hot</span>
                     </label>
                     <label class="sorting-option">
                         <input type="checkbox" name="sorting" value="rising" checked>
-                        <div>
-                            <span class="sort-name">rising</span>
-                            <span class="sort-desc">early detection</span>
-                        </div>
+                        <span class="sort-name">rising</span>
                     </label>
                     <label class="sorting-option">
                         <input type="checkbox" name="sorting" value="top">
-                        <div>
-                            <span class="sort-name">top</span>
-                            <span class="sort-desc">daily best</span>
-                        </div>
+                        <span class="sort-name">top</span>
                     </label>
                     <label class="sorting-option">
                         <input type="checkbox" name="sorting" value="controversial">
-                        <div>
-                            <span class="sort-name">controversial</span>
-                            <span class="sort-desc">divisive</span>
-                        </div>
+                        <span class="sort-name">controversial</span>
                     </label>
                 </div>
             </div>
