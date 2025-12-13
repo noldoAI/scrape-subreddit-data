@@ -4011,8 +4011,8 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
     if len(subreddits) > max_subreddits:
         raise HTTPException(status_code=400, detail=f"Maximum {max_subreddits} subreddits per container")
 
-    # Clean subreddit names
-    subreddits = [s.strip() for s in subreddits if s.strip()]
+    # Clean subreddit names (lowercase for consistency)
+    subreddits = [s.strip().lower() for s in subreddits if s.strip()]
     if not subreddits:
         raise HTTPException(status_code=400, detail="No valid subreddit names provided")
 
