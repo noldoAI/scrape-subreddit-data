@@ -23,6 +23,7 @@ COPY comments_scraper.py .
 COPY config.py .
 COPY rate_limits.py .
 COPY metrics.py .
+COPY azure_logging.py .
 COPY .env* ./
 
 # Expose Prometheus metrics port
