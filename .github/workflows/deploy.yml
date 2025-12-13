@@ -11,6 +11,7 @@ on:
       - 'embedding_worker.py'
       - 'rate_limits.py'
       - 'metrics.py'
+      - 'azure_logging.py'
       - 'requirements.txt'
       - 'requirements-scraper.txt'
       - 'Dockerfile'
