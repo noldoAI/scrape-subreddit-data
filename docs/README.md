@@ -459,6 +459,20 @@ export TELEGRAM_CHAT_ID=your_chat_id
 # - HighCPU/HighMemory/DiskSpaceLow
 ```
 
+**Azure Application Insights (Cloud Logging):**
+
+Centralized logging for errors and warnings in Azure cloud:
+
+```bash
+# Add to .env
+APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx;IngestionEndpoint=https://xxx.in.applicationinsights.azure.com/
+```
+
+- WARNING+ logs (errors, warnings, critical) sent to Azure
+- INFO logs stay local only (no flooding)
+- Query via Azure Portal → Application Insights → Logs
+- Example query: `traces | where severityLevel >= 2 | order by timestamp desc`
+
 ### **Automatic Health Checks**
 
 ```

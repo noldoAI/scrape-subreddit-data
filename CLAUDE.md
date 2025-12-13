@@ -738,6 +738,60 @@ export TELEGRAM_CHAT_ID=your_chat_id
 | `monitoring/grafana/dashboards/infrastructure.json` | Host/container metrics |
 | `metrics.py` | Prometheus metrics module |
 
+## Azure Application Insights Logging
+
+Centralized cloud logging for errors and warnings via Azure Application Insights.
+
+### Setup
+
+1. **Create Application Insights resource** in Azure Portal
+2. **Get connection string** from Overview page
+3. **Add to `.env`**:
+```bash
+APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx;IngestionEndpoint=https://xxx.in.applicationinsights.azure.com/
+```
+
+### How It Works
+
+- **WARNING+ logs** (warnings, errors, critical) are sent to Azure
+- **INFO logs** stay local only (no flooding)
+- **Graceful degradation**: If connection string not set, only console logging
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `azure_logging.py` | Logging helper module |
+| `requirements.txt` | Contains `opencensus-ext-azure` |
+| `requirements-scraper.txt` | Contains `opencensus-ext-azure` for scraper containers |
+
+### Viewing Logs in Azure Portal
+
+1. Go to **Application Insights** → your resource → **Logs**
+2. Run Kusto queries:
+
+```kusto
+# All warnings and errors
+traces
+| where severityLevel >= 2
+| order by timestamp desc
+
+# Filter by logger
+traces
+| where customDimensions.logger contains "posts-scraper"
+| order by timestamp desc
+```
+
+### Severity Levels
+
+| Level | Number | Sent to Azure |
+|-------|--------|---------------|
+| DEBUG | 0 | No |
+| INFO | 1 | No |
+| WARNING | 2 | Yes |
+| ERROR | 3 | Yes |
+| CRITICAL | 4 | Yes |
+
 ## Configuration Presets
 
 The system includes presets optimized for **5 scrapers per Reddit account** (v1.2+ with depth limiting):
