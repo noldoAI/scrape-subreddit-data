@@ -49,15 +49,21 @@ def setup_azure_logging(logger_name: str, level=logging.INFO) -> logging.Logger:
     if conn_str and not _azure_configured:
         try:
             from azure.monitor.opentelemetry import configure_azure_monitor
+            from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
-            # Configure Azure Monitor with the logger name
-            # This exports logs from the named logger to Azure
+            # Set cloud role name (for filtering in Azure Portal)
+            # Can be overridden via OTEL_SERVICE_NAME env var
+            service_name = os.getenv("OTEL_SERVICE_NAME", "reddit-scraper")
+            resource = Resource.create({SERVICE_NAME: service_name})
+
+            # Configure Azure Monitor with the logger name and service name
             configure_azure_monitor(
                 connection_string=conn_str,
                 logger_name=logger_name,
+                resource=resource,
             )
             _azure_configured = True
-            logger.info(f"Azure Application Insights enabled (OpenTelemetry)")
+            logger.info(f"Azure Application Insights enabled (OpenTelemetry) - cloud_RoleName: {service_name}")
         except ImportError:
             logger.warning("azure-monitor-opentelemetry not installed, Azure logging disabled")
         except Exception as e:
