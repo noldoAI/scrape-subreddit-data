@@ -459,9 +459,9 @@ export TELEGRAM_CHAT_ID=your_chat_id
 # - HighCPU/HighMemory/DiskSpaceLow
 ```
 
-**Azure Application Insights (Cloud Logging):**
+**Azure Application Insights (Cloud Logging via OpenTelemetry):**
 
-Centralized logging for errors and warnings in Azure cloud:
+Centralized logging for errors and warnings in Azure cloud (uses `azure-monitor-opentelemetry`):
 
 ```bash
 # Add to .env

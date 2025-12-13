@@ -8,6 +8,17 @@ Each scraper can use unique Reddit API credentials to avoid rate limit conflicts
 Includes persistent storage and automatic restart capabilities.
 """
 
+# CRITICAL: For OpenTelemetry/Azure Monitor, configure logging BEFORE importing FastAPI
+# This ensures proper instrumentation of the FastAPI framework
+import logging
+from dotenv import load_dotenv
+load_dotenv()
+
+from config import LOGGING_CONFIG
+from azure_logging import setup_azure_logging
+logger = setup_azure_logging("reddit-scraper-api", level=getattr(logging, LOGGING_CONFIG["level"]))
+
+# Now import FastAPI and other dependencies
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
@@ -19,19 +30,17 @@ import os
 import signal
 from datetime import datetime, UTC
 import pymongo
-from dotenv import load_dotenv
 import json
 import base64
 import hashlib
 from cryptography.fernet import Fernet
 import asyncio
-import logging
 import re
 
 # Import centralized configuration
 from config import (
     DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG,
-    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG,
+    MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG,
     EMBEDDING_WORKER_CONFIG, AZURE_OPENAI_CONFIG, MULTI_SCRAPER_CONFIG
 )
 
@@ -41,15 +50,6 @@ from metrics import (
     scraper_up, database_connected, docker_available as docker_available_metric,
     CONTENT_TYPE_LATEST
 )
-
-# Import Azure logging helper
-from azure_logging import setup_azure_logging
-
-# Load environment variables (fallback defaults)
-load_dotenv()
-
-# Configure logging with Azure Application Insights support
-logger = setup_azure_logging("reddit-scraper-api", level=getattr(logging, LOGGING_CONFIG["level"]))
 
 app = FastAPI(
     title=API_CONFIG["title"],

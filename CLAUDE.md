@@ -761,9 +761,9 @@ APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx;IngestionEndpoint=h
 
 | File | Description |
 |------|-------------|
-| `azure_logging.py` | Logging helper module |
-| `requirements.txt` | Contains `opencensus-ext-azure` |
-| `requirements-scraper.txt` | Contains `opencensus-ext-azure` for scraper containers |
+| `azure_logging.py` | Logging helper module (OpenTelemetry) |
+| `requirements.txt` | Contains `azure-monitor-opentelemetry` |
+| `requirements-scraper.txt` | Contains `azure-monitor-opentelemetry` for scraper containers |
 
 ### Viewing Logs in Azure Portal
 
