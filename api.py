@@ -3218,40 +3218,162 @@ ${logs.logs}
             let currentEditingScraper = null;
             let currentEditingSubreddits = [];
 
+            // Track original subreddits and current state
+            let originalSubreddits = [];
+            let editedSubreddits = new Set();
+            let removedSubreddits = new Set();
+
             function openSubredditModal(subreddit, subreddits) {
                 currentEditingScraper = subreddit;
                 currentEditingSubreddits = subreddits || [subreddit];
 
+                // Initialize state
+                originalSubreddits = [...currentEditingSubreddits];
+                editedSubreddits = new Set(currentEditingSubreddits);
+                removedSubreddits = new Set();
+
                 document.getElementById('modalScraperName').textContent = `r/${subreddit}`;
 
-                // Display current subreddits
-                const chipsContainer = document.getElementById('currentSubredditsDisplay');
-                chipsContainer.innerHTML = currentEditingSubreddits.map(s =>
-                    `<span class="subreddit-chip-display">r/${s}</span>`
-                ).join('');
+                // Clear input
+                document.getElementById('addSubredditInput').value = '';
 
-                // Populate textarea
-                document.getElementById('editSubredditsTextarea').value = currentEditingSubreddits.join('\\n');
-
-                // Update stats and show modal
+                // Render chips and update stats
+                renderSubredditChips();
                 updateSubredditEditStats();
                 document.getElementById('subredditModal').style.display = 'flex';
+
+                // Focus input
+                setTimeout(() => document.getElementById('addSubredditInput').focus(), 100);
             }
 
             function closeSubredditModal() {
                 document.getElementById('subredditModal').style.display = 'none';
                 currentEditingScraper = null;
                 currentEditingSubreddits = [];
+                originalSubreddits = [];
+                editedSubreddits = new Set();
+                removedSubreddits = new Set();
+            }
+
+            function renderSubredditChips() {
+                const container = document.getElementById('subredditChipsContainer');
+
+                // Combine all subreddits: existing (possibly removed) + newly added
+                const allSubs = new Set([...originalSubreddits, ...editedSubreddits]);
+
+                // Sort: active first (sorted), then removed (sorted)
+                const activeSubs = [...allSubs].filter(s => editedSubreddits.has(s) && !removedSubreddits.has(s));
+                const removedSubs = [...removedSubreddits];
+
+                const sortedSubs = [...activeSubs.sort(), ...removedSubs.sort()];
+
+                container.innerHTML = sortedSubs.map(sub => {
+                    const isOriginal = originalSubreddits.includes(sub);
+                    const isRemoved = removedSubreddits.has(sub);
+                    const isAdded = !isOriginal && editedSubreddits.has(sub);
+
+                    let chipClass = 'subreddit-chip';
+                    if (isRemoved) chipClass += ' removed';
+                    else if (isAdded) chipClass += ' added';
+                    else chipClass += ' existing';
+
+                    return `
+                        <span class="${chipClass}" data-sub="${sub}">
+                            r/${sub}
+                            <button class="chip-remove" onclick="removeSubreddit('${sub}')" title="Remove">&times;</button>
+                            <button class="chip-restore" onclick="restoreSubreddit('${sub}')" title="Restore">undo</button>
+                        </span>
+                    `;
+                }).join('');
+
+                updateChangeSummary();
+            }
+
+            function updateChangeSummary() {
+                const added = [...editedSubreddits].filter(s => !originalSubreddits.includes(s));
+                const removed = [...removedSubreddits];
+
+                const summaryEl = document.getElementById('changeSummary');
+                const addedEl = document.getElementById('addedSummary');
+                const removedEl = document.getElementById('removedSummary');
+
+                if (added.length > 0 || removed.length > 0) {
+                    summaryEl.style.display = 'flex';
+
+                    if (added.length > 0) {
+                        addedEl.style.display = 'flex';
+                        document.getElementById('addedCount').textContent = added.length;
+                    } else {
+                        addedEl.style.display = 'none';
+                    }
+
+                    if (removed.length > 0) {
+                        removedEl.style.display = 'flex';
+                        document.getElementById('removedCount').textContent = removed.length;
+                    } else {
+                        removedEl.style.display = 'none';
+                    }
+                } else {
+                    summaryEl.style.display = 'none';
+                }
+            }
+
+            function addSubredditFromInput() {
+                const input = document.getElementById('addSubredditInput');
+                const text = input.value.trim();
+
+                if (!text) return;
+
+                // Support comma-separated or single entry
+                const newSubs = text.split(/[,\\s]+/).map(s => s.trim().toLowerCase().replace(/^r\\//, '')).filter(s => s);
+
+                let addedCount = 0;
+                newSubs.forEach(sub => {
+                    if (!editedSubreddits.has(sub) && editedSubreddits.size < 100) {
+                        editedSubreddits.add(sub);
+                        removedSubreddits.delete(sub);
+                        addedCount++;
+                    } else if (removedSubreddits.has(sub)) {
+                        removedSubreddits.delete(sub);
+                        editedSubreddits.add(sub);
+                        addedCount++;
+                    }
+                });
+
+                if (addedCount > 0) {
+                    input.value = '';
+                    renderSubredditChips();
+                    updateSubredditEditStats();
+                } else if (newSubs.length > 0 && editedSubreddits.size >= 100) {
+                    alert('Maximum 100 subreddits per container');
+                }
+            }
+
+            function removeSubreddit(sub) {
+                if (originalSubreddits.includes(sub)) {
+                    // Mark as removed (will show with strikethrough)
+                    removedSubreddits.add(sub);
+                } else {
+                    // Newly added - just remove entirely
+                    editedSubreddits.delete(sub);
+                }
+                renderSubredditChips();
+                updateSubredditEditStats();
+            }
+
+            function restoreSubreddit(sub) {
+                removedSubreddits.delete(sub);
+                editedSubreddits.add(sub);
+                renderSubredditChips();
+                updateSubredditEditStats();
             }
 
             async function updateSubredditEditStats() {
-                const textarea = document.getElementById('editSubredditsTextarea');
-                const text = textarea.value;
-                const subreddits = text.split(/[,\\n]/).map(s => s.trim().toLowerCase()).filter(s => s);
-                const uniqueSubs = [...new Set(subreddits)];
-                const count = uniqueSubs.length;
+                // Get final list (edited minus removed)
+                const finalSubs = [...editedSubreddits].filter(s => !removedSubreddits.has(s));
+                const count = finalSubs.length;
 
-                document.getElementById('editSubCount').textContent = `${count} subreddit${count !== 1 ? 's' : ''}`;
+                document.getElementById('editSubCount').textContent = count;
 
                 // Fetch rate limit preview
                 if (count > 0) {
@@ -3286,17 +3408,14 @@ ${logs.logs}
                 if (!currentEditingScraper) return;
 
                 const button = document.getElementById('saveSubredditsBtn');
-                const textarea = document.getElementById('editSubredditsTextarea');
-                const text = textarea.value;
-                const subreddits = text.split(/[,\\n]/).map(s => s.trim().toLowerCase()).filter(s => s);
-                const uniqueSubs = [...new Set(subreddits)];
+                const finalSubs = [...editedSubreddits].filter(s => !removedSubreddits.has(s));
 
-                if (uniqueSubs.length === 0) {
-                    alert('Please enter at least one subreddit');
+                if (finalSubs.length === 0) {
+                    alert('Please keep at least one subreddit');
                     return;
                 }
 
-                if (uniqueSubs.length > 100) {
+                if (finalSubs.length > 100) {
                     alert('Maximum 100 subreddits per container');
                     return;
                 }
@@ -3307,16 +3426,11 @@ ${logs.logs}
                     const response = await fetch(`/scrapers/${currentEditingScraper}/subreddits`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ subreddits: uniqueSubs })
+                        body: JSON.stringify({ subreddits: finalSubs })
                     });
 
                     if (response.ok) {
                         const result = await response.json();
-                        let message = `Subreddits updated!\\nAdded: ${result.added.length}, Removed: ${result.removed.length}\\nContainer restarting...`;
-                        if (result.rate_limit_warning) {
-                            message += `\\n\\nWarning: ${result.rate_limit_warning}`;
-                        }
-                        alert(message);
                         closeSubredditModal();
                         loadScrapers();
                     } else {
@@ -3330,14 +3444,21 @@ ${logs.logs}
                 }
             }
 
-            // Debounced input handler for textarea
-            let subredditEditTimeout;
+            // Enter key handler for add subreddit input
             document.addEventListener('DOMContentLoaded', function() {
-                const textarea = document.getElementById('editSubredditsTextarea');
-                if (textarea) {
-                    textarea.addEventListener('input', function() {
-                        clearTimeout(subredditEditTimeout);
-                        subredditEditTimeout = setTimeout(updateSubredditEditStats, 300);
+                const addInput = document.getElementById('addSubredditInput');
+                if (addInput) {
+                    addInput.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addSubredditFromInput();
+                        }
+                    });
+                    // Handle paste event for comma-separated values
+                    addInput.addEventListener('paste', function(e) {
+                        setTimeout(() => {
+                            addSubredditFromInput();
+                        }, 10);
                     });
                 }
             });
@@ -3386,20 +3507,38 @@ ${logs.logs}
                         <span id="rateWarningText"></span>
                     </div>
 
+                    <!-- Add new subreddits input -->
                     <div class="form-group">
-                        <label>Current Subreddits:</label>
-                        <div id="currentSubredditsDisplay" class="subreddit-chips-container"></div>
+                        <label>Add Subreddits:</label>
+                        <div class="add-subreddit-input-wrapper">
+                            <span class="input-prefix">r/</span>
+                            <input type="text" id="addSubredditInput"
+                                placeholder="Type subreddit name and press Enter"
+                                autocomplete="off" spellcheck="false">
+                            <button onclick="addSubredditFromInput()" class="add-btn" title="Add subreddit">+</button>
+                        </div>
+                        <div class="input-hint">Press Enter to add, or paste comma-separated list</div>
                     </div>
 
+                    <!-- Change summary -->
+                    <div id="changeSummary" class="change-summary" style="display: none;">
+                        <div id="addedSummary" class="change-item added" style="display: none;">
+                            <span class="change-icon">+</span>
+                            <span id="addedCount">0</span> to add
+                        </div>
+                        <div id="removedSummary" class="change-item removed" style="display: none;">
+                            <span class="change-icon">−</span>
+                            <span id="removedCount">0</span> to remove
+                        </div>
+                    </div>
+
+                    <!-- Subreddit chips -->
                     <div class="form-group">
-                        <label>Edit Subreddits:</label>
-                        <textarea id="editSubredditsTextarea" rows="8"
-                            placeholder="Enter subreddit names, one per line or comma-separated. Max 100 subreddits."
-                            class="modal-textarea"></textarea>
+                        <label>Subreddits (<span id="editSubCount">0</span>/100):</label>
+                        <div id="subredditChipsContainer" class="subreddit-chips-interactive"></div>
                     </div>
 
                     <div class="edit-stats">
-                        <span id="editSubCount">0 subreddits</span>
                         <span id="editRatePreview" class="rate-preview"></span>
                     </div>
 
@@ -3490,27 +3629,164 @@ ${logs.logs}
                 outline: none;
                 border-color: var(--accent-cyan);
             }
-            .subreddit-chips-container {
+            /* Add subreddit input */
+            .add-subreddit-input-wrapper {
+                display: flex;
+                align-items: center;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-sm);
+                overflow: hidden;
+            }
+            .add-subreddit-input-wrapper:focus-within {
+                border-color: var(--accent-cyan);
+            }
+            .input-prefix {
+                padding: 10px 0 10px 12px;
+                color: var(--text-muted);
+                font-family: var(--font-mono);
+                font-size: 0.9rem;
+            }
+            .add-subreddit-input-wrapper input {
+                flex: 1;
+                padding: 10px 8px;
+                background: transparent;
+                border: none;
+                color: var(--text-primary);
+                font-family: var(--font-mono);
+                font-size: 0.9rem;
+            }
+            .add-subreddit-input-wrapper input:focus {
+                outline: none;
+            }
+            .add-subreddit-input-wrapper input::placeholder {
+                color: var(--text-muted);
+            }
+            .add-btn {
+                padding: 10px 14px;
+                background: var(--accent-cyan);
+                border: none;
+                color: var(--bg-primary);
+                font-size: 1.1rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .add-btn:hover {
+                background: var(--accent-green);
+            }
+            .input-hint {
+                font-size: 0.75rem;
+                color: var(--text-muted);
+                margin-top: 6px;
+            }
+
+            /* Change summary */
+            .change-summary {
+                display: flex;
+                gap: 16px;
+                padding: 10px 14px;
+                background: var(--bg-elevated);
+                border-radius: var(--radius-sm);
+                margin-bottom: 16px;
+                font-size: 0.85rem;
+            }
+            .change-item {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .change-item.added { color: var(--accent-green); }
+            .change-item.removed { color: var(--accent-red); }
+            .change-icon {
+                font-weight: 600;
+                font-size: 1rem;
+            }
+
+            /* Interactive subreddit chips */
+            .subreddit-chips-interactive {
                 display: flex;
                 flex-wrap: wrap;
                 gap: 8px;
                 padding: 12px;
                 background: var(--bg-elevated);
                 border-radius: var(--radius-sm);
-                max-height: 120px;
+                min-height: 60px;
+                max-height: 200px;
                 overflow-y: auto;
             }
-            .subreddit-chip-display {
-                padding: 4px 10px;
+            .subreddit-chip {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 5px 8px 5px 12px;
                 background: var(--bg-card);
                 border: 1px solid var(--border-default);
                 border-radius: 100px;
                 font-size: 0.85rem;
                 color: var(--text-secondary);
+                transition: all 0.15s;
             }
+            .subreddit-chip.existing {
+                background: var(--bg-card);
+            }
+            .subreddit-chip.added {
+                background: rgba(34, 197, 94, 0.15);
+                border-color: var(--accent-green);
+                color: var(--accent-green);
+            }
+            .subreddit-chip.removed {
+                background: rgba(239, 68, 68, 0.15);
+                border-color: var(--accent-red);
+                color: var(--accent-red);
+                text-decoration: line-through;
+                opacity: 0.7;
+            }
+            .chip-remove {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 18px;
+                height: 18px;
+                background: transparent;
+                border: none;
+                border-radius: 50%;
+                color: var(--text-muted);
+                font-size: 1rem;
+                cursor: pointer;
+                transition: all 0.15s;
+                padding: 0;
+                line-height: 1;
+            }
+            .chip-remove:hover {
+                background: var(--accent-red);
+                color: white;
+            }
+            .subreddit-chip.removed .chip-remove {
+                display: none;
+            }
+            .chip-restore {
+                display: none;
+                padding: 2px 8px;
+                background: transparent;
+                border: 1px solid var(--accent-cyan);
+                border-radius: 100px;
+                color: var(--accent-cyan);
+                font-size: 0.75rem;
+                cursor: pointer;
+                transition: all 0.15s;
+            }
+            .chip-restore:hover {
+                background: var(--accent-cyan);
+                color: var(--bg-primary);
+            }
+            .subreddit-chip.removed .chip-restore {
+                display: inline-block;
+            }
+
             .edit-stats {
                 display: flex;
-                justify-content: space-between;
+                justify-content: flex-end;
                 align-items: center;
                 margin-bottom: 20px;
                 font-size: 0.85rem;
