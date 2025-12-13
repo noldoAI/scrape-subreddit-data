@@ -2750,7 +2750,7 @@ async def dashboard():
                                     <div style="margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap;">
                                         <button onclick="event.stopPropagation(); stopScraper(this, '${subreddit}')" class="stop">Stop</button>
                                         <button onclick="event.stopPropagation(); restartScraper(this, '${subreddit}')" class="restart">Restart</button>
-                                        <button onclick="event.stopPropagation(); openSubredditModal('${subreddit}', ${JSON.stringify(allSubreddits)})" class="stats">Edit Subs</button>
+                                        <button onclick="event.stopPropagation(); openSubredditModal('${subreddit}', JSON.parse(this.dataset.subs))" data-subs='${JSON.stringify(allSubreddits)}' class="stats">Edit Subs</button>
                                         <button onclick="event.stopPropagation(); getStats(this, '${subreddit}')" class="stats">Stats</button>
                                         <button onclick="event.stopPropagation(); getLogs(this, '${subreddit}')" class="stats">Logs</button>
                                         <button onclick="event.stopPropagation(); deleteScraper(this, '${subreddit}')" class="delete">Delete</button>
