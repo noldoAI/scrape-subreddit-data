@@ -748,11 +748,38 @@ class RedditPostsScraper:
             self.run_continuous_scraping()  # Restart on error
 
 
+def get_subreddit_post_counts(subreddit_names: list) -> dict:
+    """Get post counts for each subreddit from the database."""
+    pipeline = [
+        {"$match": {"subreddit": {"$in": [s.lower() for s in subreddit_names]}}},
+        {"$group": {"_id": {"$toLower": "$subreddit"}, "count": {"$sum": 1}}}
+    ]
+    results = posts_collection.aggregate(pipeline)
+    counts = {doc["_id"]: doc["count"] for doc in results}
+    # Return 0 for subreddits not in results
+    return {s.lower(): counts.get(s.lower(), 0) for s in subreddit_names}
+
+
+def prioritize_new_subreddits(subreddit_names: list) -> list:
+    """Sort subreddits so those with 0 posts come first (prioritize new subreddits)."""
+    counts = get_subreddit_post_counts(subreddit_names)
+
+    # Separate into new (0 posts) and existing
+    new_subs = [s for s in subreddit_names if counts.get(s.lower(), 0) == 0]
+    existing_subs = [s for s in subreddit_names if counts.get(s.lower(), 0) > 0]
+
+    if new_subs:
+        logger.info(f"Prioritizing {len(new_subs)} new subreddits: {', '.join(new_subs)}")
+
+    return new_subs + existing_subs
+
+
 def run_multi_subreddit_scraping(subreddit_names, config):
     """Rotate through multiple subreddits in one container."""
     from config import MULTI_SCRAPER_CONFIG
 
     cycle_count = 0
+    first_cycle = True
     rotation_delay = MULTI_SCRAPER_CONFIG.get("rotation_delay", 2)
 
     logger.info(f"\n{'='*80}")
@@ -765,16 +792,23 @@ def run_multi_subreddit_scraping(subreddit_names, config):
         cycle_count += 1
         cycle_start = time.time()
 
+        # Prioritize new subreddits (0 posts) on first cycle only
+        if first_cycle:
+            ordered_subreddits = prioritize_new_subreddits(subreddit_names)
+            first_cycle = False
+        else:
+            ordered_subreddits = subreddit_names
+
         logger.info(f"\n{'='*80}")
         logger.info(f"MULTI-SUBREDDIT ROTATION CYCLE #{cycle_count}")
         logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"Subreddits: {', '.join(subreddit_names)}")
+        logger.info(f"Subreddits: {', '.join(ordered_subreddits)}")
         logger.info(f"{'='*80}")
 
         cycle_stats = {"total_posts": 0, "total_new": 0, "errors": 0}
 
-        for i, subreddit_name in enumerate(subreddit_names):
-            logger.info(f"\n[{i+1}/{len(subreddit_names)}] Processing r/{subreddit_name}")
+        for i, subreddit_name in enumerate(ordered_subreddits):
+            logger.info(f"\n[{i+1}/{len(ordered_subreddits)}] Processing r/{subreddit_name}")
             logger.info("-" * 40)
             sub_start = time.time()
 
@@ -811,7 +845,7 @@ def run_multi_subreddit_scraping(subreddit_names, config):
                 continue
 
             # Brief pause between subreddits
-            if i < len(subreddit_names) - 1:
+            if i < len(ordered_subreddits) - 1:
                 time.sleep(rotation_delay)
 
         cycle_duration = time.time() - cycle_start
