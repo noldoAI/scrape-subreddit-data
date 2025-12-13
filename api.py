@@ -26,6 +26,7 @@ import hashlib
 from cryptography.fernet import Fernet
 import asyncio
 import logging
+import re
 
 # Import centralized configuration
 from config import (
@@ -143,6 +144,7 @@ class RedditCredentials(BaseModel):
     user_agent: str
 
 class ScraperConfig(BaseModel):
+    name: Optional[str] = None             # Custom scraper name (optional)
     subreddit: str = ""                    # Single subreddit (backwards compat)
     subreddits: List[str] = []             # Multi-subreddit mode
     scraper_type: str = "posts"  # "posts" or "comments"
@@ -163,8 +165,9 @@ class ScraperStatus(BaseModel):
     last_error: Optional[str] = None
 
 class ScraperStartRequest(BaseModel):
+    name: Optional[str] = None             # Custom scraper name (optional)
     subreddit: str = ""                    # Single subreddit (backwards compat)
-    subreddits: List[str] = []             # Multi-subreddit mode (up to 30)
+    subreddits: List[str] = []             # Multi-subreddit mode (up to 100)
     scraper_type: str = "posts"  # "posts" or "comments"
     posts_limit: int = DEFAULT_SCRAPER_CONFIG["posts_limit"]
     interval: int = DEFAULT_SCRAPER_CONFIG["scrape_interval"]
@@ -371,7 +374,7 @@ def calculate_rate_limit_info(subreddit_count: int, config: dict) -> dict:
 def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting",
                        container_id: str = None, container_name: str = None,
                        last_error: str = None, scraper_type: str = "posts",
-                       subreddits: list = None):
+                       subreddits: list = None, name: str = None):
     """Save scraper configuration to database"""
     try:
         # Store credentials directly (no encryption - MongoDB already secured)
@@ -384,6 +387,7 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
         }
 
         scraper_doc = {
+            "name": name or config.name,  # Custom scraper name
             "subreddit": subreddit,
             "scraper_type": scraper_type,
             "status": status,
@@ -793,7 +797,12 @@ def run_scraper(config: ScraperConfig):
 
         # Create unique container name using type-specific prefix
         container_prefix = DOCKER_CONFIG['container_prefix'].get(scraper_type, DOCKER_CONFIG['container_prefix']['posts'])
-        if is_multi:
+        if config.name:
+            # Use custom name if provided (sanitize for Docker container name)
+            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '-', config.name.lower())[:30]
+            container_name = f"{container_prefix}{safe_name}"
+            display_name = config.name
+        elif is_multi:
             # Multi-subreddit container naming: reddit-posts-scraper-multi-5subs-stocks
             container_name = f"{container_prefix}multi-{len(subreddits)}subs-{subreddits[0][:10]}"
             display_name = f"multi:{len(subreddits)}subs"
@@ -2065,9 +2074,15 @@ async def dashboard():
                         <label>Mode:</label>
                         <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 260px;">
                             <option value="single">Single Subreddit</option>
-                            <option value="multi">Multi-Subreddit (up to 30)</option>
+                            <option value="multi">Multi-Subreddit (up to 100)</option>
                         </select>
                         <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
+                    </div>
+
+                    <div class="form-row">
+                        <label>Scraper Name:</label>
+                        <input type="text" id="scraper_name" placeholder="e.g. Finance Bundle (optional)" style="min-width: 300px;" />
+                        <small style="color: var(--text-muted);">Custom name for this scraper</small>
                     </div>
 
                     <div id="single-subreddit-input">
@@ -2089,7 +2104,7 @@ async def dashboard():
                             <div style="flex: 1; max-width: 550px;">
                                 <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket, pennystocks, daytrading, thetagang, valueinvesting, dividends"
                                     style="width: 100%; height: 90px; resize: vertical;"></textarea>
-                                <small style="display: block; margin-top: 8px;">Comma-separated list. Max 30 subreddits per container.</small>
+                                <small style="display: block; margin-top: 8px;">Comma-separated list. Max 100 subreddits per container.</small>
                             </div>
                         </div>
                     </div>
@@ -2608,10 +2623,17 @@ async def dashboard():
                         // Handle multi-subreddit display
                         const allSubreddits = info.subreddits || [subreddit];
                         const isMulti = allSubreddits.length > 1;
-                        const displayTitle = isMulti
-                            ? `r/${subreddit} <span class="text-muted" style="font-size: 0.85rem; font-weight: 400;">+${allSubreddits.length - 1} more</span>`
-                            : `r/${subreddit}`;
-                        const multiBadge = isMulti
+                        const scraperName = info.name;
+                        let displayTitle;
+                        if (scraperName) {
+                            // Use custom name
+                            displayTitle = `${scraperName} <span class="text-muted" style="font-size: 0.85rem; font-weight: 400;">(${allSubreddits.length} sub${allSubreddits.length > 1 ? 's' : ''})</span>`;
+                        } else if (isMulti) {
+                            displayTitle = `r/${subreddit} <span class="text-muted" style="font-size: 0.85rem; font-weight: 400;">+${allSubreddits.length - 1} more</span>`;
+                        } else {
+                            displayTitle = `r/${subreddit}`;
+                        }
+                        const multiBadge = isMulti && !scraperName
                             ? `<span class="mode-badge multi">${allSubreddits.length} subs</span>`
                             : '';
 
@@ -2972,6 +2994,12 @@ async def dashboard():
                         sorting_methods: sortingMethods,
                         auto_restart: document.getElementById('auto_restart').checked
                     };
+
+                    // Add custom scraper name if provided
+                    const scraperName = document.getElementById('scraper_name').value.trim();
+                    if (scraperName) {
+                        requestData.name = scraperName;
+                    }
 
                     // Handle single vs multi-subreddit mode
                     if (scraperMode === 'single') {
@@ -3600,6 +3628,7 @@ async def list_scrapers():
                 }
 
             result[subreddit] = {
+                "name": scraper_doc.get("name"),  # Custom scraper name
                 "status": container_status,
                 "started_at": scraper_doc.get("created_at"),
                 "last_updated": scraper_doc.get("last_updated"),
@@ -3718,6 +3747,7 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
 
     # Create scraper config with subreddits list
     config = ScraperConfig(
+        name=request.name,             # Custom scraper name (optional)
         subreddit=primary_subreddit,  # Primary key for backwards compat
         subreddits=subreddits,         # Full list for multi-mode
         scraper_type=request.scraper_type,
