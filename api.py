@@ -472,6 +472,7 @@ def load_scraper_from_db(subreddit: str, scraper_type: str = "posts") -> Optiona
 
         # Reconstruct ScraperConfig
         config = ScraperConfig(
+            name=scraper_doc.get("name"),  # Preserve custom scraper name
             subreddit=subreddit,
             subreddits=scraper_doc.get("subreddits", [subreddit]),  # Preserve multi-subreddit config
             scraper_type=scraper_doc.get("scraper_type", "posts"),
@@ -4349,8 +4350,11 @@ async def update_scraper_subreddits(
     if not scraper_data:
         raise HTTPException(status_code=404, detail="Scraper not found")
 
-    # Get previous subreddits
-    prev_subs = scraper_data.get("subreddits", [subreddit])
+    # Get existing config (it's a ScraperConfig Pydantic model)
+    existing_config = scraper_data["config"]
+
+    # Get previous subreddits from config
+    prev_subs = existing_config.subreddits if existing_config.subreddits else [subreddit]
 
     # Calculate what changed
     added = [s for s in new_subs if s not in prev_subs]
@@ -4358,8 +4362,8 @@ async def update_scraper_subreddits(
 
     # Calculate rate limit info
     config_dict = {
-        "sorting_methods": scraper_data["config"].get("sorting_methods", ["new", "top", "rising"]),
-        "interval": scraper_data["config"].get("interval", 300)
+        "sorting_methods": existing_config.sorting_methods,
+        "interval": existing_config.interval
     }
     rate_info = calculate_rate_limit_info(len(new_subs), config_dict)
 
@@ -4378,25 +4382,18 @@ async def update_scraper_subreddits(
         }}
     )
 
-    # Rebuild config for restart
-    credentials = RedditCredentials(
-        client_id=scraper_data["credentials"]["client_id"],
-        client_secret=scraper_data["credentials"]["client_secret"],
-        username=scraper_data["credentials"]["username"],
-        password=scraper_data["credentials"]["password"],
-        user_agent=scraper_data["credentials"]["user_agent"]
-    )
-
+    # Build updated config using existing config values
     updated_config = ScraperConfig(
+        name=existing_config.name,
         subreddit=new_subs[0],
         subreddits=new_subs,
         scraper_type=scraper_type,
-        posts_limit=scraper_data["config"].get("posts_limit", DEFAULT_SCRAPER_CONFIG["posts_limit"]),
-        interval=scraper_data["config"].get("interval", DEFAULT_SCRAPER_CONFIG["scrape_interval"]),
-        comment_batch=scraper_data["config"].get("comment_batch", DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]),
-        sorting_methods=scraper_data["config"].get("sorting_methods", DEFAULT_SCRAPER_CONFIG["sorting_methods"]),
-        credentials=credentials,
-        auto_restart=scraper_data.get("auto_restart", True)
+        posts_limit=existing_config.posts_limit,
+        interval=existing_config.interval,
+        comment_batch=existing_config.comment_batch,
+        sorting_methods=existing_config.sorting_methods,
+        credentials=existing_config.credentials,
+        auto_restart=existing_config.auto_restart
     )
 
     # Restart with updated config
