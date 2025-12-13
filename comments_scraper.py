@@ -35,17 +35,14 @@ except ImportError:
 # Import centralized configuration
 from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
 
+# Import Azure logging helper
+from azure_logging import setup_azure_logging
+
 # Load environment variables
 load_dotenv()
 
-# Configure logging with timestamps
-logging.basicConfig(
-    format=LOGGING_CONFIG["format"],
-    datefmt=LOGGING_CONFIG["date_format"],
-    level=getattr(logging, LOGGING_CONFIG["level"]),
-    force=True  # Override any existing logging configuration
-)
-logger = logging.getLogger("comments-scraper")
+# Configure logging with Azure Application Insights support
+logger = setup_azure_logging("comments-scraper", level=getattr(logging, LOGGING_CONFIG["level"]))
 
 # =============================================================================
 # PROMETHEUS METRICS

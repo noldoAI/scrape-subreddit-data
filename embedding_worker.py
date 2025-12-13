@@ -36,12 +36,11 @@ from pymongo import MongoClient
 
 from config import EMBEDDING_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS, AZURE_OPENAI_CONFIG
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('embedding-worker')
+# Import Azure logging helper
+from azure_logging import setup_azure_logging
+
+# Configure logging with Azure Application Insights support
+logger = setup_azure_logging('embedding-worker', level=logging.INFO)
 
 # Thread-safe singleton for Azure OpenAI embedding client
 _embedding_client = None

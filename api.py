@@ -42,17 +42,14 @@ from metrics import (
     CONTENT_TYPE_LATEST
 )
 
+# Import Azure logging helper
+from azure_logging import setup_azure_logging
+
 # Load environment variables (fallback defaults)
 load_dotenv()
 
-# Configure logging with timestamps
-logging.basicConfig(
-    format=LOGGING_CONFIG["format"],
-    datefmt=LOGGING_CONFIG["date_format"],
-    level=getattr(logging, LOGGING_CONFIG["level"]),
-    force=True  # Override any existing logging configuration
-)
-logger = logging.getLogger("reddit-scraper-api")
+# Configure logging with Azure Application Insights support
+logger = setup_azure_logging("reddit-scraper-api", level=getattr(logging, LOGGING_CONFIG["level"]))
 
 app = FastAPI(
     title=API_CONFIG["title"],
@@ -827,6 +824,11 @@ def run_scraper(config: ScraperConfig):
             f"R_USER_AGENT={config.credentials.user_agent}",
             f"MONGODB_URI={os.getenv('MONGODB_URI', '')}"
         ]
+
+        # Add Azure Application Insights connection string if available
+        app_insights_conn = os.getenv('APPLICATIONINSIGHTS_CONNECTION_STRING', '')
+        if app_insights_conn:
+            env_vars.append(f"APPLICATIONINSIGHTS_CONNECTION_STRING={app_insights_conn}")
 
         # Build Docker command using centralized config
         cmd = ["docker", "run", "--name", container_name]

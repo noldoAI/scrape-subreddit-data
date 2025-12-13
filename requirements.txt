@@ -6,4 +6,5 @@ uvicorn[standard]
 pydantic
 cryptography
 prometheus_client
-openai>=1.0.0 
+openai>=1.0.0
+opencensus-ext-azure>=1.1.9 

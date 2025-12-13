@@ -32,6 +32,7 @@ services:
     environment:
       - PYTHONPATH=/app
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - APPLICATIONINSIGHTS_CONNECTION_STRING=${APPLICATIONINSIGHTS_CONNECTION_STRING:-}
     depends_on:
       - reddit-scraper-builder
 
