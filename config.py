@@ -56,10 +56,18 @@ DEFAULT_SCRAPER_CONFIG = {
 
 # Multi-Subreddit Scraper Configuration
 MULTI_SCRAPER_CONFIG = {
-    "max_subreddits_per_container": 30,    # Maximum subreddits per container
+    "max_subreddits_per_container": 100,   # Maximum subreddits per container (safe with 10-min interval)
     "rotation_delay": 2,                    # Seconds between subreddit switches
     "recommended_posts_limit": 50,          # Recommended posts limit per subreddit in multi-mode
-    "recommended_interval": 300,            # Recommended interval (5 min) for multi-subreddit
+    "recommended_interval": 600,            # Recommended interval (10 min) for 100 subreddits
+    # Reddit API rate limit configuration (100 QPM for OAuth-authenticated apps)
+    "rate_limit": {
+        "reddit_qpm": 100,                  # Reddit's official limit: 100 queries per minute
+        "safe_threshold": 50,               # < 50% usage = safe (green)
+        "caution_threshold": 70,            # 50-70% usage = caution (yellow)
+        "warning_threshold": 85,            # 70-85% usage = warning (orange)
+        "critical_threshold": 95            # > 85% usage = critical (red)
+    }
 }
 
 # Monitoring Configuration

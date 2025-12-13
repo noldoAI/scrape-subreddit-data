@@ -31,7 +31,7 @@ import logging
 from config import (
     DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG,
     MONITORING_CONFIG, API_CONFIG, DOCKER_CONFIG, SECURITY_CONFIG, LOGGING_CONFIG,
-    EMBEDDING_WORKER_CONFIG, AZURE_OPENAI_CONFIG
+    EMBEDDING_WORKER_CONFIG, AZURE_OPENAI_CONFIG, MULTI_SCRAPER_CONFIG
 )
 
 # Import Prometheus metrics
@@ -179,6 +179,19 @@ class ScraperStartRequest(BaseModel):
     credentials: Optional[RedditCredentials] = None
     save_account_as: Optional[str] = None  # If provided, save manual credentials with this name
 
+class SubredditUpdateRequest(BaseModel):
+    """Request to update subreddits for a running scraper (triggers restart)."""
+    subreddits: List[str]
+
+class RateLimitInfo(BaseModel):
+    """Rate limit analysis for a scraper configuration."""
+    calls_per_cycle: int
+    estimated_calls_per_minute: float
+    reddit_limit_per_minute: int = 100  # Reddit's official limit: 100 QPM
+    usage_percent: float
+    warning_level: str  # "safe", "caution", "warning", "critical"
+    recommendation: Optional[str] = None
+
 # Reddit account storage in MongoDB  
 def get_accounts_collection():
     """Get the accounts collection, create if needed"""
@@ -292,6 +305,68 @@ def delete_reddit_account(account_name: str):
     except Exception as e:
         logger.error(f"Error deleting Reddit account {account_name}: {e}")
         return False
+
+def calculate_rate_limit_info(subreddit_count: int, config: dict) -> dict:
+    """
+    Calculate expected Reddit API usage based on subreddit count and config.
+
+    Reddit API limit: 100 queries per minute (QPM) for OAuth-authenticated apps.
+
+    Args:
+        subreddit_count: Number of subreddits to scrape
+        config: Dict with 'sorting_methods' (list) and 'interval' (seconds)
+
+    Returns:
+        Dict with rate limit analysis including warning level
+    """
+    sorting_methods = len(config.get("sorting_methods", ["new", "top", "rising"]))
+    interval = config.get("interval", 300)
+
+    # API calls per subreddit per cycle:
+    # - ~3 API calls per sorting method (pagination, etc.)
+    # - ~1 call for metadata check
+    calls_per_sub = (sorting_methods * 3) + 1
+    total_calls = calls_per_sub * subreddit_count
+
+    # Cycle time includes rotation delay (2s per subreddit) + interval
+    rotation_delay = MULTI_SCRAPER_CONFIG.get("rotation_delay", 2)
+    cycle_time = (subreddit_count * rotation_delay) + interval
+
+    # Calculate calls per minute
+    calls_per_min = (total_calls / cycle_time) * 60
+
+    # Reddit limit: 100 QPM
+    reddit_qpm = MULTI_SCRAPER_CONFIG.get("rate_limit", {}).get("reddit_qpm", 100)
+    usage_percent = (calls_per_min / reddit_qpm) * 100
+
+    # Determine warning level based on thresholds
+    thresholds = MULTI_SCRAPER_CONFIG.get("rate_limit", {})
+    critical = thresholds.get("critical_threshold", 95)
+    warning = thresholds.get("warning_threshold", 85)
+    caution = thresholds.get("caution_threshold", 70)
+
+    if usage_percent >= critical:
+        level = "critical"
+        safe_count = int(subreddit_count * (critical / usage_percent) * 0.9)
+        recommendation = f"Reduce to ~{safe_count} subreddits, increase interval to {int(interval * 1.5)}s, or use fewer sorting methods"
+    elif usage_percent >= warning:
+        level = "warning"
+        recommendation = "Approaching rate limits. Consider reducing subreddits or sorting methods."
+    elif usage_percent >= caution:
+        level = "caution"
+        recommendation = None
+    else:
+        level = "safe"
+        recommendation = None
+
+    return {
+        "calls_per_cycle": total_calls,
+        "estimated_calls_per_minute": round(calls_per_min, 1),
+        "reddit_limit_per_minute": reddit_qpm,
+        "usage_percent": round(usage_percent, 1),
+        "warning_level": level,
+        "recommendation": recommendation
+    }
 
 def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "starting",
                        container_id: str = None, container_name: str = None,
@@ -2653,6 +2728,7 @@ async def dashboard():
                                     <div style="margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap;">
                                         <button onclick="event.stopPropagation(); stopScraper(this, '${subreddit}')" class="stop">Stop</button>
                                         <button onclick="event.stopPropagation(); restartScraper(this, '${subreddit}')" class="restart">Restart</button>
+                                        <button onclick="event.stopPropagation(); openSubredditModal('${subreddit}', ${JSON.stringify(allSubreddits)})" class="stats">Edit Subs</button>
                                         <button onclick="event.stopPropagation(); getStats(this, '${subreddit}')" class="stats">Stats</button>
                                         <button onclick="event.stopPropagation(); getLogs(this, '${subreddit}')" class="stats">Logs</button>
                                         <button onclick="event.stopPropagation(); deleteScraper(this, '${subreddit}')" class="delete">Delete</button>
@@ -2700,7 +2776,7 @@ async def dashboard():
                     singleInput.style.display = 'none';
                     multiInput.style.display = 'block';
                     modeIndicator.className = 'mode-badge multi';
-                    modeIndicator.textContent = 'up to 30';
+                    modeIndicator.textContent = 'up to 100';
                 }
                 updateMultiSubredditCount();
             }
@@ -2915,8 +2991,8 @@ async def dashboard():
                             setButtonLoading(button, false);
                             return;
                         }
-                        if (subreddits.length > 30) {
-                            alert('Maximum 30 subreddits per container');
+                        if (subreddits.length > 100) {
+                            alert('Maximum 100 subreddits per container');
                             setButtonLoading(button, false);
                             return;
                         }
@@ -3109,6 +3185,148 @@ ${logs.logs}
             
 
             
+            // ===== Subreddit Management Modal Functions =====
+            let currentEditingScraper = null;
+            let currentEditingSubreddits = [];
+
+            function openSubredditModal(subreddit, subreddits) {
+                currentEditingScraper = subreddit;
+                currentEditingSubreddits = subreddits || [subreddit];
+
+                document.getElementById('modalScraperName').textContent = `r/${subreddit}`;
+
+                // Display current subreddits
+                const chipsContainer = document.getElementById('currentSubredditsDisplay');
+                chipsContainer.innerHTML = currentEditingSubreddits.map(s =>
+                    `<span class="subreddit-chip-display">r/${s}</span>`
+                ).join('');
+
+                // Populate textarea
+                document.getElementById('editSubredditsTextarea').value = currentEditingSubreddits.join('\\n');
+
+                // Update stats and show modal
+                updateSubredditEditStats();
+                document.getElementById('subredditModal').style.display = 'flex';
+            }
+
+            function closeSubredditModal() {
+                document.getElementById('subredditModal').style.display = 'none';
+                currentEditingScraper = null;
+                currentEditingSubreddits = [];
+            }
+
+            async function updateSubredditEditStats() {
+                const textarea = document.getElementById('editSubredditsTextarea');
+                const text = textarea.value;
+                const subreddits = text.split(/[,\\n]/).map(s => s.trim().toLowerCase()).filter(s => s);
+                const uniqueSubs = [...new Set(subreddits)];
+                const count = uniqueSubs.length;
+
+                document.getElementById('editSubCount').textContent = `${count} subreddit${count !== 1 ? 's' : ''}`;
+
+                // Fetch rate limit preview
+                if (count > 0) {
+                    try {
+                        const response = await fetch(`/scrapers/rate-limit-preview?subreddit_count=${count}`);
+                        const data = await response.json();
+
+                        const previewEl = document.getElementById('editRatePreview');
+                        previewEl.textContent = `~${data.estimated_calls_per_minute} API calls/min (${data.usage_percent}%)`;
+                        previewEl.className = `rate-preview ${data.warning_level}`;
+
+                        // Show/hide warning banner
+                        const warningBanner = document.getElementById('rateWarningBanner');
+                        if (data.warning_level === 'warning' || data.warning_level === 'critical') {
+                            warningBanner.style.display = 'flex';
+                            warningBanner.className = `rate-warning-banner ${data.warning_level}`;
+                            document.getElementById('rateWarningText').textContent =
+                                data.recommendation || 'Approaching Reddit API rate limits';
+                        } else {
+                            warningBanner.style.display = 'none';
+                        }
+                    } catch (e) {
+                        console.error('Failed to fetch rate preview:', e);
+                    }
+                } else {
+                    document.getElementById('editRatePreview').textContent = '';
+                    document.getElementById('rateWarningBanner').style.display = 'none';
+                }
+            }
+
+            async function saveSubreddits() {
+                if (!currentEditingScraper) return;
+
+                const button = document.getElementById('saveSubredditsBtn');
+                const textarea = document.getElementById('editSubredditsTextarea');
+                const text = textarea.value;
+                const subreddits = text.split(/[,\\n]/).map(s => s.trim().toLowerCase()).filter(s => s);
+                const uniqueSubs = [...new Set(subreddits)];
+
+                if (uniqueSubs.length === 0) {
+                    alert('Please enter at least one subreddit');
+                    return;
+                }
+
+                if (uniqueSubs.length > 100) {
+                    alert('Maximum 100 subreddits per container');
+                    return;
+                }
+
+                setButtonLoading(button, true, 'Saving...');
+
+                try {
+                    const response = await fetch(`/scrapers/${currentEditingScraper}/subreddits`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ subreddits: uniqueSubs })
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        let message = `Subreddits updated!\\nAdded: ${result.added.length}, Removed: ${result.removed.length}\\nContainer restarting...`;
+                        if (result.rate_limit_warning) {
+                            message += `\\n\\nWarning: ${result.rate_limit_warning}`;
+                        }
+                        alert(message);
+                        closeSubredditModal();
+                        loadScrapers();
+                    } else {
+                        const error = await response.json();
+                        alert('Error: ' + (error.detail || 'Failed to update subreddits'));
+                    }
+                } catch (error) {
+                    alert('Error updating subreddits: ' + error.message);
+                } finally {
+                    setButtonLoading(button, false, 'Save & Restart');
+                }
+            }
+
+            // Debounced input handler for textarea
+            let subredditEditTimeout;
+            document.addEventListener('DOMContentLoaded', function() {
+                const textarea = document.getElementById('editSubredditsTextarea');
+                if (textarea) {
+                    textarea.addEventListener('input', function() {
+                        clearTimeout(subredditEditTimeout);
+                        subredditEditTimeout = setTimeout(updateSubredditEditStats, 300);
+                    });
+                }
+            });
+
+            // Close modal on escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && document.getElementById('subredditModal').style.display === 'flex') {
+                    closeSubredditModal();
+                }
+            });
+
+            // Close modal on backdrop click
+            document.getElementById('subredditModal')?.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closeSubredditModal();
+                }
+            });
+
             // Load scrapers, health, and accounts on page load and refresh every 15 seconds
             loadScrapers();
             loadHealthStatus();
@@ -3120,6 +3338,209 @@ ${logs.logs}
                 loadAccountStats();
             }, 15000);
         </script>
+
+        <!-- Subreddit Management Modal -->
+        <div id="subredditModal" class="modal-overlay" style="display: none;">
+            <div class="modal-container">
+                <div class="modal-header">
+                    <h3>Edit Subreddits</h3>
+                    <button onclick="closeSubredditModal()" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="modal-scraper-info">
+                        <span class="meta-label">Scraper:</span>
+                        <span id="modalScraperName" class="meta-value"></span>
+                    </div>
+
+                    <div id="rateWarningBanner" class="rate-warning-banner" style="display: none;">
+                        <span class="warning-icon">⚠️</span>
+                        <span id="rateWarningText"></span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Current Subreddits:</label>
+                        <div id="currentSubredditsDisplay" class="subreddit-chips-container"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Edit Subreddits:</label>
+                        <textarea id="editSubredditsTextarea" rows="8"
+                            placeholder="Enter subreddit names, one per line or comma-separated. Max 100 subreddits."
+                            class="modal-textarea"></textarea>
+                    </div>
+
+                    <div class="edit-stats">
+                        <span id="editSubCount">0 subreddits</span>
+                        <span id="editRatePreview" class="rate-preview"></span>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button onclick="closeSubredditModal()" class="btn-secondary">Cancel</button>
+                        <button onclick="saveSubreddits()" id="saveSubredditsBtn" class="btn-primary">Save & Restart</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <style>
+            /* Modal styles */
+            .modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.7);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+            .modal-container {
+                background: var(--bg-card);
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-lg);
+                width: 90%;
+                max-width: 550px;
+                max-height: 90vh;
+                overflow-y: auto;
+            }
+            .modal-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 16px 20px;
+                border-bottom: 1px solid var(--border-default);
+            }
+            .modal-header h3 {
+                margin: 0;
+                font-size: 1.1rem;
+            }
+            .modal-close {
+                background: none;
+                border: none;
+                font-size: 1.5rem;
+                cursor: pointer;
+                color: var(--text-muted);
+                padding: 0;
+                line-height: 1;
+            }
+            .modal-close:hover {
+                color: var(--text-primary);
+            }
+            .modal-body {
+                padding: 20px;
+            }
+            .modal-scraper-info {
+                margin-bottom: 16px;
+                padding: 12px;
+                background: var(--bg-elevated);
+                border-radius: var(--radius-sm);
+            }
+            .form-group {
+                margin-bottom: 16px;
+            }
+            .form-group label {
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 500;
+                color: var(--text-secondary);
+            }
+            .modal-textarea {
+                width: 100%;
+                padding: 12px;
+                font-family: var(--font-mono);
+                font-size: 0.9rem;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-sm);
+                color: var(--text-primary);
+                resize: vertical;
+            }
+            .modal-textarea:focus {
+                outline: none;
+                border-color: var(--accent-cyan);
+            }
+            .subreddit-chips-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                padding: 12px;
+                background: var(--bg-elevated);
+                border-radius: var(--radius-sm);
+                max-height: 120px;
+                overflow-y: auto;
+            }
+            .subreddit-chip-display {
+                padding: 4px 10px;
+                background: var(--bg-card);
+                border: 1px solid var(--border-default);
+                border-radius: 100px;
+                font-size: 0.85rem;
+                color: var(--text-secondary);
+            }
+            .edit-stats {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+                font-size: 0.85rem;
+                color: var(--text-secondary);
+            }
+            .rate-preview {
+                font-weight: 500;
+            }
+            .rate-preview.safe { color: var(--accent-green); }
+            .rate-preview.caution { color: var(--accent-cyan); }
+            .rate-preview.warning { color: var(--accent-amber); }
+            .rate-preview.critical { color: var(--accent-red); }
+            .rate-warning-banner {
+                background: rgba(245, 158, 11, 0.1);
+                border: 1px solid var(--accent-amber);
+                border-radius: var(--radius-sm);
+                padding: 12px 16px;
+                margin-bottom: 16px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 0.9rem;
+            }
+            .rate-warning-banner.critical {
+                background: rgba(239, 68, 68, 0.1);
+                border-color: var(--accent-red);
+            }
+            .modal-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 12px;
+            }
+            .btn-secondary {
+                padding: 10px 20px;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-sm);
+                color: var(--text-secondary);
+                cursor: pointer;
+                font-size: 0.9rem;
+            }
+            .btn-secondary:hover {
+                background: var(--bg-card);
+                color: var(--text-primary);
+            }
+            .btn-primary {
+                padding: 10px 20px;
+                background: var(--accent-cyan);
+                border: none;
+                border-radius: var(--radius-sm);
+                color: #000;
+                cursor: pointer;
+                font-size: 0.9rem;
+                font-weight: 500;
+            }
+            .btn-primary:hover {
+                background: var(--accent-cyan-hover);
+            }
+        </style>
     </body>
     </html>
     """
@@ -3847,6 +4268,163 @@ async def toggle_auto_restart(subreddit: str, auto_restart: bool, scraper_type: 
         return {"message": f"Auto-restart {'enabled' if auto_restart else 'disabled'} for r/{subreddit} ({actual_scraper_type})"}
     else:
         raise HTTPException(status_code=500, detail="Failed to update auto-restart setting")
+
+@app.patch("/scrapers/{subreddit}/subreddits")
+async def update_scraper_subreddits(
+    subreddit: str,
+    request: SubredditUpdateRequest,
+    background_tasks: BackgroundTasks,
+    scraper_type: Optional[str] = "posts"
+):
+    """Update subreddits for a running scraper (triggers container restart).
+
+    Replaces the entire subreddit list. Container will restart with ~5-10s downtime.
+
+    Args:
+        subreddit: Primary subreddit identifier (first in the list)
+        request: New list of subreddits
+        scraper_type: "posts" or "comments" (default: "posts")
+
+    Returns:
+        Updated configuration with rate limit analysis
+    """
+    # Validate max subreddits
+    max_subs = MULTI_SCRAPER_CONFIG["max_subreddits_per_container"]
+    if len(request.subreddits) > max_subs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {max_subs} subreddits per container"
+        )
+
+    if len(request.subreddits) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one subreddit is required"
+        )
+
+    # Clean and deduplicate subreddit names
+    new_subs = []
+    seen = set()
+    for s in request.subreddits:
+        clean = s.strip().lower()
+        if clean and clean not in seen:
+            new_subs.append(clean)
+            seen.add(clean)
+
+    if not new_subs:
+        raise HTTPException(status_code=400, detail="No valid subreddit names provided")
+
+    # Load existing scraper
+    scraper_data = load_scraper_from_db(subreddit, scraper_type)
+    if not scraper_data:
+        raise HTTPException(status_code=404, detail="Scraper not found")
+
+    # Get previous subreddits
+    prev_subs = scraper_data.get("subreddits", [subreddit])
+
+    # Calculate what changed
+    added = [s for s in new_subs if s not in prev_subs]
+    removed = [s for s in prev_subs if s not in new_subs]
+
+    # Calculate rate limit info
+    config_dict = {
+        "sorting_methods": scraper_data["config"].get("sorting_methods", ["new", "top", "rising"]),
+        "interval": scraper_data["config"].get("interval", 300)
+    }
+    rate_info = calculate_rate_limit_info(len(new_subs), config_dict)
+
+    # Stop existing container
+    container_name = scraper_data.get("container_name")
+    if container_name:
+        cleanup_container(container_name)
+        logger.info(f"Stopped container {container_name} for subreddit update")
+
+    # Update database with new subreddits
+    scrapers_collection.update_one(
+        {"subreddit": subreddit, "scraper_type": scraper_type},
+        {"$set": {
+            "subreddits": new_subs,
+            "last_updated": datetime.now(UTC)
+        }}
+    )
+
+    # Rebuild config for restart
+    credentials = RedditCredentials(
+        client_id=scraper_data["credentials"]["client_id"],
+        client_secret=scraper_data["credentials"]["client_secret"],
+        username=scraper_data["credentials"]["username"],
+        password=scraper_data["credentials"]["password"],
+        user_agent=scraper_data["credentials"]["user_agent"]
+    )
+
+    updated_config = ScraperConfig(
+        subreddit=new_subs[0],
+        subreddits=new_subs,
+        scraper_type=scraper_type,
+        posts_limit=scraper_data["config"].get("posts_limit", DEFAULT_SCRAPER_CONFIG["posts_limit"]),
+        interval=scraper_data["config"].get("interval", DEFAULT_SCRAPER_CONFIG["scrape_interval"]),
+        comment_batch=scraper_data["config"].get("comment_batch", DEFAULT_SCRAPER_CONFIG["posts_per_comment_batch"]),
+        sorting_methods=scraper_data["config"].get("sorting_methods", DEFAULT_SCRAPER_CONFIG["sorting_methods"]),
+        credentials=credentials,
+        auto_restart=scraper_data.get("auto_restart", True)
+    )
+
+    # Restart with updated config
+    background_tasks.add_task(run_scraper, updated_config)
+    logger.info(f"Restarting scraper with updated subreddits: {new_subs}")
+
+    response = {
+        "message": "Subreddits updated, restarting container",
+        "subreddits": new_subs,
+        "previous_subreddits": prev_subs,
+        "added": added,
+        "removed": removed,
+        "subreddit_count": len(new_subs),
+        "rate_limit": rate_info,
+        "estimated_restart_time": "5-10 seconds"
+    }
+
+    # Add warning if approaching limits
+    if rate_info["warning_level"] in ["warning", "critical"]:
+        response["rate_limit_warning"] = rate_info["recommendation"]
+
+    return response
+
+@app.get("/scrapers/rate-limit-preview")
+async def preview_rate_limit(
+    subreddit_count: int,
+    sorting_methods: str = "new,top,rising",
+    interval: int = 300
+):
+    """Preview rate limit usage for a given configuration.
+
+    Useful for planning before creating or updating scrapers.
+
+    Args:
+        subreddit_count: Number of subreddits to scrape
+        sorting_methods: Comma-separated list of sorting methods (e.g., "new,top,rising")
+        interval: Scrape interval in seconds
+
+    Returns:
+        Rate limit analysis with warning level and recommendations
+    """
+    if subreddit_count <= 0:
+        raise HTTPException(status_code=400, detail="subreddit_count must be positive")
+
+    max_subs = MULTI_SCRAPER_CONFIG["max_subreddits_per_container"]
+    if subreddit_count > max_subs:
+        raise HTTPException(status_code=400, detail=f"Maximum {max_subs} subreddits per container")
+
+    methods = [s.strip() for s in sorting_methods.split(",") if s.strip()]
+    if not methods:
+        methods = ["new", "top", "rising"]
+
+    config = {
+        "sorting_methods": methods,
+        "interval": interval
+    }
+
+    return calculate_rate_limit_info(subreddit_count, config)
 
 @app.delete("/scrapers/{subreddit}")
 async def remove_scraper(subreddit: str, scraper_type: Optional[str] = None):
