@@ -345,6 +345,23 @@ MULTI_SCRAPER_CONFIG = {
 }
 ```
 
+**New Subreddit Prioritization (v1.6+):**
+
+When adding new subreddits to an existing scraper, the system automatically prioritizes them on the first cycle after restart:
+
+- Queries DB to find subreddits with 0 posts
+- Scrapes new subreddits **first** before existing ones
+- Existing subreddits maintain their relative order after
+- Only applies to first cycle (subsequent cycles use normal order)
+
+**Example logs:**
+```
+Prioritizing 2 new subreddits: newsubreddit1, newsubreddit2
+[1/10] Processing r/newsubreddit1
+[2/10] Processing r/newsubreddit2
+[3/10] Processing r/existingsubreddit...
+```
+
 ### Smart Comment Update Prioritization
 
 The system uses intelligent priority-based comment updates based on post activity:
