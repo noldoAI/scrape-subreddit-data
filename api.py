@@ -3327,14 +3327,27 @@ ${logs.logs}
                 // Support comma-separated or single entry
                 const newSubs = text.split(/[,\\s]+/).map(s => s.trim().toLowerCase().replace(/^r\\//, '')).filter(s => s);
 
+                // Calculate effective count (excluding removed subs)
+                const getEffectiveCount = () => [...editedSubreddits].filter(s => !removedSubreddits.has(s)).length;
+
                 let addedCount = 0;
+                let duplicateCount = 0;
                 newSubs.forEach(sub => {
-                    if (!editedSubreddits.has(sub) && editedSubreddits.size < 100) {
-                        editedSubreddits.add(sub);
+                    // Check if already in active list
+                    if (editedSubreddits.has(sub) && !removedSubreddits.has(sub)) {
+                        duplicateCount++;
+                        return;
+                    }
+
+                    // Restoring a removed original sub
+                    if (removedSubreddits.has(sub)) {
                         removedSubreddits.delete(sub);
                         addedCount++;
-                    } else if (removedSubreddits.has(sub)) {
-                        removedSubreddits.delete(sub);
+                        return;
+                    }
+
+                    // Adding new sub - check effective limit
+                    if (getEffectiveCount() < 100) {
                         editedSubreddits.add(sub);
                         addedCount++;
                     }
@@ -3344,7 +3357,10 @@ ${logs.logs}
                     input.value = '';
                     renderSubredditChips();
                     updateSubredditEditStats();
-                } else if (newSubs.length > 0 && editedSubreddits.size >= 100) {
+                } else if (duplicateCount > 0 && newSubs.length === duplicateCount) {
+                    // All were duplicates - clear input silently
+                    input.value = '';
+                } else if (newSubs.length > 0 && getEffectiveCount() >= 100) {
                     alert('Maximum 100 subreddits per container');
                 }
             }
@@ -3444,8 +3460,9 @@ ${logs.logs}
                 }
             }
 
-            // Enter key handler for add subreddit input
+            // Event listeners that need DOM to be ready
             document.addEventListener('DOMContentLoaded', function() {
+                // Enter key handler for add subreddit input
                 const addInput = document.getElementById('addSubredditInput');
                 if (addInput) {
                     addInput.addEventListener('keydown', function(e) {
@@ -3461,19 +3478,25 @@ ${logs.logs}
                         }, 10);
                     });
                 }
-            });
 
-            // Close modal on escape key
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && document.getElementById('subredditModal').style.display === 'flex') {
-                    closeSubredditModal();
+                // Close modal on backdrop click
+                const modal = document.getElementById('subredditModal');
+                if (modal) {
+                    modal.addEventListener('click', function(e) {
+                        if (e.target === this) {
+                            closeSubredditModal();
+                        }
+                    });
                 }
             });
 
-            // Close modal on backdrop click
-            document.getElementById('subredditModal')?.addEventListener('click', function(e) {
-                if (e.target === this) {
-                    closeSubredditModal();
+            // Close modal on escape key (can attach to document immediately)
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    const modal = document.getElementById('subredditModal');
+                    if (modal && modal.style.display === 'flex') {
+                        closeSubredditModal();
+                    }
                 }
             });
 
