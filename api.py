@@ -3513,7 +3513,7 @@ ${logs.logs}
         </script>
 
         <!-- Subreddit Management Modal -->
-        <div id="subredditModal" class="modal-overlay" style="display: none;">
+        <div id="subredditModal" class="modal-overlay subreddit-modal" style="display: none;">
             <div class="modal-container">
                 <div class="modal-header">
                     <h3>Edit Subreddits</h3>
@@ -3575,14 +3575,13 @@ ${logs.logs}
 
         <style>
             /* Modal styles */
-            .modal-overlay {
+            .modal-overlay.subreddit-modal {
                 position: fixed;
                 top: 0;
                 left: 0;
                 width: 100%;
                 height: 100%;
                 background: rgba(0, 0, 0, 0.7);
-                display: flex;
                 justify-content: center;
                 align-items: center;
                 z-index: 1000;
