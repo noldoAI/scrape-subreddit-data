@@ -51,6 +51,10 @@ def setup_azure_logging(logger_name: str, level=logging.INFO) -> logging.Logger:
             from azure.monitor.opentelemetry import configure_azure_monitor
             from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
+            # Suppress verbose Azure SDK logging (HTTP requests/responses)
+            logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+            logging.getLogger("azure.monitor.opentelemetry.exporter").setLevel(logging.WARNING)
+
             # Set cloud role name (for filtering in Azure Portal)
             # Can be overridden via OTEL_SERVICE_NAME env var
             service_name = os.getenv("OTEL_SERVICE_NAME", "reddit-scraper")
