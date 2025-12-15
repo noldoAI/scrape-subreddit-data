@@ -36,6 +36,8 @@ import hashlib
 from cryptography.fernet import Fernet
 import asyncio
 import re
+import praw
+import prawcore.exceptions
 
 # Import centralized configuration
 from config import (
@@ -139,6 +141,13 @@ class RedditCredentials(BaseModel):
     username: str
     password: str
     user_agent: str
+
+class CredentialValidationResponse(BaseModel):
+    """Response model for credential validation"""
+    valid: bool
+    username: Optional[str] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
 
 class ScraperConfig(BaseModel):
     name: Optional[str] = None             # Custom scraper name (optional)
@@ -305,6 +314,114 @@ def delete_reddit_account(account_name: str):
     except Exception as e:
         logger.error(f"Error deleting Reddit account {account_name}: {e}")
         return False
+
+def validate_reddit_credentials(credentials: RedditCredentials, timeout: int = 10) -> dict:
+    """
+    Validate Reddit API credentials by attempting authentication.
+
+    Args:
+        credentials: RedditCredentials object with all credential fields
+        timeout: Maximum seconds to wait for Reddit API response
+
+    Returns:
+        dict with:
+            - valid (bool): Whether credentials are valid
+            - username (str): Authenticated Reddit username (if valid)
+            - error (str): Error message (if invalid)
+            - error_type (str): Error category for programmatic handling
+    """
+    try:
+        reddit = praw.Reddit(
+            client_id=credentials.client_id,
+            client_secret=credentials.client_secret,
+            username=credentials.username,
+            password=credentials.password,
+            user_agent=credentials.user_agent,
+            timeout=timeout
+        )
+
+        # This call validates credentials - throws exception if invalid
+        authenticated_user = reddit.user.me()
+
+        if authenticated_user is None:
+            return {
+                "valid": False,
+                "error": "Authentication failed - could not retrieve user info",
+                "error_type": "auth_failed"
+            }
+
+        return {
+            "valid": True,
+            "username": str(authenticated_user),
+            "error": None,
+            "error_type": None
+        }
+
+    except prawcore.exceptions.OAuthException as e:
+        # Invalid client_id or client_secret
+        return {
+            "valid": False,
+            "error": f"Invalid Reddit API credentials (client_id/client_secret): {e}",
+            "error_type": "oauth_error"
+        }
+
+    except prawcore.exceptions.ResponseException as e:
+        # Check for specific HTTP status codes
+        if hasattr(e, 'response') and e.response is not None:
+            status_code = e.response.status_code
+            if status_code == 401:
+                return {
+                    "valid": False,
+                    "error": "Invalid Reddit username or password",
+                    "error_type": "invalid_password"
+                }
+            elif status_code == 403:
+                return {
+                    "valid": False,
+                    "error": "Reddit account is banned or suspended",
+                    "error_type": "account_suspended"
+                }
+        return {
+            "valid": False,
+            "error": f"Reddit API error: {e}",
+            "error_type": "api_error"
+        }
+
+    except prawcore.exceptions.Forbidden:
+        return {
+            "valid": False,
+            "error": "Reddit account is banned, suspended, or lacks required permissions",
+            "error_type": "forbidden"
+        }
+
+    except prawcore.exceptions.TooManyRequests as e:
+        retry_after = getattr(e, 'retry_after', 60)
+        return {
+            "valid": False,
+            "error": f"Reddit API rate limit exceeded. Try again in {retry_after} seconds",
+            "error_type": "rate_limited"
+        }
+
+    except prawcore.exceptions.ServerError:
+        return {
+            "valid": False,
+            "error": "Reddit API is temporarily unavailable. Please try again later",
+            "error_type": "server_error"
+        }
+
+    except prawcore.exceptions.RequestException as e:
+        return {
+            "valid": False,
+            "error": f"Network error connecting to Reddit API: {e}",
+            "error_type": "network_error"
+        }
+
+    except Exception as e:
+        return {
+            "valid": False,
+            "error": f"Unexpected error validating credentials: {e}",
+            "error_type": "unknown_error"
+        }
 
 def calculate_rate_limit_info(subreddit_count: int, config: dict) -> dict:
     """
@@ -2884,27 +3001,33 @@ async def dashboard():
                     password: document.getElementById('new_password').value,
                     user_agent: document.getElementById('new_user_agent').value
                 };
-                
+
                 // Validate
                 if (!accountName) {
                     alert('Please enter an account name');
                     return;
                 }
-                
+
                 if (!Object.values(credentials).every(v => v)) {
                     alert('Please fill in all credential fields');
                     return;
                 }
-                
+
+                // Get the save button and show loading state
+                const saveBtn = event.target;
+                const originalText = saveBtn.textContent;
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Validating...';
+
                 try {
                     const response = await fetch(`/accounts?account_name=${encodeURIComponent(accountName)}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(credentials)
                     });
-                    
+
                     if (response.ok) {
-                        alert('Account saved successfully!');
+                        alert('Account saved successfully! Credentials validated.');
                         loadAccountsInManager();
                         loadSavedAccounts();
                         // Clear form
@@ -2913,10 +3036,14 @@ async def dashboard():
                         });
                     } else {
                         const error = await response.json();
-                        alert('Error saving account: ' + error.detail);
+                        alert('Validation failed: ' + error.detail);
                     }
                 } catch (error) {
-                    alert('Error saving account: ' + error.message);
+                    alert('Error: ' + error.message);
+                } finally {
+                    // Restore button state
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = originalText;
                 }
             }
             
@@ -4992,11 +5119,19 @@ async def list_saved_accounts():
         raise HTTPException(status_code=500, detail=f"Error loading accounts: {str(e)}")
 
 @app.post("/accounts")
-async def save_account(account_name: str, credentials: RedditCredentials):
-    """Save Reddit credentials for reuse"""
+async def save_account(
+    account_name: str,
+    credentials: RedditCredentials,
+    skip_validation: bool = False
+):
+    """
+    Save Reddit credentials for reuse.
+
+    Validates credentials against Reddit API before saving (unless skip_validation=true).
+    """
     if not account_name or not account_name.strip():
         raise HTTPException(status_code=400, detail="Account name is required")
-    
+
     # Validate credentials are provided
     if not all([
         credentials.client_id,
@@ -5006,15 +5141,76 @@ async def save_account(account_name: str, credentials: RedditCredentials):
         credentials.user_agent
     ]):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="All Reddit API credentials are required"
         )
-    
+
+    # Validate credentials against Reddit API
+    if not skip_validation:
+        validation_result = validate_reddit_credentials(credentials)
+
+        if not validation_result["valid"]:
+            # Map error types to appropriate HTTP status codes
+            error_type = validation_result.get("error_type", "unknown_error")
+            status_map = {
+                "oauth_error": 401,
+                "invalid_password": 401,
+                "account_suspended": 403,
+                "forbidden": 403,
+                "rate_limited": 429,
+                "server_error": 503,
+                "network_error": 503,
+            }
+            status_code = status_map.get(error_type, 400)
+
+            raise HTTPException(
+                status_code=status_code,
+                detail=validation_result["error"]
+            )
+
+        logger.info(f"Credentials validated for Reddit user: {validation_result['username']}")
+
     success = save_reddit_account(account_name.strip(), credentials)
     if success:
         return {"message": f"Account '{account_name}' saved successfully"}
     else:
         raise HTTPException(status_code=500, detail="Failed to save account")
+
+@app.post("/accounts/validate", response_model=CredentialValidationResponse)
+async def validate_credentials(credentials: RedditCredentials):
+    """
+    Validate Reddit API credentials without saving them.
+
+    Use this to test credentials before saving or to verify existing credentials.
+
+    Returns:
+        - valid: Whether credentials are valid
+        - username: Authenticated Reddit username (if valid)
+        - error: Error message (if invalid)
+        - error_type: Error category (oauth_error, invalid_password, etc.)
+    """
+    # Validate all fields are provided
+    if not all([
+        credentials.client_id,
+        credentials.client_secret,
+        credentials.username,
+        credentials.password,
+        credentials.user_agent
+    ]):
+        return CredentialValidationResponse(
+            valid=False,
+            error="All Reddit API credentials are required",
+            error_type="missing_fields"
+        )
+
+    result = validate_reddit_credentials(credentials)
+
+    return CredentialValidationResponse(
+        valid=result["valid"],
+        username=result.get("username"),
+        error=result.get("error"),
+        error_type=result.get("error_type")
+    )
 
 @app.get("/accounts/stats")
 async def get_accounts_stats():
