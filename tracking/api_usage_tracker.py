@@ -95,7 +95,7 @@ class APIUsageTracker:
                 self.db = None
                 logger.warning("No MongoDB URI provided, tracking will be in-memory only")
 
-        self.collection = self.db[API_USAGE_CONFIG["collection_name"]] if self.db else None
+        self.collection = self.db[API_USAGE_CONFIG["collection_name"]] if self.db is not None else None
 
         # In-memory tracking for current cycle
         self._reset_cycle_stats()
@@ -113,7 +113,7 @@ class APIUsageTracker:
 
     def _ensure_indexes(self):
         """Create indexes if they don't exist."""
-        if not self.collection:
+        if self.collection is None:
             return
 
         try:
@@ -208,7 +208,7 @@ class APIUsageTracker:
         Returns:
             True if flush succeeded, False otherwise
         """
-        if not self.collection:
+        if self.collection is None:
             logger.debug("No MongoDB collection, skipping flush")
             return False
 
