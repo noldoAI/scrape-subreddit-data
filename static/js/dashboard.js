@@ -645,7 +645,9 @@ async function fetchCostData() {
 
         if (data.date_range) {
             firstCardLabel.textContent = 'Period';
-            dateRangeLabel.textContent = `${startDate} to ${endDate}`;
+            // Format datetime-local values nicely (replace T with space)
+            const formatDT = (dt) => dt.replace('T', ' ');
+            dateRangeLabel.textContent = `${formatDT(startDate)} to ${formatDT(endDate)}`;
             dateRangeLabel.style.display = 'inline';
         } else {
             firstCardLabel.textContent = 'Today';

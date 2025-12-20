@@ -371,7 +371,7 @@
     color: var(--text-muted);
     font-size: 0.85rem;
 }
-.cost-date-filter input[type="date"] {
+.cost-date-filter input[type="datetime-local"] {
     padding: 6px 10px;
     border: 1px solid var(--border-subtle);
     border-radius: 4px;
@@ -379,7 +379,7 @@
     color: var(--text-primary);
     font-size: 0.85rem;
 }
-.cost-date-filter input[type="date"]:focus {
+.cost-date-filter input[type="datetime-local"]:focus {
     outline: none;
     border-color: var(--accent-cyan);
 }

@@ -212,8 +212,11 @@ def get_usage_stats(
         if start_date.tzinfo is None:
             start_date = start_date.replace(tzinfo=timezone.utc)
         if end_date.tzinfo is None:
-            # Set end_date to end of day
-            end_date = end_date.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            # Only set to end of day if time is midnight (date-only input)
+            if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
+                end_date = end_date.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            else:
+                end_date = end_date.replace(tzinfo=timezone.utc)
         period_start = start_date
         period_end = end_date
         is_custom_range = True
