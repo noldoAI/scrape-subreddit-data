@@ -1,3 +1,5 @@
+// Dashboard JS - Version 1.0.0
+
 const presets = {
     high: {
         posts_limit: 150,
