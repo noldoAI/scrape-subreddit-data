@@ -2796,12 +2796,18 @@ async def get_api_usage_trends(
 
 
 @app.get("/api/usage/cost")
-async def get_api_cost(subreddit: Optional[str] = None):
+async def get_api_cost(
+    subreddit: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
     """
     Get Reddit API cost analysis with projections and averages.
 
     Args:
         subreddit: Optional subreddit filter
+        start_date: Optional start date in ISO format (YYYY-MM-DD)
+        end_date: Optional end date in ISO format (YYYY-MM-DD)
 
     Returns actual HTTP request counts and estimated costs at $0.24 per 1,000 requests.
     Includes hourly/daily averages and monthly projections.
@@ -2810,7 +2816,21 @@ async def get_api_cost(subreddit: Optional[str] = None):
         raise HTTPException(status_code=503, detail="Database not connected")
 
     try:
-        stats = get_usage_stats(db, subreddit=subreddit)
+        # Parse date parameters
+        start_dt = None
+        end_dt = None
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+
+        stats = get_usage_stats(db, subreddit=subreddit, start_date=start_dt, end_date=end_dt)
 
         # Extract cost data
         actual_requests_today = stats.get("actual_http_requests_today", 0)
@@ -2886,7 +2906,8 @@ async def get_api_cost(subreddit: Optional[str] = None):
         projected_monthly_requests = avg_daily_requests * 30
         projected_monthly_cost = avg_daily_cost * 30
 
-        return {
+        # Build response
+        response = {
             "status": "ok",
             "subreddit": subreddit,
             "pricing": {
@@ -2918,6 +2939,15 @@ async def get_api_cost(subreddit: Optional[str] = None):
             },
             "by_subreddit": stats.get("requests_by_subreddit", {}) if not subreddit else None
         }
+
+        # Add date range info if custom range was used
+        if stats.get("is_custom_range"):
+            response["date_range"] = {
+                "start": stats.get("period_start"),
+                "end": stats.get("period_end")
+            }
+
+        return response
     except Exception as e:
         logger.error(f"Error getting API cost analysis: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting API cost: {str(e)}")

@@ -355,3 +355,54 @@
 #subredditFilter::placeholder {
     color: var(--text-muted);
 }
+
+/* Date Filter for Cost Tracker */
+.cost-date-filter {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    flex-wrap: wrap;
+}
+.cost-date-filter label {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.cost-date-filter input[type="date"] {
+    padding: 6px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+.cost-date-filter input[type="date"]:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+}
+.filter-btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    background: var(--accent-cyan);
+    color: var(--bg-primary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.filter-btn:hover {
+    background: var(--accent-cyan-hover, #00c8e5);
+}
+.filter-btn.secondary {
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+}
+.filter-btn.secondary:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}

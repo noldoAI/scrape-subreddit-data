@@ -590,7 +590,17 @@ function toggleBreakdownTable() {
 
 async function fetchSubredditBreakdown() {
     try {
-        const response = await fetch('/api/usage/cost');
+        // Build URL with date params if set
+        let url = '/api/usage/cost';
+        const startDate = document.getElementById('costStartDate').value;
+        const endDate = document.getElementById('costEndDate').value;
+
+        const params = new URLSearchParams();
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (params.toString()) url += '?' + params.toString();
+
+        const response = await fetch(url);
         const data = await response.json();
 
         if (data.by_subreddit && Object.keys(data.by_subreddit).length > 0) {
@@ -611,7 +621,17 @@ async function fetchSubredditBreakdown() {
 
 async function fetchCostData() {
     try {
-        const response = await fetch('/api/usage/cost');
+        // Build URL with date params if set
+        let url = '/api/usage/cost';
+        const startDate = document.getElementById('costStartDate').value;
+        const endDate = document.getElementById('costEndDate').value;
+
+        const params = new URLSearchParams();
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (params.toString()) url += '?' + params.toString();
+
+        const response = await fetch(url);
         const data = await response.json();
 
         if (data.status !== 'ok') {
@@ -619,7 +639,20 @@ async function fetchCostData() {
             return;
         }
 
-        // Today
+        // Update first card label based on whether custom range is used
+        const firstCardLabel = document.querySelector('.cost-card:first-child .cost-label');
+        const dateRangeLabel = document.getElementById('dateRangeLabel');
+
+        if (data.date_range) {
+            firstCardLabel.textContent = 'Period';
+            dateRangeLabel.textContent = `${startDate} to ${endDate}`;
+            dateRangeLabel.style.display = 'inline';
+        } else {
+            firstCardLabel.textContent = 'Today';
+            dateRangeLabel.style.display = 'none';
+        }
+
+        // Today/Period
         document.getElementById('costToday').textContent =
             '$' + data.today.cost_usd.toFixed(2);
         document.getElementById('reqsToday').textContent =
@@ -662,6 +695,26 @@ async function fetchCostData() {
 
     } catch (error) {
         console.error('Failed to fetch cost data:', error);
+    }
+}
+
+function applyDateFilter() {
+    // Reset breakdown data so it fetches fresh with new date range
+    breakdownDataLoaded = false;
+    fetchCostData();
+    // If breakdown is open, refetch it
+    if (!breakdownCollapsed) {
+        fetchSubredditBreakdown();
+    }
+}
+
+function clearDateFilter() {
+    document.getElementById('costStartDate').value = '';
+    document.getElementById('costEndDate').value = '';
+    breakdownDataLoaded = false;
+    fetchCostData();
+    if (!breakdownCollapsed) {
+        fetchSubredditBreakdown();
     }
 }
 

@@ -183,13 +183,20 @@ class APIUsageTracker:
             return False
 
 
-def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
+def get_usage_stats(
+    db,
+    subreddit: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None
+) -> dict:
     """
     Get aggregated usage statistics.
 
     Args:
         db: MongoDB database instance
         subreddit: Optional subreddit filter
+        start_date: Optional start date for custom range
+        end_date: Optional end date for custom range
 
     Returns:
         Aggregated usage stats
@@ -197,15 +204,33 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
     collection = db[API_USAGE_CONFIG["collection_name"]]
 
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    hour_ago = datetime.fromtimestamp(time.time() - 3600, tz=timezone.utc)
 
-    # Build match stage
-    match_stage = {"timestamp": {"$gte": today_start}}
+    # Determine date range
+    if start_date and end_date:
+        # Custom date range mode
+        # Ensure dates are timezone-aware
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=timezone.utc)
+        if end_date.tzinfo is None:
+            # Set end_date to end of day
+            end_date = end_date.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+        period_start = start_date
+        period_end = end_date
+        is_custom_range = True
+    else:
+        # Default: today
+        period_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        period_end = now
+        is_custom_range = False
+
+    hour_ago = now - timedelta(hours=1)
+
+    # Build match stage for period
+    match_stage = {"timestamp": {"$gte": period_start, "$lte": period_end}}
     if subreddit:
         match_stage["subreddit"] = subreddit
 
-    # Aggregate for today
+    # Aggregate for the period
     pipeline = [
         {"$match": match_stage},
         {
@@ -218,20 +243,32 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
     ]
 
     result = list(collection.aggregate(pipeline))
-    today_stats = result[0] if result else {}
+    period_stats = result[0] if result else {}
 
-    # Aggregate for last hour
-    match_stage["timestamp"] = {"$gte": hour_ago}
-    pipeline[0]["$match"] = match_stage
+    # Aggregate for last hour (only if not custom range or if end_date is today)
+    hour_stats = {}
+    if not is_custom_range or (end_date and end_date.date() == now.date()):
+        hour_match = {"timestamp": {"$gte": hour_ago}}
+        if subreddit:
+            hour_match["subreddit"] = subreddit
+        hour_pipeline = [
+            {"$match": hour_match},
+            {
+                "$group": {
+                    "_id": None,
+                    "actual_http_requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
+                    "total_cost_usd": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}},
+                }
+            }
+        ]
+        result = list(collection.aggregate(hour_pipeline))
+        hour_stats = result[0] if result else {}
 
-    result = list(collection.aggregate(pipeline))
-    hour_stats = result[0] if result else {}
-
-    # Get requests by subreddit (if not filtered)
+    # Get requests by subreddit for the period
     requests_by_subreddit = {}
     if not subreddit:
-        pipeline = [
-            {"$match": {"timestamp": {"$gte": today_start}}},
+        sub_pipeline = [
+            {"$match": {"timestamp": {"$gte": period_start, "$lte": period_end}}},
             {
                 "$group": {
                     "_id": "$subreddit",
@@ -241,7 +278,7 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
             },
             {"$sort": {"requests": -1}}
         ]
-        for doc in collection.aggregate(pipeline):
+        for doc in collection.aggregate(sub_pipeline):
             requests_by_subreddit[doc["_id"]] = {
                 "requests": doc["requests"],
                 "cost_usd": round(doc["cost_usd"], 4)
@@ -261,18 +298,21 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
             }
 
     # Calculate costs
-    actual_requests_today = today_stats.get("actual_http_requests", 0)
+    actual_requests_period = period_stats.get("actual_http_requests", 0)
     actual_requests_hour = hour_stats.get("actual_http_requests", 0)
-    cost_today = today_stats.get("total_cost_usd", 0)
+    cost_period = period_stats.get("total_cost_usd", 0)
     cost_hour = hour_stats.get("total_cost_usd", 0)
 
     return {
-        "actual_http_requests_today": actual_requests_today,
+        "actual_http_requests_today": actual_requests_period,
         "actual_http_requests_hour": actual_requests_hour,
         "requests_by_subreddit": requests_by_subreddit,
         "rate_limit": rate_limit,
-        "cost_usd_today": round(cost_today, 4),
+        "cost_usd_today": round(cost_period, 4),
         "cost_usd_hour": round(cost_hour, 4),
+        "is_custom_range": is_custom_range,
+        "period_start": period_start.isoformat() if is_custom_range else None,
+        "period_end": period_end.isoformat() if is_custom_range else None,
     }
 
 

@@ -54,6 +54,15 @@
                 <span id="cost-toggle" style="color: var(--text-muted); font-size: 0.9rem;"></span>
             </div>
             <div id="cost-content" class="cost-panel-content">
+                <div class="cost-date-filter">
+                    <label>From:</label>
+                    <input type="date" id="costStartDate">
+                    <label>To:</label>
+                    <input type="date" id="costEndDate">
+                    <button onclick="applyDateFilter()" class="filter-btn">Apply</button>
+                    <button onclick="clearDateFilter()" class="filter-btn secondary">Clear</button>
+                    <span id="dateRangeLabel" style="display: none; color: var(--accent-cyan); margin-left: auto;"></span>
+                </div>
                 <div class="cost-cards">
                     <div class="cost-card">
                         <div class="cost-label">Today</div>
