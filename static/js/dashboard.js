@@ -557,19 +557,48 @@ function toggleCostPanel() {
     }
 }
 
-let breakdownCollapsed = false;
+let breakdownCollapsed = true;  // Start collapsed
+let breakdownDataLoaded = false;
 
 function toggleBreakdownTable() {
     const table = document.querySelector('#subredditTable');
     const toggle = document.getElementById('breakdown-toggle');
+    const pagination = document.getElementById('subredditPagination');
     breakdownCollapsed = !breakdownCollapsed;
 
     if (breakdownCollapsed) {
         table.style.display = 'none';
+        if (pagination) pagination.style.display = 'none';
         toggle.textContent = '▶';
     } else {
+        // Fetch data on first open
+        if (!breakdownDataLoaded) {
+            fetchSubredditBreakdown();
+        }
         table.style.display = 'table';
+        if (pagination) pagination.style.display = 'block';
         toggle.textContent = '▼';
+    }
+}
+
+async function fetchSubredditBreakdown() {
+    try {
+        const response = await fetch('/api/usage/cost');
+        const data = await response.json();
+
+        if (data.by_subreddit && Object.keys(data.by_subreddit).length > 0) {
+            const sortedSubs = Object.entries(data.by_subreddit)
+                .sort((a, b) => b[1].requests - a[1].requests);
+
+            window.allSubreddits = sortedSubs;
+            window.subredditsPerPage = 20;
+            window.currentSubredditPage = 1;
+
+            renderSubredditTable();
+            breakdownDataLoaded = true;
+        }
+    } catch (error) {
+        console.error('Failed to fetch subreddit breakdown:', error);
     }
 }
 
@@ -617,16 +646,8 @@ async function fetchCostData() {
         document.getElementById('cost-updated').textContent =
             'Updated: ' + new Date().toLocaleTimeString();
 
-        // Render subreddit breakdown table with pagination
+        // Show breakdown section header if data exists (table is lazy-loaded when user expands)
         if (data.by_subreddit && Object.keys(data.by_subreddit).length > 0) {
-            const sortedSubs = Object.entries(data.by_subreddit)
-                .sort((a, b) => b[1].requests - a[1].requests);
-
-            window.allSubreddits = sortedSubs;
-            window.subredditsPerPage = 20;
-            window.currentSubredditPage = 1;
-
-            renderSubredditTable();
             document.getElementById('subredditBreakdown').style.display = 'block';
         } else {
             document.getElementById('subredditBreakdown').style.display = 'none';
