@@ -15,9 +15,9 @@ import time
 import sys
 import argparse
 import threading
-from rate_limits import check_rate_limit
-from api_usage_tracker import APIUsageTracker, track_api_call
-from http_request_counter import CountingSession, COST_PER_1000_REQUESTS
+from core.rate_limits import check_rate_limit
+from tracking.api_usage_tracker import APIUsageTracker, track_api_call
+from tracking.http_request_counter import CountingSession, COST_PER_1000_REQUESTS
 import logging
 
 # Prometheus metrics
@@ -31,7 +31,7 @@ except ImportError:
 from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
 
 # Import Azure logging helper
-from azure_logging import setup_azure_logging
+from core.azure_logging import setup_azure_logging
 
 # Load environment variables
 load_dotenv()

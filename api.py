@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config import LOGGING_CONFIG
-from azure_logging import setup_azure_logging
+from core.azure_logging import setup_azure_logging
 logger = setup_azure_logging("reddit-scraper-api", level=getattr(logging, LOGGING_CONFIG["level"]))
 
 # Now import FastAPI and other dependencies
@@ -47,14 +47,14 @@ from config import (
 )
 
 # Import Prometheus metrics
-from metrics import (
+from core.metrics import (
     update_metrics_from_db, get_metrics, init_metrics,
     scraper_up, database_connected, docker_available as docker_available_metric,
     CONTENT_TYPE_LATEST
 )
 
 # Import API usage tracking functions
-from api_usage_tracker import get_usage_stats, get_usage_trends, API_USAGE_CONFIG
+from tracking.api_usage_tracker import get_usage_stats, get_usage_trends, API_USAGE_CONFIG
 
 app = FastAPI(
     title=API_CONFIG["title"],

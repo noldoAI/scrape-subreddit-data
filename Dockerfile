@@ -21,10 +21,11 @@ RUN pip install --no-cache-dir -r requirements-scraper.txt
 COPY posts_scraper.py .
 COPY comments_scraper.py .
 COPY config.py .
-COPY rate_limits.py .
-COPY metrics.py .
-COPY azure_logging.py .
 COPY .env* ./
+
+# Copy organized modules
+COPY core/ ./core/
+COPY tracking/ ./tracking/
 
 # Expose Prometheus metrics port
 EXPOSE 9100
