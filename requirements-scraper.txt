@@ -1,6 +1,6 @@
 # Scraper container dependencies (lightweight, no ML packages)
 praw==7.7.1
-pymongo==4.6.1
+pymongo==4.6.3
 python-dotenv==1.0.0
 prometheus_client
 azure-monitor-opentelemetry>=1.6.0
