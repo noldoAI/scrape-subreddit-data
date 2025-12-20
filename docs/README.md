@@ -226,6 +226,41 @@ POST /scrapers/restart-all-failed
 GET /scrapers/status-summary
 ```
 
+### **API Cost Tracking**
+
+```bash
+# Get cost statistics (today, last hour, averages, projections)
+GET /api/usage/cost
+
+# Get cost for specific subreddit
+GET /api/usage/cost?subreddit=wallstreetbets
+```
+
+**Response:**
+```json
+{
+  "period": "today",
+  "today": {
+    "actual_http_requests": 45230,
+    "cost_usd": 10.86
+  },
+  "last_hour": {
+    "actual_http_requests": 1850,
+    "cost_usd": 0.44
+  },
+  "averages": {
+    "hourly_requests": 1900,
+    "hourly_cost_usd": 0.46,
+    "daily_requests": 45600,
+    "daily_cost_usd": 10.94
+  },
+  "projections": {
+    "monthly_requests": 1368000,
+    "monthly_cost_usd": 328.32
+  }
+}
+```
+
 ## ⚙️ Configuration Presets
 
 **Optimized for 5 scrapers per Reddit account** (v1.2+ with depth limiting)
@@ -472,6 +507,30 @@ APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx;IngestionEndpoint=h
 - INFO logs stay local only (no flooding)
 - Query via Azure Portal → Application Insights → Logs
 - Example query: `traces | where severityLevel >= 2 | order by timestamp desc`
+
+### **API Cost Tracking Dashboard**
+
+The system tracks Reddit API costs at **$0.24 per 1,000 requests** by counting actual HTTP requests at the transport layer (not just high-level PRAW calls).
+
+**Dashboard Cost Panel** shows:
+- **Today**: Cumulative cost + requests since midnight
+- **Last Hour**: Cost + requests in the last 60 minutes
+- **Avg/Hour**: Today's total ÷ hours elapsed
+- **Avg/Day**: Historical average (last 7 days)
+- **Monthly**: Projected monthly cost (avg/day × 30)
+
+**Why transport-layer counting matters:**
+| What Code Shows | Actual HTTP Requests |
+|-----------------|---------------------|
+| 1 `subreddit.new(limit=100)` | 2-3 requests (pagination) |
+| 1 `replace_more()` | 0-100+ requests |
+| 1 `submission.comments` | 1-5+ requests |
+
+Without this, costs would be underestimated by 2-5x.
+
+**Key files:**
+- `tracking/http_request_counter.py` - `CountingSession` class wraps `requests.Session`
+- `tracking/api_usage_tracker.py` - MongoDB storage for usage stats + cost
 
 ### **Automatic Health Checks**
 
@@ -805,6 +864,13 @@ r/wallstreetbets Statistics:
 - Health monitoring
 - Performance optimization
 - Comprehensive logging
+
+### **💰 API Cost Tracking**
+
+- Transport-layer HTTP request counting
+- Real-time cost dashboard panel
+- Hourly/daily/monthly projections
+- Per-subreddit cost breakdown
 
 ## 📝 License
 
