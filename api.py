@@ -5991,11 +5991,23 @@ async def get_api_cost(subreddit: Optional[str] = None):
         cost_today = stats.get("cost_usd_today", 0)
         cost_hour = stats.get("cost_usd_hour", 0)
 
-        # Calculate hours elapsed today for avg/hour
+        # Calculate hours elapsed since tracking started (not since midnight)
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         hour_start = now - timedelta(hours=1)
-        hours_elapsed = max((now - today_start).total_seconds() / 3600, 1)
+
+        # Get actual tracking start time (first record today)
+        usage_collection = db[COLLECTIONS["API_USAGE"]]
+        first_record = usage_collection.find_one(
+            {"timestamp": {"$gte": today_start}},
+            sort=[("timestamp", 1)]
+        )
+
+        if first_record:
+            tracking_start = first_record["timestamp"]
+            hours_elapsed = max((now - tracking_start).total_seconds() / 3600, 0.1)
+        else:
+            hours_elapsed = 1  # Fallback if no records
 
         # Count actual posts/comments scraped (output context)
         scrape_filter_today = {"scraped_at": {"$gte": today_start}}
@@ -6014,7 +6026,6 @@ async def get_api_cost(subreddit: Optional[str] = None):
         avg_hourly_cost = cost_today / hours_elapsed
 
         # Get historical average (last 7 days) for avg/day
-        usage_collection = db[COLLECTIONS["API_USAGE"]]
         week_ago = now - timedelta(days=7)
 
         # Aggregate daily totals for last 7 days
