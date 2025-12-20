@@ -3113,17 +3113,13 @@ async def dashboard():
                     document.getElementById('costToday').textContent =
                         '$' + data.today.cost_usd.toFixed(2);
                     document.getElementById('reqsToday').textContent =
-                        formatNumber(data.today.actual_http_requests) + ' reqs → ' +
-                        formatNumber(data.today.posts_scraped) + ' posts, ' +
-                        formatNumber(data.today.comments_scraped) + ' comments';
+                        formatNumber(data.today.actual_http_requests) + ' reqs';
 
                     // Last Hour
                     document.getElementById('costHour').textContent =
                         '$' + data.last_hour.cost_usd.toFixed(4);
                     document.getElementById('reqsHour').textContent =
-                        formatNumber(data.last_hour.actual_http_requests) + ' reqs → ' +
-                        formatNumber(data.last_hour.posts_scraped) + ' posts, ' +
-                        formatNumber(data.last_hour.comments_scraped) + ' comments';
+                        formatNumber(data.last_hour.actual_http_requests) + ' reqs';
 
                     // Avg/Hour
                     document.getElementById('costAvgHour').textContent =
