@@ -96,11 +96,13 @@ try:
             posts_collection.create_index([("subreddit", 1), ("num_comments", -1)])
             posts_collection.create_index([("subreddit", 1), ("scraped_at", -1)])
             posts_collection.create_index([("subreddit", 1), ("sort_method", 1)])
+            posts_collection.create_index([("scraped_at", -1)])  # Standalone for date-only queries
 
             # Comments collection indexes
             comments_collection.create_index([("subreddit", 1), ("created_datetime", -1)])
             comments_collection.create_index([("subreddit", 1), ("score", -1)])
             comments_collection.create_index([("subreddit", 1), ("depth", 1)])
+            comments_collection.create_index([("scraped_at", -1)])  # Standalone for date-only queries
 
             # Errors collection indexes
             errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
