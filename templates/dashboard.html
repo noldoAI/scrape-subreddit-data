@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reddit Scraper - Mission Control</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%23050810' width='32' height='32' rx='6'/><circle cx='16' cy='16' r='8' fill='none' stroke='%2300e5ff' stroke-width='2'/><circle cx='16' cy='16' r='4' fill='%2300e5ff'/><line x1='16' y1='8' x2='16' y2='2' stroke='%2300e5ff' stroke-width='2' stroke-linecap='round'/></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/modals.css') }}">
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-message">
+            <div class="spinner"></div>
+            <span id="loadingText">Processing...</span>
+        </div>
+    </div>
+
+    <div class="dashboard-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-top">
+                <div class="header-brand">
+                    <div class="logo-mark">R</div>
+                    <div>
+                        <h1 class="header-title">Reddit Scraper</h1>
+                        <p class="header-subtitle">Mission Control Dashboard</p>
+                    </div>
+                </div>
+                <div class="header-features">
+                    <div class="feature-tag"><span class="dot"></span> Persistent Storage</div>
+                    <div class="feature-tag"><span class="dot"></span> Auto-Restart</div>
+                    <div class="feature-tag"><span class="dot"></span> Multi-Account</div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Health Status -->
+        <div id="health-status"></div>
+
+        <!-- Scrapers List -->
+        <div id="scrapers"></div>
+
+        <!-- Reddit Accounts -->
+        <section id="accounts" style="margin-top: 32px;"></section>
+
+        <!-- API Cost Tracker -->
+        <section id="cost-tracker" style="margin-top: 32px;">
+            <div class="section-header" style="cursor: pointer;" onclick="toggleCostPanel()">
+                <h2 class="section-title">API Cost Tracker</h2>
+                <span id="cost-toggle" style="color: var(--text-muted); font-size: 0.9rem;"></span>
+            </div>
+            <div id="cost-content" class="cost-panel-content">
+                <div class="cost-cards">
+                    <div class="cost-card">
+                        <div class="cost-label">Today</div>
+                        <div class="cost-value" id="costToday">$0.00</div>
+                        <div class="cost-subtext" id="reqsToday">0 requests</div>
+                    </div>
+                    <div class="cost-card">
+                        <div class="cost-label">Last Hour</div>
+                        <div class="cost-value" id="costHour">$0.00</div>
+                        <div class="cost-subtext" id="reqsHour">0 requests</div>
+                    </div>
+                    <div class="cost-card">
+                        <div class="cost-label">Avg/Hour</div>
+                        <div class="cost-value" id="costAvgHour">$0.00</div>
+                        <div class="cost-subtext" id="reqsAvgHour">0 requests</div>
+                    </div>
+                    <div class="cost-card">
+                        <div class="cost-label">Avg/Day</div>
+                        <div class="cost-value" id="costAvgDay">$0.00</div>
+                        <div class="cost-subtext" id="reqsAvgDay">0 requests</div>
+                    </div>
+                    <div class="cost-card projection">
+                        <div class="cost-label">Monthly</div>
+                        <div class="cost-value" id="costMonthly">$0.00</div>
+                        <div class="cost-subtext" id="reqsMonthly">0 requests</div>
+                    </div>
+                </div>
+                <div id="subredditBreakdown" class="subreddit-breakdown" style="display: none;">
+                    <div class="breakdown-header" onclick="toggleBreakdownTable()">
+                        <span>Per-Subreddit Breakdown</span>
+                        <span id="breakdown-toggle">▼</span>
+                    </div>
+                    <table id="subredditTable" class="breakdown-table">
+                        <thead>
+                            <tr>
+                                <th>Subreddit</th>
+                                <th>Requests</th>
+                                <th>Cost</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <div class="cost-footer">
+                    <span style="color: var(--text-muted);">Pricing: $0.24 per 1,000 requests</span>
+                    <span id="cost-updated" style="color: var(--text-muted); margin-left: 20px;"></span>
+                    <button onclick="fetchCostData()" class="cost-refresh-btn">Refresh</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Start New Scraper -->
+        <section style="margin-top: 48px;">
+            <div class="section-header">
+                <h2 class="section-title">Launch New Scraper</h2>
+            </div>
+
+            <!-- Target Selection -->
+            <div class="form-section">
+                <h3>Target Selection</h3>
+                <div class="form-row">
+                    <label>Mode:</label>
+                    <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 260px;">
+                        <option value="single">Single Subreddit</option>
+                        <option value="multi">Multi-Subreddit (up to 100)</option>
+                    </select>
+                    <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
+                </div>
+
+                <div class="form-row">
+                    <label>Scraper Name:</label>
+                    <input type="text" id="scraper_name" placeholder="e.g. Finance Bundle (optional)" style="min-width: 300px;" />
+                    <small style="color: var(--text-muted);">Custom name for this scraper</small>
+                </div>
+
+                <div id="single-subreddit-input">
+                    <div class="form-row">
+                        <label>Subreddit:</label>
+                        <input type="text" id="subreddit" placeholder="e.g. wallstreetbets" style="min-width: 300px;" />
+                        <select id="preset" style="min-width: 280px;">
+                            <option value="custom">Custom Settings</option>
+                            <option value="high">High Activity (wsb, stocks)</option>
+                            <option value="medium">Medium Activity (investing)</option>
+                            <option value="low">Low Activity (niche subs)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="multi-subreddit-input" style="display: none;">
+                    <div class="form-row" style="align-items: flex-start;">
+                        <label style="padding-top: 12px;">Subreddits:</label>
+                        <div style="flex: 1; max-width: 550px;">
+                            <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket, pennystocks, daytrading, thetagang, valueinvesting, dividends"
+                                style="width: 100%; height: 90px; resize: vertical;"></textarea>
+                            <small style="display: block; margin-top: 8px;">Comma-separated list. Max 100 subreddits per container.</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scraper Configuration -->
+            <div class="form-section">
+                <h3>Configuration</h3>
+                <div class="form-row">
+                    <label>Scraper Type:</label>
+                    <select id="scraper_type">
+                        <option value="posts">Posts Scraper</option>
+                        <option value="comments">Comments Scraper</option>
+                    </select>
+                </div>
+
+                <div class="form-grid" style="margin-top: 20px;">
+                    <div class="form-row">
+                        <label>Posts Limit</label>
+                        <input type="number" id="posts_limit" value="1000" />
+                    </div>
+                    <div class="form-row">
+                        <label>Interval (sec)</label>
+                        <input type="number" id="interval" value="60" />
+                    </div>
+                    <div class="form-row">
+                        <label>Comment Batch</label>
+                        <input type="number" id="comment_batch" value="50" />
+                    </div>
+                    <div class="form-row">
+                        <label>Auto-restart</label>
+                        <label class="toggle" style="margin-top: 4px;">
+                            <input type="checkbox" id="auto_restart" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-row" style="margin-top: 16px;">
+                    <label>Sorting:</label>
+                    <div class="sorting-grid">
+                        <label class="sorting-option">
+                            <input type="checkbox" name="sorting" value="new" checked>
+                            <span class="sort-name">new</span>
+                        </label>
+                        <label class="sorting-option">
+                            <input type="checkbox" name="sorting" value="hot" checked>
+                            <span class="sort-name">hot</span>
+                        </label>
+                        <label class="sorting-option">
+                            <input type="checkbox" name="sorting" value="rising" checked>
+                            <span class="sort-name">rising</span>
+                        </label>
+                        <label class="sorting-option">
+                            <input type="checkbox" name="sorting" value="top">
+                            <span class="sort-name">top</span>
+                        </label>
+                        <label class="sorting-option">
+                            <input type="checkbox" name="sorting" value="controversial">
+                            <span class="sort-name">controversial</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reddit Account -->
+            <div class="form-section">
+                <h3>Reddit Account</h3>
+                <div class="form-row">
+                    <label>Account:</label>
+                    <select id="account_type" onchange="toggleAccountType()">
+                        <option value="saved">Use Saved Account</option>
+                        <option value="manual">Enter Manually</option>
+                    </select>
+                </div>
+
+                <!-- Saved Account Selection -->
+                <div id="saved_account_section">
+                    <div class="form-row">
+                        <label>Select:</label>
+                        <select id="saved_account_name" style="min-width: 240px;">
+                            <option value="">Choose an account...</option>
+                        </select>
+                        <button onclick="loadSavedAccounts()" class="stats">Refresh</button>
+                        <button onclick="showAccountManager()" class="stats">Manage</button>
+                    </div>
+                </div>
+
+                <!-- Manual Credentials -->
+                <div id="manual_credentials_section" style="display: none;">
+                    <div class="credentials-section">
+                        <div class="form-grid">
+                            <div class="form-row">
+                                <label>Client ID</label>
+                                <input type="text" id="client_id" placeholder="Reddit app client ID" />
+                            </div>
+                            <div class="form-row">
+                                <label>Client Secret</label>
+                                <input type="password" id="client_secret" placeholder="Reddit app secret" />
+                            </div>
+                            <div class="form-row">
+                                <label>Username</label>
+                                <input type="text" id="username" placeholder="Reddit username" />
+                            </div>
+                            <div class="form-row">
+                                <label>Password</label>
+                                <input type="password" id="password" placeholder="Reddit password" />
+                            </div>
+                        </div>
+                        <div class="form-row" style="margin-top: 16px;">
+                            <label>User Agent:</label>
+                            <input type="text" id="user_agent" placeholder="RedditScraper/1.0 by YourUsername" style="flex: 1; max-width: 400px;" />
+                        </div>
+                        <div class="form-row">
+                            <label>Save as:</label>
+                            <input type="text" id="save_account_as" placeholder="Account name (optional)" />
+                            <small>Save for future use</small>
+                        </div>
+                        <p style="margin: 12px 0 0 0;"><small style="color: var(--text-muted);">Get credentials at <a href="https://www.reddit.com/prefs/apps" target="_blank">reddit.com/prefs/apps</a></small></p>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: 24px;">
+                <button onclick="startScraper()" class="start" id="startScraperBtn" style="padding: 14px 32px; font-size: 15px;">Start Scraper</button>
+            </div>
+        </section>
+    </div>
+
+    <!-- Account Manager Modal -->
+    <div id="accountManagerModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Account Manager</h2>
+                <button onclick="hideAccountManager()" class="modal-close">&times;</button>
+            </div>
+
+            <div class="form-section" style="margin-top: 0;">
+                <h3>Add New Account</h3>
+                <div class="form-grid">
+                    <div class="form-row">
+                        <label>Account Name</label>
+                        <input type="text" id="new_account_name" placeholder="e.g. main_account" />
+                    </div>
+                    <div class="form-row">
+                        <label>Username</label>
+                        <input type="text" id="new_username" placeholder="Reddit username" />
+                    </div>
+                    <div class="form-row">
+                        <label>Client ID</label>
+                        <input type="text" id="new_client_id" placeholder="Reddit app client ID" />
+                    </div>
+                    <div class="form-row">
+                        <label>Client Secret</label>
+                        <input type="password" id="new_client_secret" placeholder="Reddit app secret" />
+                    </div>
+                    <div class="form-row">
+                        <label>Password</label>
+                        <input type="password" id="new_password" placeholder="Reddit password" />
+                    </div>
+                    <div class="form-row">
+                        <label>User Agent</label>
+                        <input type="text" id="new_user_agent" placeholder="Scraper/1.0 by user" />
+                    </div>
+                </div>
+                <div style="margin-top: 16px;">
+                    <button onclick="saveNewAccount()" class="start">Save Account</button>
+                </div>
+            </div>
+
+            <div class="form-section">
+                <h3>Saved Accounts</h3>
+                <div id="savedAccountsList" style="min-height: 60px;"></div>
+            </div>
+
+            <div style="text-align: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-subtle);">
+                <button onclick="hideAccountManager()" class="stats" style="padding: 10px 30px;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subreddit Management Modal -->
+    <div id="subredditModal" class="modal-overlay subreddit-modal" style="display: none;">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3>Edit Subreddits</h3>
+                <button onclick="closeSubredditModal()" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-scraper-info">
+                    <span class="meta-label">Scraper:</span>
+                    <span id="modalScraperName" class="meta-value"></span>
+                </div>
+
+                <div id="rateWarningBanner" class="rate-warning-banner" style="display: none;">
+                    <span class="warning-icon"></span>
+                    <span id="rateWarningText"></span>
+                </div>
+
+                <!-- Add new subreddits input -->
+                <div class="form-group">
+                    <label>Add Subreddits:</label>
+                    <div class="add-subreddit-input-wrapper">
+                        <span class="input-prefix">r/</span>
+                        <input type="text" id="addSubredditInput"
+                            placeholder="Type subreddit name and press Enter"
+                            autocomplete="off" spellcheck="false">
+                        <button onclick="addSubredditFromInput()" class="add-btn" title="Add subreddit">+</button>
+                    </div>
+                    <div class="input-hint">Press Enter to add, or paste comma-separated list</div>
+                </div>
+
+                <!-- Change summary -->
+                <div id="changeSummary" class="change-summary" style="display: none;">
+                    <div id="addedSummary" class="change-item added" style="display: none;">
+                        <span class="change-icon">+</span>
+                        <span id="addedCount">0</span> to add
+                    </div>
+                    <div id="removedSummary" class="change-item removed" style="display: none;">
+                        <span class="change-icon">-</span>
+                        <span id="removedCount">0</span> to remove
+                    </div>
+                </div>
+
+                <!-- Subreddit chips -->
+                <div class="form-group">
+                    <label>Subreddits (<span id="editSubCount">0</span>/100):</label>
+                    <div id="subredditChipsContainer" class="subreddit-chips-interactive"></div>
+                </div>
+
+                <div class="edit-stats">
+                    <span id="editRatePreview" class="rate-preview"></span>
+                </div>
+
+                <div class="modal-actions">
+                    <button onclick="closeSubredditModal()" class="btn-secondary">Cancel</button>
+                    <button onclick="saveSubreddits()" id="saveSubredditsBtn" class="btn-primary">Save & Restart</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', path='js/dashboard.js') }}"></script>
+</body>
+</html>
