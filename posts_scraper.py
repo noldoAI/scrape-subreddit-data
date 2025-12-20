@@ -17,6 +17,7 @@ import argparse
 import threading
 from rate_limits import check_rate_limit
 from api_usage_tracker import APIUsageTracker, track_api_call
+from http_request_counter import CountingSession, COST_PER_1000_REQUESTS
 import logging
 
 # Prometheus metrics
@@ -121,13 +122,15 @@ posts_collection = db[COLLECTIONS["POSTS"]]
 subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
 errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
 
-# Reddit API setup
+# Reddit API setup with HTTP request counting for accurate cost tracking
+http_session = CountingSession()
 reddit = praw.Reddit(
     client_id=os.getenv("R_CLIENT_ID"),
     client_secret=os.getenv("R_CLIENT_SECRET"),
     username=os.getenv("R_USERNAME"),
     password=os.getenv("R_PASSWORD"),
-    user_agent=os.getenv("R_USER_AGENT")
+    user_agent=os.getenv("R_USER_AGENT"),
+    requestor_kwargs={'session': http_session}
 )
 
 
@@ -765,11 +768,23 @@ class RedditPostsScraper:
                     cycle_duration=elapsed_time
                 )
 
-                # Flush API usage tracking to MongoDB
+                # Flush API usage tracking to MongoDB with actual HTTP request counts
                 rate_limit_info = check_rate_limit(reddit)
                 tracker_stats = self.tracker.get_stats()
-                logger.info(f"API usage: {tracker_stats['total_calls']} calls tracked ({tracker_stats['avg_response_time_ms']:.1f}ms avg)")
-                self.tracker.flush_to_db(rate_limit_info)
+
+                # Get actual HTTP request count from CountingSession
+                http_stats = http_session.get_stats()
+                cycle_stats = http_session.reset_cycle()
+
+                logger.info(f"\n--- COST TRACKING ---")
+                logger.info(f"Tracked calls (high-level): {tracker_stats['total_calls']}")
+                logger.info(f"Actual HTTP requests: {cycle_stats['cycle_requests']}")
+                logger.info(f"Cycle cost: ${cycle_stats['cycle_cost_usd']:.4f}")
+                logger.info(f"Total requests (session): {http_stats['total_requests']}")
+                logger.info(f"Total cost (session): ${http_stats['total_cost_usd']:.4f}")
+
+                # Pass HTTP stats to tracker for storage
+                self.tracker.flush_to_db(rate_limit_info, http_stats=cycle_stats)
 
                 # Wait before next cycle
                 logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
@@ -864,9 +879,10 @@ def run_multi_subreddit_scraping(subreddit_names, config):
 
                 logger.info(f"r/{subreddit_name}: {len(posts)} posts ({new_posts} new)")
 
-                # Flush API usage tracking to MongoDB
+                # Flush API usage tracking to MongoDB with HTTP stats
                 rate_limit_info = check_rate_limit(reddit)
-                scraper.tracker.flush_to_db(rate_limit_info)
+                sub_http_stats = http_session.reset_cycle()
+                scraper.tracker.flush_to_db(rate_limit_info, http_stats=sub_http_stats)
 
                 # Update Prometheus metrics
                 if PROMETHEUS_ENABLED:
@@ -890,6 +906,9 @@ def run_multi_subreddit_scraping(subreddit_names, config):
 
         cycle_duration = time.time() - cycle_start
 
+        # Get HTTP session stats for cost tracking
+        total_http_stats = http_session.get_stats()
+
         logger.info(f"\n{'='*60}")
         logger.info("ROTATION CYCLE SUMMARY")
         logger.info(f"{'='*60}")
@@ -897,6 +916,8 @@ def run_multi_subreddit_scraping(subreddit_names, config):
         logger.info(f"Total posts: {cycle_stats['total_posts']} ({cycle_stats['total_new']} new)")
         logger.info(f"Errors: {cycle_stats['errors']}")
         logger.info(f"Cycle duration: {cycle_duration:.1f}s")
+        logger.info(f"Total HTTP requests (session): {total_http_stats['total_requests']}")
+        logger.info(f"Total cost (session): ${total_http_stats['total_cost_usd']:.4f}")
 
         logger.info(f"\nRotation complete. Waiting {config['scrape_interval']}s before next cycle...")
         time.sleep(config['scrape_interval'])

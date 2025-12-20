@@ -5754,6 +5754,68 @@ async def get_api_usage_trends(
         raise HTTPException(status_code=500, detail=f"Error getting API usage trends: {str(e)}")
 
 
+@app.get("/api/usage/cost")
+async def get_api_cost(subreddit: Optional[str] = None):
+    """
+    Get Reddit API cost analysis with projections.
+
+    Args:
+        subreddit: Optional subreddit filter
+
+    Returns actual HTTP request counts and estimated costs at $0.24 per 1,000 requests.
+    Includes daily and monthly projections based on current usage patterns.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        stats = get_usage_stats(db, subreddit=subreddit)
+
+        # Extract cost data
+        actual_requests_today = stats.get("actual_http_requests_today", 0)
+        actual_requests_hour = stats.get("actual_http_requests_hour", 0)
+        cost_today = stats.get("cost_usd_today", 0)
+        cost_hour = stats.get("cost_usd_hour", 0)
+
+        # Project daily and monthly costs based on hourly rate
+        # Use last hour as basis for projection
+        projected_daily = cost_hour * 24 if cost_hour > 0 else 0
+        projected_monthly = projected_daily * 30
+
+        # Calculate accuracy ratio (tracked vs actual)
+        tracked_calls = stats.get("total_calls_today", 0)
+        accuracy_ratio = tracked_calls / actual_requests_today if actual_requests_today > 0 else 1.0
+
+        return {
+            "status": "ok",
+            "subreddit": subreddit,
+            "pricing": {
+                "cost_per_1000_requests": 0.24,
+                "currency": "USD"
+            },
+            "today": {
+                "actual_http_requests": actual_requests_today,
+                "tracked_calls": tracked_calls,
+                "cost_usd": round(cost_today, 4),
+                "accuracy_ratio": round(accuracy_ratio, 4)
+            },
+            "last_hour": {
+                "actual_http_requests": actual_requests_hour,
+                "cost_usd": round(cost_hour, 4)
+            },
+            "projections": {
+                "daily_requests": actual_requests_hour * 24,
+                "daily_cost_usd": round(projected_daily, 2),
+                "monthly_requests": actual_requests_hour * 24 * 30,
+                "monthly_cost_usd": round(projected_monthly, 2)
+            },
+            "by_subreddit": stats.get("calls_by_subreddit", {}) if not subreddit else None
+        }
+    except Exception as e:
+        logger.error(f"Error getting API cost analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API cost: {str(e)}")
+
+
 @app.get("/api/usage/{subreddit}")
 async def get_api_usage_by_subreddit(subreddit: str):
     """

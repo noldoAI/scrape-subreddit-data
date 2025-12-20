@@ -176,4 +176,9 @@ API_USAGE_CONFIG = {
     "flush_interval": 60,                           # Seconds between DB writes
     "retention_days": 30,                           # Days to keep historical data (TTL auto-cleanup)
     "batch_size": 100,                              # Max records per flush
+    # Reddit API Cost Configuration (as of 2023, still in effect 2025)
+    "cost_per_1000_requests": 0.24,                 # $0.24 per 1,000 API requests
+    "free_tier_qpm": 100,                           # Free tier: 100 queries per minute for OAuth apps
+    "track_request_details": True,                  # Log individual request details
+    "max_request_log_size": 10000,                  # Limit in-memory request log size
 } 

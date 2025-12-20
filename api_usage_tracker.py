@@ -197,12 +197,13 @@ class APIUsageTracker:
             "qpm": round(self.total_calls / (elapsed / 60), 2) if elapsed > 0 else 0
         }
 
-    def flush_to_db(self, rate_limit_info: Optional[dict] = None) -> bool:
+    def flush_to_db(self, rate_limit_info: Optional[dict] = None, http_stats: Optional[dict] = None) -> bool:
         """
         Flush current cycle stats to MongoDB.
 
         Args:
             rate_limit_info: Rate limit snapshot from reddit.auth.limits
+            http_stats: Actual HTTP request stats from CountingSession
 
         Returns:
             True if flush succeeded, False otherwise
@@ -211,7 +212,8 @@ class APIUsageTracker:
             logger.debug("No MongoDB collection, skipping flush")
             return False
 
-        if self.total_calls == 0:
+        # Allow flush even with 0 tracked calls if we have HTTP stats
+        if self.total_calls == 0 and (http_stats is None or http_stats.get('cycle_requests', 0) == 0):
             logger.debug("No calls to flush")
             return True
 
@@ -250,12 +252,33 @@ class APIUsageTracker:
                 "reset_in_seconds": rate_limit_info.get("reset_in_seconds")
             }
 
+        # Add actual HTTP request counts and cost (critical for accurate billing)
+        if http_stats:
+            actual_requests = http_stats.get('cycle_requests', 0)
+            cost_usd = http_stats.get('cycle_cost_usd', 0.0)
+            doc["actual_http_requests"] = actual_requests
+            doc["estimated_cost_usd"] = cost_usd
+            # Calculate accuracy ratio (how much we undercount)
+            if actual_requests > 0:
+                doc["accuracy_ratio"] = round(self.total_calls / actual_requests, 4)
+            else:
+                doc["accuracy_ratio"] = 1.0
+
         try:
             self.collection.insert_one(doc)
-            logger.info(
-                f"Flushed API usage: {self.total_calls} calls "
-                f"({self.errors} errors, {avg_response_time:.1f}ms avg)"
-            )
+
+            # Log with cost info if available
+            if http_stats:
+                logger.info(
+                    f"Flushed API usage: {self.total_calls} tracked / "
+                    f"{http_stats.get('cycle_requests', 0)} actual HTTP requests "
+                    f"(${http_stats.get('cycle_cost_usd', 0):.4f})"
+                )
+            else:
+                logger.info(
+                    f"Flushed API usage: {self.total_calls} calls "
+                    f"({self.errors} errors, {avg_response_time:.1f}ms avg)"
+                )
 
             # Reset for next cycle
             self._reset_cycle_stats()
@@ -343,6 +366,9 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
                 "metadata_fetch": {"$sum": "$calls.metadata_fetch"},
                 "auth_check": {"$sum": "$calls.auth_check"},
                 "rate_limit_check": {"$sum": "$calls.rate_limit_check"},
+                # Actual HTTP request counts and cost
+                "actual_http_requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
+                "total_cost_usd": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}},
             }
         }
     ]
@@ -387,6 +413,12 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
                 "last_updated": latest["timestamp"].isoformat() if latest.get("timestamp") else None
             }
 
+    # Calculate costs
+    actual_requests_today = today_stats.get("actual_http_requests", 0)
+    actual_requests_hour = hour_stats.get("actual_http_requests", 0)
+    cost_today = today_stats.get("total_cost_usd", 0)
+    cost_hour = hour_stats.get("total_cost_usd", 0)
+
     return {
         "total_calls_today": today_stats.get("total_calls", 0),
         "total_calls_hour": hour_stats.get("total_calls", 0),
@@ -404,7 +436,12 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
             today_stats.get("total_errors", 0) / today_stats.get("total_calls", 1),
             4
         ) if today_stats.get("total_calls", 0) > 0 else 0,
-        "rate_limit": rate_limit
+        "rate_limit": rate_limit,
+        # Actual HTTP requests and cost (accurate billing data)
+        "actual_http_requests_today": actual_requests_today,
+        "actual_http_requests_hour": actual_requests_hour,
+        "cost_usd_today": round(cost_today, 4),
+        "cost_usd_hour": round(cost_hour, 4),
     }
 
 
