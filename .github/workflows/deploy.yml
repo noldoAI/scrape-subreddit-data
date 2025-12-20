@@ -17,6 +17,8 @@ on:
       - 'tracking/**'
       - 'discovery/**'
       - 'api/**'
+      - 'static/**'
+      - 'templates/**'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
