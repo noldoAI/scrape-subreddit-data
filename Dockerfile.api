@@ -41,6 +41,10 @@ COPY tracking/ ./tracking/
 # Copy discovery module (for LLM enrichment)
 COPY discovery/ ./discovery/
 
+# Copy frontend assets
+COPY static/ ./static/
+COPY templates/ ./templates/
+
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
 # Keep as root for Docker socket access
