@@ -2916,7 +2916,7 @@ async def get_api_cost(subreddit: Optional[str] = None):
                 "monthly_requests": round(projected_monthly_requests),
                 "monthly_cost_usd": round(projected_monthly_cost, 2)
             },
-            "by_subreddit": stats.get("calls_by_subreddit", {}) if not subreddit else None
+            "by_subreddit": stats.get("requests_by_subreddit", {}) if not subreddit else None
         }
     except Exception as e:
         logger.error(f"Error getting API cost analysis: {e}")

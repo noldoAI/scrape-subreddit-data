@@ -358,6 +358,73 @@ body::before {
     border-color: var(--border-hover);
 }
 
+/* Subreddit Breakdown Table */
+.subreddit-breakdown {
+    margin-top: 20px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.breakdown-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-elevated);
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: background 0.2s;
+}
+
+.breakdown-header:hover {
+    background: var(--bg-hover);
+}
+
+.breakdown-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.breakdown-table th,
+.breakdown-table td {
+    padding: 10px 16px;
+    text-align: left;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.breakdown-table th {
+    background: var(--bg-elevated);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.breakdown-table td {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+}
+
+.breakdown-table td:first-child {
+    color: var(--accent-cyan);
+}
+
+.breakdown-table td:nth-child(2) {
+    color: var(--text-secondary);
+}
+
+.breakdown-table td:last-child {
+    color: var(--accent-green);
+}
+
+.breakdown-table tbody tr:hover {
+    background: var(--bg-hover);
+}
+
 @media (max-width: 1200px) {
     .cost-cards {
         grid-template-columns: repeat(3, 1fr);

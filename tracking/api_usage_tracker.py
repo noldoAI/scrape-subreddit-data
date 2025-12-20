@@ -235,14 +235,18 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
             {
                 "$group": {
                     "_id": "$subreddit",
-                    "requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}}
+                    "requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
+                    "cost_usd": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}}
                 }
             },
             {"$sort": {"requests": -1}},
             {"$limit": 20}
         ]
         for doc in collection.aggregate(pipeline):
-            requests_by_subreddit[doc["_id"]] = doc["requests"]
+            requests_by_subreddit[doc["_id"]] = {
+                "requests": doc["requests"],
+                "cost_usd": round(doc["cost_usd"], 4)
+            }
 
     # Get latest rate limit info
     rate_limit = None

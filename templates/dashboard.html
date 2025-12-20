@@ -81,6 +81,22 @@
                         <div class="cost-subtext" id="reqsMonthly">0 requests</div>
                     </div>
                 </div>
+                <div id="subredditBreakdown" class="subreddit-breakdown" style="display: none;">
+                    <div class="breakdown-header" onclick="toggleBreakdownTable()">
+                        <span>Per-Subreddit Breakdown</span>
+                        <span id="breakdown-toggle">▼</span>
+                    </div>
+                    <table id="subredditTable" class="breakdown-table">
+                        <thead>
+                            <tr>
+                                <th>Subreddit</th>
+                                <th>Requests</th>
+                                <th>Cost</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
                 <div class="cost-footer">
                     <span style="color: var(--text-muted);">Pricing: $0.24 per 1,000 requests</span>
                     <span id="cost-updated" style="color: var(--text-muted); margin-left: 20px;"></span>

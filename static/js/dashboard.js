@@ -555,6 +555,22 @@ function toggleCostPanel() {
     }
 }
 
+let breakdownCollapsed = false;
+
+function toggleBreakdownTable() {
+    const table = document.querySelector('#subredditTable');
+    const toggle = document.getElementById('breakdown-toggle');
+    breakdownCollapsed = !breakdownCollapsed;
+
+    if (breakdownCollapsed) {
+        table.style.display = 'none';
+        toggle.textContent = '▶';
+    } else {
+        table.style.display = 'table';
+        toggle.textContent = '▼';
+    }
+}
+
 async function fetchCostData() {
     try {
         const response = await fetch('/api/usage/cost');
@@ -598,6 +614,23 @@ async function fetchCostData() {
         // Update timestamp
         document.getElementById('cost-updated').textContent =
             'Updated: ' + new Date().toLocaleTimeString();
+
+        // Render subreddit breakdown table
+        if (data.by_subreddit && Object.keys(data.by_subreddit).length > 0) {
+            const tbody = document.querySelector('#subredditTable tbody');
+            tbody.innerHTML = Object.entries(data.by_subreddit)
+                .sort((a, b) => b[1].requests - a[1].requests)
+                .map(([sub, stats]) =>
+                    `<tr>
+                        <td>r/${sub}</td>
+                        <td>${stats.requests.toLocaleString()}</td>
+                        <td>$${stats.cost_usd.toFixed(4)}</td>
+                    </tr>`
+                ).join('');
+            document.getElementById('subredditBreakdown').style.display = 'block';
+        } else {
+            document.getElementById('subredditBreakdown').style.display = 'none';
+        }
 
     } catch (error) {
         console.error('Failed to fetch cost data:', error);
