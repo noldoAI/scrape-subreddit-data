@@ -2861,17 +2861,12 @@ async def get_api_cost(
         else:
             hours_elapsed = 1  # Fallback if no records
 
-        # Count actual posts/comments scraped (output context)
-        scrape_filter_today = {"scraped_at": {"$gte": today_start}}
-        scrape_filter_hour = {"scraped_at": {"$gte": hour_start}}
-        if subreddit:
-            scrape_filter_today["subreddit"] = subreddit
-            scrape_filter_hour["subreddit"] = subreddit
-
-        posts_today = posts_collection.count_documents(scrape_filter_today)
-        comments_today = comments_collection.count_documents(scrape_filter_today)
-        posts_hour = posts_collection.count_documents(scrape_filter_hour)
-        comments_hour = comments_collection.count_documents(scrape_filter_hour)
+        # Skip expensive count_documents for posts/comments - not essential for cost tracking
+        # These counts are available via /scrapers or /stats/global if needed
+        posts_today = 0
+        comments_today = 0
+        posts_hour = 0
+        comments_hour = 0
 
         # Avg per hour (today's total ÷ hours elapsed)
         avg_hourly_requests = actual_requests_today / hours_elapsed
