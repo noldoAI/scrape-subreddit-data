@@ -559,6 +559,13 @@ function toggleCostPanel() {
 
 let breakdownCollapsed = true;  // Start collapsed
 let breakdownDataLoaded = false;
+let subredditFilterQuery = '';
+
+function filterSubreddits(query) {
+    subredditFilterQuery = query.toLowerCase();
+    window.currentSubredditPage = 1;  // Reset to first page when filtering
+    renderSubredditTable();
+}
 
 function toggleBreakdownTable() {
     const table = document.querySelector('#subredditTable');
@@ -669,14 +676,20 @@ function formatNumber(num) {
 
 function renderSubredditTable() {
     const tbody = document.querySelector('#subredditTable tbody');
-    const subs = window.allSubreddits || [];
+    const allSubs = window.allSubreddits || [];
+
+    // Filter by search query
+    const filteredSubs = subredditFilterQuery
+        ? allSubs.filter(([sub]) => sub.toLowerCase().includes(subredditFilterQuery))
+        : allSubs;
+
     const perPage = window.subredditsPerPage || 20;
     const page = window.currentSubredditPage || 1;
 
-    const totalPages = Math.ceil(subs.length / perPage);
+    const totalPages = Math.ceil(filteredSubs.length / perPage);
     const start = (page - 1) * perPage;
     const end = start + perPage;
-    const pageSubs = subs.slice(start, end);
+    const pageSubs = filteredSubs.slice(start, end);
 
     tbody.innerHTML = pageSubs.map(([sub, stats]) =>
         `<tr>
@@ -688,14 +701,19 @@ function renderSubredditTable() {
 
     // Render pagination controls
     let paginationHtml = '';
-    if (subs.length > perPage) {
+    if (filteredSubs.length > perPage) {
         paginationHtml = `<div class="table-pagination">
-            <span class="pagination-info">Showing ${start + 1}-${Math.min(end, subs.length)} of ${subs.length}</span>
+            <span class="pagination-info">Showing ${start + 1}-${Math.min(end, filteredSubs.length)} of ${filteredSubs.length}${subredditFilterQuery ? ' (filtered)' : ''}</span>
             <div class="pagination-buttons">
                 <button onclick="changeSubredditPage(${page - 1})" ${page <= 1 ? 'disabled' : ''}>Prev</button>
                 <span class="page-num">${page} / ${totalPages}</span>
                 <button onclick="changeSubredditPage(${page + 1})" ${page >= totalPages ? 'disabled' : ''}>Next</button>
             </div>
+        </div>`;
+    } else if (subredditFilterQuery && filteredSubs.length > 0) {
+        // Show filter info even without pagination
+        paginationHtml = `<div class="table-pagination">
+            <span class="pagination-info">Showing ${filteredSubs.length} of ${allSubs.length} (filtered)</span>
         </div>`;
     }
 
@@ -710,7 +728,11 @@ function renderSubredditTable() {
 }
 
 function changeSubredditPage(page) {
-    const totalPages = Math.ceil((window.allSubreddits || []).length / (window.subredditsPerPage || 20));
+    const allSubs = window.allSubreddits || [];
+    const filteredSubs = subredditFilterQuery
+        ? allSubs.filter(([sub]) => sub.toLowerCase().includes(subredditFilterQuery))
+        : allSubs;
+    const totalPages = Math.ceil(filteredSubs.length / (window.subredditsPerPage || 20));
     if (page < 1 || page > totalPages) return;
     window.currentSubredditPage = page;
     renderSubredditTable();

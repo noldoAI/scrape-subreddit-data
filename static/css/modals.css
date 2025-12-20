@@ -335,3 +335,23 @@
     color: var(--text-secondary);
     padding: 0 8px;
 }
+
+/* Subreddit Filter Input */
+#subredditFilter {
+    padding: 6px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface-elevated, var(--bg-elevated));
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    margin-left: auto;
+    margin-right: 12px;
+    width: 180px;
+}
+#subredditFilter:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+}
+#subredditFilter::placeholder {
+    color: var(--text-muted);
+}
