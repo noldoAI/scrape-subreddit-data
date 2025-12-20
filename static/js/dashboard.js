@@ -1160,7 +1160,7 @@ function addSubredditFromInput() {
     if (!text) return;
 
     // Support comma-separated or single entry
-    const newSubs = text.split(/[,\\s]+/).map(s => s.trim().toLowerCase().replace(/^r\\//, '')).filter(s => s);
+    const newSubs = text.split(/[,\s]+/).map(s => s.trim().toLowerCase().replace(/^r\//, '')).filter(s => s);
 
     // Calculate effective count (excluding removed subs)
     const getEffectiveCount = () => [...editedSubreddits].filter(s => !removedSubreddits.has(s)).length;
