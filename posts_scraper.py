@@ -87,10 +87,10 @@ if PROMETHEUS_ENABLED:
         ['subreddit']
     )
 
-    # Scraper errors counter
+    # Scraper errors counter (distinct from core/metrics.py's errors_total Gauge)
     SCRAPER_ERRORS = Counter(
-        'reddit_scraper_errors_total',
-        'Scraper errors by type',
+        'reddit_posts_scraper_errors',
+        'Posts scraper errors by type',
         ['subreddit', 'error_type']
     )
 
