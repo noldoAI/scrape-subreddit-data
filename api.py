@@ -53,6 +53,9 @@ from metrics import (
     CONTENT_TYPE_LATEST
 )
 
+# Import API usage tracking functions
+from api_usage_tracker import get_usage_stats, get_usage_trends, API_USAGE_CONFIG
+
 app = FastAPI(
     title=API_CONFIG["title"],
     description=API_CONFIG["description"],
@@ -5687,6 +5690,95 @@ async def trigger_embedding_processing(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+# =============================================================================
+# API USAGE TRACKING ENDPOINTS
+# =============================================================================
+
+@app.get("/api/usage")
+async def get_api_usage():
+    """
+    Get overall Reddit API usage statistics.
+
+    Returns aggregated API call counts, breakdowns by type and subreddit,
+    average response times, and error rates.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        stats = get_usage_stats(db)
+        return {
+            "status": "ok",
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting API usage stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API usage: {str(e)}")
+
+
+@app.get("/api/usage/trends")
+async def get_api_usage_trends(
+    period: str = "day",
+    granularity: str = "hour",
+    subreddit: Optional[str] = None
+):
+    """
+    Get time-series API usage data for charting.
+
+    Args:
+        period: Time period - "hour", "day", or "week" (default: "day")
+        granularity: Data granularity - "minute", "hour", or "day" (default: "hour")
+        subreddit: Optional subreddit filter
+
+    Returns time-series data with timestamps, call counts, and error counts.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    # Validate parameters
+    if period not in ["hour", "day", "week"]:
+        raise HTTPException(status_code=400, detail="period must be 'hour', 'day', or 'week'")
+    if granularity not in ["minute", "hour", "day"]:
+        raise HTTPException(status_code=400, detail="granularity must be 'minute', 'hour', or 'day'")
+
+    try:
+        trends = get_usage_trends(db, period=period, granularity=granularity, subreddit=subreddit)
+        return {
+            "status": "ok",
+            **trends
+        }
+    except Exception as e:
+        logger.error(f"Error getting API usage trends: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API usage trends: {str(e)}")
+
+
+@app.get("/api/usage/{subreddit}")
+async def get_api_usage_by_subreddit(subreddit: str):
+    """
+    Get Reddit API usage statistics for a specific subreddit.
+
+    Args:
+        subreddit: The subreddit name to get stats for
+
+    Returns per-subreddit API call counts, breakdowns by type,
+    average response times, and current rate limit status.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        stats = get_usage_stats(db, subreddit=subreddit)
+        return {
+            "status": "ok",
+            "subreddit": subreddit,
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting API usage stats for r/{subreddit}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API usage: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn

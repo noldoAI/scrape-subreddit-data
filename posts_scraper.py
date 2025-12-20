@@ -16,6 +16,7 @@ import sys
 import argparse
 import threading
 from rate_limits import check_rate_limit
+from api_usage_tracker import APIUsageTracker, track_api_call
 import logging
 
 # Prometheus metrics
@@ -190,7 +191,14 @@ class RedditPostsScraper:
         self.subreddit_name = subreddit_name
         self.config = {**DEFAULT_SCRAPER_CONFIG, **(config or {})}
         self.cycle_count = 0
-        self.api_calls_this_cycle = 0  # Track API calls per cycle
+        self.api_calls_this_cycle = 0  # Track API calls per cycle (legacy counter)
+
+        # Initialize API usage tracker for detailed tracking
+        self.tracker = APIUsageTracker(
+            subreddit=subreddit_name,
+            scraper_type="posts",
+            db=db
+        )
 
         logger.info(f"🔗 Authenticated as: {reddit.user.me()}")
         logger.info(f"🎯 Target subreddit: r/{self.subreddit_name}")
@@ -212,13 +220,15 @@ class RedditPostsScraper:
         """Scrape posts from the target subreddit using specified sorting method."""
         logger.info(f"\n--- Scraping {limit} {sort_method} posts from r/{self.subreddit_name} ---")
 
-        check_rate_limit(reddit)
-        self.api_calls_this_cycle += 1  # Track API call
+        rate_limit_info = check_rate_limit(reddit)
+        self.api_calls_this_cycle += 1  # Track API call (legacy counter)
+        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
 
         try:
             subreddit = reddit.subreddit(self.subreddit_name)
 
-            # Get posts using the specified sorting method
+            # Get posts using the specified sorting method with timing
+            start_time = time.time()
             if sort_method == "hot":
                 posts = subreddit.hot(limit=limit)
             elif sort_method == "new":
@@ -241,12 +251,21 @@ class RedditPostsScraper:
                 logger.error(f"Unknown sort method: {sort_method}, defaulting to hot")
                 posts = subreddit.hot(limit=limit)
 
+            # Track the posts fetch API call
+            self.tracker.track_call(
+                "posts_fetch",
+                f"subreddit.{sort_method}",
+                True,
+                (time.time() - start_time) * 1000
+            )
+
             posts_list = []
 
             for i, post in enumerate(posts):
                 if i % 100 == 0 and i > 0:
                     check_rate_limit(reddit)
                     self.api_calls_this_cycle += 1
+                    self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
 
                 post_data = {
                     "title": post.title,
@@ -405,10 +424,12 @@ class RedditPostsScraper:
     def scrape_subreddit_metadata(self):
         """Scrape subreddit metadata."""
         logger.info(f"\n--- Scraping metadata for r/{self.subreddit_name} ---")
-        
+
         check_rate_limit(reddit)
-        
+        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
+
         try:
+            start_time = time.time()
             subreddit = reddit.subreddit(self.subreddit_name)
             
             metadata = {
@@ -515,10 +536,19 @@ class RedditPostsScraper:
             active_users = metadata['active_user_count'] or 0
             logger.info(f"Subscribers: {subscribers:,}, Active: {active_users:,}")
             logger.info(f"Enhanced metadata collected: {len(rules)} rules, {len(sample_posts)} posts, guidelines: {bool(metadata['guidelines_text'])}")
+
+            # Track metadata fetch API call (includes subreddit info, rules, guidelines, sample posts)
+            self.tracker.track_call(
+                "metadata_fetch",
+                "subreddit.metadata",
+                True,
+                (time.time() - start_time) * 1000
+            )
             return metadata
-            
+
         except Exception as e:
             logger.error(f"Error scraping subreddit metadata: {e}")
+            self.tracker.track_call("metadata_fetch", "subreddit.metadata", False, 0)
             return None
     
     def save_subreddit_metadata(self, metadata):
@@ -735,6 +765,12 @@ class RedditPostsScraper:
                     cycle_duration=elapsed_time
                 )
 
+                # Flush API usage tracking to MongoDB
+                rate_limit_info = check_rate_limit(reddit)
+                tracker_stats = self.tracker.get_stats()
+                logger.info(f"API usage: {tracker_stats['total_calls']} calls tracked ({tracker_stats['avg_response_time_ms']:.1f}ms avg)")
+                self.tracker.flush_to_db(rate_limit_info)
+
                 # Wait before next cycle
                 logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
                 time.sleep(self.config['scrape_interval'])
@@ -827,6 +863,10 @@ def run_multi_subreddit_scraping(subreddit_names, config):
                 cycle_stats["total_new"] += new_posts
 
                 logger.info(f"r/{subreddit_name}: {len(posts)} posts ({new_posts} new)")
+
+                # Flush API usage tracking to MongoDB
+                rate_limit_info = check_rate_limit(reddit)
+                scraper.tracker.flush_to_db(rate_limit_info)
 
                 # Update Prometheus metrics
                 if PROMETHEUS_ENABLED:
