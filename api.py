@@ -3113,13 +3113,15 @@ async def dashboard():
                     document.getElementById('costToday').textContent =
                         '$' + data.today.cost_usd.toFixed(2);
                     document.getElementById('reqsToday').textContent =
-                        formatNumber(data.today.actual_http_requests) + ' reqs';
+                        formatNumber(data.today.actual_http_requests) + ' HTTP / ' +
+                        formatNumber(data.today.tracked_calls) + ' PRAW';
 
                     // Last Hour
                     document.getElementById('costHour').textContent =
                         '$' + data.last_hour.cost_usd.toFixed(4);
                     document.getElementById('reqsHour').textContent =
-                        formatNumber(data.last_hour.actual_http_requests) + ' reqs';
+                        formatNumber(data.last_hour.actual_http_requests) + ' HTTP / ' +
+                        formatNumber(data.last_hour.tracked_calls) + ' PRAW';
 
                     // Avg/Hour
                     document.getElementById('costAvgHour').textContent =
@@ -6057,8 +6059,9 @@ async def get_api_cost(subreddit: Optional[str] = None):
         projected_monthly_cost = avg_daily_cost * 30
 
         # Calculate accuracy ratio (tracked vs actual)
-        tracked_calls = stats.get("total_calls_today", 0)
-        accuracy_ratio = tracked_calls / actual_requests_today if actual_requests_today > 0 else 1.0
+        tracked_calls_today = stats.get("total_calls_today", 0)
+        tracked_calls_hour = stats.get("total_calls_hour", 0)
+        accuracy_ratio = tracked_calls_today / actual_requests_today if actual_requests_today > 0 else 1.0
 
         return {
             "status": "ok",
@@ -6069,7 +6072,7 @@ async def get_api_cost(subreddit: Optional[str] = None):
             },
             "today": {
                 "actual_http_requests": actual_requests_today,
-                "tracked_calls": tracked_calls,
+                "tracked_calls": tracked_calls_today,
                 "cost_usd": round(cost_today, 4),
                 "accuracy_ratio": round(accuracy_ratio, 4),
                 "posts_scraped": posts_today,
@@ -6077,6 +6080,7 @@ async def get_api_cost(subreddit: Optional[str] = None):
             },
             "last_hour": {
                 "actual_http_requests": actual_requests_hour,
+                "tracked_calls": tracked_calls_hour,
                 "cost_usd": round(cost_hour, 4),
                 "posts_scraped": posts_hour,
                 "comments_scraped": comments_hour
