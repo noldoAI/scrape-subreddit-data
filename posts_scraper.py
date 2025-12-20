@@ -16,7 +16,7 @@ import sys
 import argparse
 import threading
 from core.rate_limits import check_rate_limit
-from tracking.api_usage_tracker import APIUsageTracker, track_api_call
+from tracking.api_usage_tracker import APIUsageTracker
 from tracking.http_request_counter import CountingSession, COST_PER_1000_REQUESTS
 import logging
 
@@ -220,8 +220,7 @@ class RedditPostsScraper:
         logger.info(f"\n--- Scraping {limit} {sort_method} posts from r/{self.subreddit_name} ---")
 
         rate_limit_info = check_rate_limit(reddit)
-        self.api_calls_this_cycle += 1  # Track API call (legacy counter)
-        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
+        # Note: reddit.auth.limits is a cached property, not an API call - don't track it
 
         try:
             subreddit = reddit.subreddit(self.subreddit_name)
@@ -250,21 +249,11 @@ class RedditPostsScraper:
                 logger.error(f"Unknown sort method: {sort_method}, defaulting to hot")
                 posts = subreddit.hot(limit=limit)
 
-            # Track the posts fetch API call
-            self.tracker.track_call(
-                "posts_fetch",
-                f"subreddit.{sort_method}",
-                True,
-                (time.time() - start_time) * 1000
-            )
-
             posts_list = []
 
             for i, post in enumerate(posts):
                 if i % 100 == 0 and i > 0:
-                    check_rate_limit(reddit)
-                    self.api_calls_this_cycle += 1
-                    self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
+                    check_rate_limit(reddit)  # Just checks cached headers, not an API call
 
                 post_data = {
                     "title": post.title,
@@ -424,8 +413,7 @@ class RedditPostsScraper:
         """Scrape subreddit metadata."""
         logger.info(f"\n--- Scraping metadata for r/{self.subreddit_name} ---")
 
-        check_rate_limit(reddit)
-        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
+        check_rate_limit(reddit)  # Just checks cached headers, not an API call
 
         try:
             start_time = time.time()
@@ -535,19 +523,10 @@ class RedditPostsScraper:
             active_users = metadata['active_user_count'] or 0
             logger.info(f"Subscribers: {subscribers:,}, Active: {active_users:,}")
             logger.info(f"Enhanced metadata collected: {len(rules)} rules, {len(sample_posts)} posts, guidelines: {bool(metadata['guidelines_text'])}")
-
-            # Track metadata fetch API call (includes subreddit info, rules, guidelines, sample posts)
-            self.tracker.track_call(
-                "metadata_fetch",
-                "subreddit.metadata",
-                True,
-                (time.time() - start_time) * 1000
-            )
             return metadata
 
         except Exception as e:
             logger.error(f"Error scraping subreddit metadata: {e}")
-            self.tracker.track_call("metadata_fetch", "subreddit.metadata", False, 0)
             return None
     
     def save_subreddit_metadata(self, metadata):
@@ -766,20 +745,18 @@ class RedditPostsScraper:
 
                 # Flush API usage tracking to MongoDB with actual HTTP request counts
                 rate_limit_info = check_rate_limit(reddit)
-                tracker_stats = self.tracker.get_stats()
 
                 # Get actual HTTP request count from CountingSession
                 http_stats = http_session.get_stats()
                 cycle_stats = http_session.reset_cycle()
 
                 logger.info(f"\n--- COST TRACKING ---")
-                logger.info(f"Tracked calls (high-level): {tracker_stats['total_calls']}")
-                logger.info(f"Actual HTTP requests: {cycle_stats['cycle_requests']}")
-                logger.info(f"Cycle cost: ${cycle_stats['cycle_cost_usd']:.4f}")
+                logger.info(f"Requests this cycle: {cycle_stats['cycle_requests']}")
+                logger.info(f"Cost this cycle: ${cycle_stats['cycle_cost_usd']:.4f}")
                 logger.info(f"Total requests (session): {http_stats['total_requests']}")
                 logger.info(f"Total cost (session): ${http_stats['total_cost_usd']:.4f}")
 
-                # Pass HTTP stats to tracker for storage
+                # Save to MongoDB
                 self.tracker.flush_to_db(rate_limit_info, http_stats=cycle_stats)
 
                 # Wait before next cycle

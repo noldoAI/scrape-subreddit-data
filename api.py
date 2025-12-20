@@ -3113,15 +3113,13 @@ async def dashboard():
                     document.getElementById('costToday').textContent =
                         '$' + data.today.cost_usd.toFixed(2);
                     document.getElementById('reqsToday').textContent =
-                        formatNumber(data.today.actual_http_requests) + ' HTTP / ' +
-                        formatNumber(data.today.tracked_calls) + ' PRAW';
+                        formatNumber(data.today.requests) + ' reqs';
 
                     // Last Hour
                     document.getElementById('costHour').textContent =
                         '$' + data.last_hour.cost_usd.toFixed(4);
                     document.getElementById('reqsHour').textContent =
-                        formatNumber(data.last_hour.actual_http_requests) + ' HTTP / ' +
-                        formatNumber(data.last_hour.tracked_calls) + ' PRAW';
+                        formatNumber(data.last_hour.requests) + ' reqs';
 
                     // Avg/Hour
                     document.getElementById('costAvgHour').textContent =
@@ -6061,11 +6059,6 @@ async def get_api_cost(subreddit: Optional[str] = None):
         projected_monthly_requests = avg_daily_requests * 30
         projected_monthly_cost = avg_daily_cost * 30
 
-        # Calculate accuracy ratio (tracked vs actual)
-        tracked_calls_today = stats.get("total_calls_today", 0)
-        tracked_calls_hour = stats.get("total_calls_hour", 0)
-        accuracy_ratio = tracked_calls_today / actual_requests_today if actual_requests_today > 0 else 1.0
-
         return {
             "status": "ok",
             "subreddit": subreddit,
@@ -6074,16 +6067,13 @@ async def get_api_cost(subreddit: Optional[str] = None):
                 "currency": "USD"
             },
             "today": {
-                "actual_http_requests": actual_requests_today,
-                "tracked_calls": tracked_calls_today,
+                "requests": actual_requests_today,
                 "cost_usd": round(cost_today, 4),
-                "accuracy_ratio": round(accuracy_ratio, 4),
                 "posts_scraped": posts_today,
                 "comments_scraped": comments_today
             },
             "last_hour": {
-                "actual_http_requests": actual_requests_hour,
-                "tracked_calls": tracked_calls_hour,
+                "requests": actual_requests_hour,
                 "cost_usd": round(cost_hour, 4),
                 "posts_scraped": posts_hour,
                 "comments_scraped": comments_hour

@@ -22,7 +22,7 @@ import sys
 import argparse
 import threading
 from core.rate_limits import check_rate_limit
-from tracking.api_usage_tracker import APIUsageTracker, track_api_call
+from tracking.api_usage_tracker import APIUsageTracker
 from tracking.http_request_counter import CountingSession, COST_PER_1000_REQUESTS
 from praw.models import MoreComments
 import logging
@@ -309,9 +309,7 @@ class RedditCommentsScraper:
         if existing_comment_ids is None:
             existing_comment_ids = set()
 
-        check_rate_limit(reddit)
-        self.api_calls_this_cycle += 1
-        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
+        check_rate_limit(reddit)  # Just checks cached headers, not an API call
 
         try:
             start_time = time.time()
@@ -324,18 +322,8 @@ class RedditCommentsScraper:
             # replace_more_limit: 0 = skip MoreComments entirely (fastest)
             #                     None = expand all (slowest)
             #                     N = expand up to N MoreComments
-            expand_start = time.time()
             submission.comments.replace_more(limit=replace_more_limit)
             self.api_calls_this_cycle += 1
-
-            # Track comments expansion (may make multiple API calls internally)
-            if replace_more_limit != 0:
-                self.tracker.track_call(
-                    "comments_expand",
-                    "comments.replace_more",
-                    True,
-                    (time.time() - expand_start) * 1000
-                )
 
             comments_list = []
 
@@ -388,19 +376,10 @@ class RedditCommentsScraper:
             for comment in submission.comments:
                 process_comment(comment, depth=0)
 
-            # Track comments fetch API call
-            self.tracker.track_call(
-                "comments_fetch",
-                f"submission.comments({post_id})",
-                True,
-                (time.time() - start_time) * 1000
-            )
-
             return comments_list
 
         except Exception as e:
             logger.error(f"Error scraping comments for post {post_id}: {e}")
-            self.tracker.track_call("comments_fetch", f"submission.comments({post_id})", False, 0)
             raise  # Re-raise for retry decorator
 
     @retry_with_backoff(max_retries=3, backoff_factor=2)
@@ -690,20 +669,18 @@ class RedditCommentsScraper:
 
                 # Flush API usage tracking to MongoDB with actual HTTP request counts
                 rate_limit_info = check_rate_limit(reddit)
-                tracker_stats = self.tracker.get_stats()
 
                 # Get actual HTTP request count from CountingSession
                 http_stats = http_session.get_stats()
                 cycle_stats = http_session.reset_cycle()
 
                 logger.info(f"\n--- COST TRACKING ---")
-                logger.info(f"Tracked calls (high-level): {tracker_stats['total_calls']}")
-                logger.info(f"Actual HTTP requests: {cycle_stats['cycle_requests']}")
-                logger.info(f"Cycle cost: ${cycle_stats['cycle_cost_usd']:.4f}")
+                logger.info(f"Requests this cycle: {cycle_stats['cycle_requests']}")
+                logger.info(f"Cost this cycle: ${cycle_stats['cycle_cost_usd']:.4f}")
                 logger.info(f"Total requests (session): {http_stats['total_requests']}")
                 logger.info(f"Total cost (session): ${http_stats['total_cost_usd']:.4f}")
 
-                # Pass HTTP stats to tracker for storage
+                # Save to MongoDB
                 self.tracker.flush_to_db(rate_limit_info, http_stats=cycle_stats)
 
                 # Update Prometheus metrics

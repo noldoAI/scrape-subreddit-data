@@ -2,16 +2,15 @@
 """
 Reddit API Usage Tracker
 
-Tracks Reddit API calls with timing, categorization, and historical storage in MongoDB.
-Provides per-request visibility, batched writes, and in-memory stats.
+Stores HTTP request counts and costs to MongoDB for billing/monitoring.
+HTTP requests are counted by CountingSession at the transport layer.
 """
 
 import os
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
-from collections import defaultdict
 
 import pymongo
 
@@ -31,35 +30,20 @@ API_USAGE_CONFIG = {
     "collection_name": "reddit_api_usage",
     "flush_interval": 60,           # Seconds between DB writes
     "retention_days": 30,           # Days to keep historical data (TTL)
-    "batch_size": 100,              # Max records per flush
-}
-
-# Call type constants
-CALL_TYPES = {
-    "posts_fetch": "posts_fetch",           # subreddit.new(), .top(), .rising(), etc.
-    "comments_fetch": "comments_fetch",     # submission.comments
-    "comments_expand": "comments_expand",   # replace_more() calls
-    "metadata_fetch": "metadata_fetch",     # subreddit rules, requirements, info
-    "auth_check": "auth_check",             # reddit.user.me()
-    "rate_limit_check": "rate_limit_check", # reddit.auth.limits access
+    "cost_per_1000_requests": 0.24, # Reddit API pricing
 }
 
 
 class APIUsageTracker:
     """
-    Tracks Reddit API calls and stores usage data in MongoDB.
+    Stores Reddit API usage data (HTTP request counts and costs) to MongoDB.
 
     Usage:
         tracker = APIUsageTracker(subreddit="wallstreetbets", scraper_type="posts", db=db)
 
-        # Track a call
-        start = time.time()
-        posts = subreddit.new(limit=100)
-        tracker.track_call("posts_fetch", "subreddit.new", success=True,
-                          response_time_ms=(time.time() - start) * 1000)
-
-        # Flush to DB at end of cycle
-        tracker.flush_to_db(rate_limit_info)
+        # At end of cycle, pass HTTP stats from CountingSession
+        cycle_stats = http_session.reset_cycle()
+        tracker.flush_to_db(rate_limit_info, http_stats=cycle_stats)
     """
 
     def __init__(
@@ -81,6 +65,7 @@ class APIUsageTracker:
         self.subreddit = subreddit
         self.scraper_type = scraper_type
         self.container_id = container_id or os.getenv("HOSTNAME", "unknown")
+        self.cycle_start_time = time.time()
 
         # MongoDB connection
         if db is not None:
@@ -93,23 +78,12 @@ class APIUsageTracker:
                 self.db = client[DATABASE_NAME]
             else:
                 self.db = None
-                logger.warning("No MongoDB URI provided, tracking will be in-memory only")
+                logger.warning("No MongoDB URI provided, tracking will be disabled")
 
         self.collection = self.db[API_USAGE_CONFIG["collection_name"]] if self.db is not None else None
 
-        # In-memory tracking for current cycle
-        self._reset_cycle_stats()
-
         # Ensure indexes exist (run once)
         self._ensure_indexes()
-
-    def _reset_cycle_stats(self):
-        """Reset in-memory stats for a new cycle."""
-        self.cycle_start_time = time.time()
-        self.calls = defaultdict(int)
-        self.response_times = []
-        self.errors = 0
-        self.total_calls = 0
 
     def _ensure_indexes(self):
         """Create indexes if they don't exist."""
@@ -146,60 +120,9 @@ class APIUsageTracker:
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
 
-    def track_call(
-        self,
-        call_type: str,
-        endpoint: str,
-        success: bool = True,
-        response_time_ms: float = 0.0
-    ):
-        """
-        Track a single API call.
-
-        Args:
-            call_type: Type of call (see CALL_TYPES)
-            endpoint: Specific endpoint/method called (e.g., "subreddit.new")
-            success: Whether the call succeeded
-            response_time_ms: Response time in milliseconds
-        """
-        self.calls[call_type] += 1
-        self.total_calls += 1
-
-        if response_time_ms > 0:
-            self.response_times.append(response_time_ms)
-
-        if not success:
-            self.errors += 1
-
-        logger.debug(f"Tracked API call: {call_type} ({endpoint}) - {response_time_ms:.1f}ms")
-
-    def get_stats(self) -> dict:
-        """
-        Get current cycle statistics.
-
-        Returns:
-            dict with current cycle stats
-        """
-        elapsed = time.time() - self.cycle_start_time
-        avg_response_time = (
-            sum(self.response_times) / len(self.response_times)
-            if self.response_times else 0.0
-        )
-
-        return {
-            "subreddit": self.subreddit,
-            "scraper_type": self.scraper_type,
-            "total_calls": self.total_calls,
-            "calls_by_type": dict(self.calls),
-            "errors": self.errors,
-            "avg_response_time_ms": round(avg_response_time, 2),
-            "cycle_duration_seconds": round(elapsed, 2),
-            "qpm": round(self.total_calls / (elapsed / 60), 2) if elapsed > 0 else 0
-        }
-
     def flush_to_db(self, rate_limit_info: Optional[dict] = None, http_stats: Optional[dict] = None) -> bool:
         """
-        Flush current cycle stats to MongoDB.
+        Save HTTP request stats to MongoDB.
 
         Args:
             rate_limit_info: Rate limit snapshot from reddit.auth.limits
@@ -212,9 +135,9 @@ class APIUsageTracker:
             logger.debug("No MongoDB collection, skipping flush")
             return False
 
-        # Allow flush even with 0 tracked calls if we have HTTP stats
-        if self.total_calls == 0 and (http_stats is None or http_stats.get('cycle_requests', 0) == 0):
-            logger.debug("No calls to flush")
+        # Skip if no HTTP stats
+        if http_stats is None or http_stats.get('cycle_requests', 0) == 0:
+            logger.debug("No requests to flush")
             return True
 
         now = datetime.now(timezone.utc)
@@ -223,13 +146,10 @@ class APIUsageTracker:
         hour_bucket = now.replace(minute=0, second=0, microsecond=0)
         day_bucket = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Calculate average response time
-        avg_response_time = (
-            sum(self.response_times) / len(self.response_times)
-            if self.response_times else 0.0
-        )
+        # Build document with HTTP stats
+        actual_requests = http_stats.get('cycle_requests', 0)
+        cost_usd = http_stats.get('cycle_cost_usd', 0.0)
 
-        # Build document
         doc = {
             "subreddit": self.subreddit,
             "scraper_type": self.scraper_type,
@@ -237,10 +157,8 @@ class APIUsageTracker:
             "timestamp": now,
             "hour_bucket": hour_bucket,
             "day_bucket": day_bucket,
-            "calls": dict(self.calls),
-            "total_calls": self.total_calls,
-            "avg_response_time_ms": round(avg_response_time, 2),
-            "errors": self.errors,
+            "actual_http_requests": actual_requests,
+            "estimated_cost_usd": cost_usd,
             "cycle_duration_seconds": round(time.time() - self.cycle_start_time, 2)
         }
 
@@ -252,82 +170,18 @@ class APIUsageTracker:
                 "reset_in_seconds": rate_limit_info.get("reset_in_seconds")
             }
 
-        # Add actual HTTP request counts and cost (critical for accurate billing)
-        if http_stats:
-            actual_requests = http_stats.get('cycle_requests', 0)
-            cost_usd = http_stats.get('cycle_cost_usd', 0.0)
-            doc["actual_http_requests"] = actual_requests
-            doc["estimated_cost_usd"] = cost_usd
-            # Calculate accuracy ratio (how much we undercount)
-            if actual_requests > 0:
-                doc["accuracy_ratio"] = round(self.total_calls / actual_requests, 4)
-            else:
-                doc["accuracy_ratio"] = 1.0
-
         try:
             self.collection.insert_one(doc)
+            logger.debug(f"Flushed usage: {actual_requests} requests, ${cost_usd:.4f}")
 
-            # Log with cost info if available
-            if http_stats:
-                logger.info(
-                    f"Flushed API usage: {self.total_calls} tracked / "
-                    f"{http_stats.get('cycle_requests', 0)} actual HTTP requests "
-                    f"(${http_stats.get('cycle_cost_usd', 0):.4f})"
-                )
-            else:
-                logger.info(
-                    f"Flushed API usage: {self.total_calls} calls "
-                    f"({self.errors} errors, {avg_response_time:.1f}ms avg)"
-                )
-
-            # Reset for next cycle
-            self._reset_cycle_stats()
+            # Reset cycle timer
+            self.cycle_start_time = time.time()
             return True
 
         except Exception as e:
-            logger.error(f"Failed to flush API usage to MongoDB: {e}")
+            logger.error(f"Failed to flush usage to DB: {e}")
             return False
 
-
-def track_api_call(tracker: Optional[APIUsageTracker], call_type: str, endpoint: str):
-    """
-    Context manager for tracking API calls with timing.
-
-    Usage:
-        with track_api_call(tracker, "posts_fetch", "subreddit.new"):
-            posts = subreddit.new(limit=100)
-    """
-    class APICallContext:
-        def __init__(self, tracker, call_type, endpoint):
-            self.tracker = tracker
-            self.call_type = call_type
-            self.endpoint = endpoint
-            self.start_time = None
-            self.success = True
-
-        def __enter__(self):
-            self.start_time = time.time()
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            elapsed_ms = (time.time() - self.start_time) * 1000
-            self.success = exc_type is None
-
-            if self.tracker:
-                self.tracker.track_call(
-                    self.call_type,
-                    self.endpoint,
-                    success=self.success,
-                    response_time_ms=elapsed_ms
-                )
-
-            # Don't suppress exceptions
-            return False
-
-    return APICallContext(tracker, call_type, endpoint)
-
-
-# Aggregation queries for API endpoints
 
 def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
     """
@@ -357,16 +211,6 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
         {
             "$group": {
                 "_id": None,
-                "total_calls": {"$sum": "$total_calls"},
-                "total_errors": {"$sum": "$errors"},
-                "avg_response_time": {"$avg": "$avg_response_time_ms"},
-                "posts_fetch": {"$sum": "$calls.posts_fetch"},
-                "comments_fetch": {"$sum": "$calls.comments_fetch"},
-                "comments_expand": {"$sum": "$calls.comments_expand"},
-                "metadata_fetch": {"$sum": "$calls.metadata_fetch"},
-                "auth_check": {"$sum": "$calls.auth_check"},
-                "rate_limit_check": {"$sum": "$calls.rate_limit_check"},
-                # Actual HTTP request counts and cost
                 "actual_http_requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
                 "total_cost_usd": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}},
             }
@@ -383,22 +227,22 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
     result = list(collection.aggregate(pipeline))
     hour_stats = result[0] if result else {}
 
-    # Get calls by subreddit (if not filtered)
-    calls_by_subreddit = {}
+    # Get requests by subreddit (if not filtered)
+    requests_by_subreddit = {}
     if not subreddit:
         pipeline = [
             {"$match": {"timestamp": {"$gte": today_start}}},
             {
                 "$group": {
                     "_id": "$subreddit",
-                    "total_calls": {"$sum": "$total_calls"}
+                    "requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}}
                 }
             },
-            {"$sort": {"total_calls": -1}},
+            {"$sort": {"requests": -1}},
             {"$limit": 20}
         ]
         for doc in collection.aggregate(pipeline):
-            calls_by_subreddit[doc["_id"]] = doc["total_calls"]
+            requests_by_subreddit[doc["_id"]] = doc["requests"]
 
     # Get latest rate limit info
     rate_limit = None
@@ -420,26 +264,10 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
     cost_hour = hour_stats.get("total_cost_usd", 0)
 
     return {
-        "total_calls_today": today_stats.get("total_calls", 0),
-        "total_calls_hour": hour_stats.get("total_calls", 0),
-        "calls_by_type": {
-            "posts_fetch": today_stats.get("posts_fetch", 0),
-            "comments_fetch": today_stats.get("comments_fetch", 0),
-            "comments_expand": today_stats.get("comments_expand", 0),
-            "metadata_fetch": today_stats.get("metadata_fetch", 0),
-            "auth_check": today_stats.get("auth_check", 0),
-            "rate_limit_check": today_stats.get("rate_limit_check", 0),
-        },
-        "calls_by_subreddit": calls_by_subreddit,
-        "avg_response_time_ms": round(today_stats.get("avg_response_time", 0), 2),
-        "error_rate": round(
-            today_stats.get("total_errors", 0) / today_stats.get("total_calls", 1),
-            4
-        ) if today_stats.get("total_calls", 0) > 0 else 0,
-        "rate_limit": rate_limit,
-        # Actual HTTP requests and cost (accurate billing data)
         "actual_http_requests_today": actual_requests_today,
         "actual_http_requests_hour": actual_requests_hour,
+        "requests_by_subreddit": requests_by_subreddit,
+        "rate_limit": rate_limit,
         "cost_usd_today": round(cost_today, 4),
         "cost_usd_hour": round(cost_hour, 4),
     }
@@ -447,50 +275,25 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
 
 def get_usage_trends(
     db,
-    period: str = "day",
-    granularity: str = "hour",
-    subreddit: Optional[str] = None
-) -> dict:
+    subreddit: Optional[str] = None,
+    hours: int = 24
+) -> list:
     """
-    Get time-series usage data for charting.
+    Get hourly usage trends.
 
     Args:
         db: MongoDB database instance
-        period: "hour", "day", or "week"
-        granularity: "minute", "hour", or "day"
         subreddit: Optional subreddit filter
+        hours: Number of hours to look back
 
     Returns:
-        Time-series data
+        List of hourly stats
     """
     collection = db[API_USAGE_CONFIG["collection_name"]]
 
-    now = datetime.now(timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # Calculate period start
-    if period == "hour":
-        period_start = datetime.fromtimestamp(time.time() - 3600, tz=timezone.utc)
-    elif period == "day":
-        period_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    else:  # week
-        period_start = datetime.fromtimestamp(time.time() - 7 * 24 * 3600, tz=timezone.utc)
-
-    # Determine bucket field
-    if granularity == "minute":
-        # Group by minute (no pre-computed bucket, use $dateTrunc)
-        date_group = {
-            "$dateTrunc": {
-                "date": "$timestamp",
-                "unit": "minute"
-            }
-        }
-    elif granularity == "hour":
-        date_group = "$hour_bucket"
-    else:  # day
-        date_group = "$day_bucket"
-
-    # Build match stage
-    match_stage = {"timestamp": {"$gte": period_start}}
+    match_stage = {"timestamp": {"$gte": cutoff}}
     if subreddit:
         match_stage["subreddit"] = subreddit
 
@@ -498,27 +301,19 @@ def get_usage_trends(
         {"$match": match_stage},
         {
             "$group": {
-                "_id": date_group,
-                "calls": {"$sum": "$total_calls"},
-                "errors": {"$sum": "$errors"},
-                "avg_response_time": {"$avg": "$avg_response_time_ms"}
+                "_id": "$hour_bucket",
+                "requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
+                "cost_usd": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}}
             }
         },
         {"$sort": {"_id": 1}}
     ]
 
-    data = []
-    for doc in collection.aggregate(pipeline):
-        data.append({
-            "timestamp": doc["_id"].isoformat() if doc["_id"] else None,
-            "calls": doc["calls"],
-            "errors": doc["errors"],
-            "avg_response_time_ms": round(doc.get("avg_response_time", 0), 2)
-        })
-
-    return {
-        "period": period,
-        "granularity": granularity,
-        "subreddit": subreddit,
-        "data": data
-    }
+    return [
+        {
+            "hour": doc["_id"].isoformat() if doc["_id"] else None,
+            "requests": doc["requests"],
+            "cost_usd": round(doc["cost_usd"], 4)
+        }
+        for doc in collection.aggregate(pipeline)
+    ]
