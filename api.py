@@ -6007,6 +6007,9 @@ async def get_api_cost(subreddit: Optional[str] = None):
 
         if first_record:
             tracking_start = first_record["timestamp"]
+            # Ensure timezone-aware for comparison
+            if tracking_start.tzinfo is None:
+                tracking_start = tracking_start.replace(tzinfo=timezone.utc)
             hours_elapsed = max((now - tracking_start).total_seconds() / 3600, 0.1)
         else:
             hours_elapsed = 1  # Fallback if no records
