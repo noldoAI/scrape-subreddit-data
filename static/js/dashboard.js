@@ -617,18 +617,16 @@ async function fetchCostData() {
         document.getElementById('cost-updated').textContent =
             'Updated: ' + new Date().toLocaleTimeString();
 
-        // Render subreddit breakdown table
+        // Render subreddit breakdown table with pagination
         if (data.by_subreddit && Object.keys(data.by_subreddit).length > 0) {
-            const tbody = document.querySelector('#subredditTable tbody');
-            tbody.innerHTML = Object.entries(data.by_subreddit)
-                .sort((a, b) => b[1].requests - a[1].requests)
-                .map(([sub, stats]) =>
-                    `<tr>
-                        <td>r/${sub}</td>
-                        <td>${stats.requests.toLocaleString()}</td>
-                        <td>$${stats.cost_usd.toFixed(4)}</td>
-                    </tr>`
-                ).join('');
+            const sortedSubs = Object.entries(data.by_subreddit)
+                .sort((a, b) => b[1].requests - a[1].requests);
+
+            window.allSubreddits = sortedSubs;
+            window.subredditsPerPage = 20;
+            window.currentSubredditPage = 1;
+
+            renderSubredditTable();
             document.getElementById('subredditBreakdown').style.display = 'block';
         } else {
             document.getElementById('subredditBreakdown').style.display = 'none';
@@ -646,6 +644,55 @@ function formatNumber(num) {
         return (num / 1000).toFixed(1) + 'K';
     }
     return num.toLocaleString();
+}
+
+function renderSubredditTable() {
+    const tbody = document.querySelector('#subredditTable tbody');
+    const subs = window.allSubreddits || [];
+    const perPage = window.subredditsPerPage || 20;
+    const page = window.currentSubredditPage || 1;
+
+    const totalPages = Math.ceil(subs.length / perPage);
+    const start = (page - 1) * perPage;
+    const end = start + perPage;
+    const pageSubs = subs.slice(start, end);
+
+    tbody.innerHTML = pageSubs.map(([sub, stats]) =>
+        `<tr>
+            <td>r/${sub}</td>
+            <td>${stats.requests.toLocaleString()}</td>
+            <td>$${stats.cost_usd.toFixed(4)}</td>
+        </tr>`
+    ).join('');
+
+    // Render pagination controls
+    let paginationHtml = '';
+    if (subs.length > perPage) {
+        paginationHtml = `<div class="table-pagination">
+            <span class="pagination-info">Showing ${start + 1}-${Math.min(end, subs.length)} of ${subs.length}</span>
+            <div class="pagination-buttons">
+                <button onclick="changeSubredditPage(${page - 1})" ${page <= 1 ? 'disabled' : ''}>Prev</button>
+                <span class="page-num">${page} / ${totalPages}</span>
+                <button onclick="changeSubredditPage(${page + 1})" ${page >= totalPages ? 'disabled' : ''}>Next</button>
+            </div>
+        </div>`;
+    }
+
+    // Update or create pagination element
+    let paginationEl = document.getElementById('subredditPagination');
+    if (!paginationEl) {
+        paginationEl = document.createElement('div');
+        paginationEl.id = 'subredditPagination';
+        document.querySelector('#subredditTable').after(paginationEl);
+    }
+    paginationEl.innerHTML = paginationHtml;
+}
+
+function changeSubredditPage(page) {
+    const totalPages = Math.ceil((window.allSubreddits || []).length / (window.subredditsPerPage || 20));
+    if (page < 1 || page > totalPages) return;
+    window.currentSubredditPage = page;
+    renderSubredditTable();
 }
 
 // Auto-refresh cost data every 60 seconds

@@ -291,3 +291,47 @@
 .btn-primary:hover {
     background: var(--accent-cyan-hover);
 }
+
+/* Table Pagination */
+.table-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    margin-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+}
+.pagination-info {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.pagination-buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pagination-buttons button {
+    padding: 6px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+.pagination-buttons button:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+}
+.pagination-buttons button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.page-num {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    padding: 0 8px;
+}

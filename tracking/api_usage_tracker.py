@@ -239,8 +239,7 @@ def get_usage_stats(db, subreddit: Optional[str] = None) -> dict:
                     "cost_usd": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}}
                 }
             },
-            {"$sort": {"requests": -1}},
-            {"$limit": 20}
+            {"$sort": {"requests": -1}}
         ]
         for doc in collection.aggregate(pipeline):
             requests_by_subreddit[doc["_id"]] = {
