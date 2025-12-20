@@ -1052,13 +1052,21 @@ async def dashboard(request: Request):
 async def list_scrapers():
     """List all active scrapers and their status"""
     result = {}
-    
+
     # Get all scrapers from database
     try:
+        # Pre-fetch ALL subreddit counts in 2 aggregation queries (instead of N*2 count_documents)
+        posts_by_sub = {doc["_id"]: doc["count"] for doc in posts_collection.aggregate([
+            {"$group": {"_id": "$subreddit", "count": {"$sum": 1}}}
+        ])}
+        comments_by_sub = {doc["_id"]: doc["count"] for doc in comments_collection.aggregate([
+            {"$group": {"_id": "$subreddit", "count": {"$sum": 1}}}
+        ])}
+
         scrapers = scrapers_collection.find({})
         for scraper_doc in scrapers:
             subreddit = scraper_doc["subreddit"]
-            
+
             # Check current container status if running
             container_status = scraper_doc["status"]
             if scraper_doc.get("container_name") and scraper_doc["status"] == "running":
@@ -1067,7 +1075,7 @@ async def list_scrapers():
                     # Update database if container is not actually running
                     update_scraper_status(subreddit, "stopped", last_error="Container not running")
                     container_status = "stopped"
-            
+
             # Create safe credentials for display using centralized config
             safe_credentials = {
                 "client_id": SECURITY_CONFIG["masked_credential_value"],
@@ -1082,24 +1090,16 @@ async def list_scrapers():
             if not all_subreddits:
                 all_subreddits = [subreddit]
 
-            # Query actual database totals (persist across scraper recreations)
-            # For multi-subreddit scrapers, count totals across all subreddits
-            if len(all_subreddits) > 1:
-                db_total_posts = posts_collection.count_documents({"subreddit": {"$in": all_subreddits}})
-                db_total_comments = comments_collection.count_documents({"subreddit": {"$in": all_subreddits}})
-                # Get per-subreddit breakdown
-                subreddit_stats = {}
-                for sub in all_subreddits:
-                    subreddit_stats[sub] = {
-                        "posts": posts_collection.count_documents({"subreddit": sub}),
-                        "comments": comments_collection.count_documents({"subreddit": sub})
-                    }
-            else:
-                db_total_posts = posts_collection.count_documents({"subreddit": subreddit})
-                db_total_comments = comments_collection.count_documents({"subreddit": subreddit})
-                subreddit_stats = {
-                    subreddit: {"posts": db_total_posts, "comments": db_total_comments}
-                }
+            # Use pre-fetched counts instead of individual count_documents calls
+            subreddit_stats = {}
+            db_total_posts = 0
+            db_total_comments = 0
+            for sub in all_subreddits:
+                sub_posts = posts_by_sub.get(sub, 0)
+                sub_comments = comments_by_sub.get(sub, 0)
+                subreddit_stats[sub] = {"posts": sub_posts, "comments": sub_comments}
+                db_total_posts += sub_posts
+                db_total_comments += sub_comments
 
             result[subreddit] = {
                 "name": scraper_doc.get("name"),  # Custom scraper name
@@ -1982,39 +1982,39 @@ async def get_global_stats():
         active_scrapers = sum(1 for s in all_scrapers if s.get("status") == "running")
         failed_scrapers = sum(1 for s in all_scrapers if s.get("status") == "failed")
 
-        # Get total posts and comments across all subreddits
-        total_posts_all = posts_collection.count_documents({})
-        total_comments_all = comments_collection.count_documents({})
+        # Use estimated_document_count() for instant global totals (reads metadata, not collection)
+        total_posts_all = posts_collection.estimated_document_count()
+        total_comments_all = comments_collection.estimated_document_count()
 
-        # Get per-subreddit breakdown
+        # Get per-subreddit counts in ONE aggregation query instead of N separate queries
+        posts_by_sub = {doc["_id"]: doc["count"] for doc in posts_collection.aggregate([
+            {"$group": {"_id": "$subreddit", "count": {"$sum": 1}}}
+        ])}
+        comments_by_sub = {doc["_id"]: doc["count"] for doc in comments_collection.aggregate([
+            {"$group": {"_id": "$subreddit", "count": {"$sum": 1}}}
+        ])}
+
+        # Build breakdown from aggregation results
         subreddit_breakdown = []
         for scraper in all_scrapers:
             subreddit = scraper["subreddit"]
-            posts_count = posts_collection.count_documents({"subreddit": subreddit})
-            comments_count = comments_collection.count_documents({"subreddit": subreddit})
-
             subreddit_breakdown.append({
                 "subreddit": subreddit,
                 "status": scraper.get("status"),
-                "total_posts": posts_count,
-                "total_comments": comments_count,
+                "total_posts": posts_by_sub.get(subreddit, 0),
+                "total_comments": comments_by_sub.get(subreddit, 0),
                 "container_name": scraper.get("container_name")
             })
 
         # Sort by total posts descending
         subreddit_breakdown.sort(key=lambda x: x["total_posts"], reverse=True)
 
-        # Get unresolved errors across all subreddits
+        # Get unresolved errors (small collection, fast query)
         errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
         total_errors_unresolved = errors_collection.count_documents({"resolved": False})
 
-        # Get total unique authors
-        unique_authors_pipeline = [
-            {"$group": {"_id": "$author"}},
-            {"$count": "total"}
-        ]
-        authors_result = list(posts_collection.aggregate(unique_authors_pipeline))
-        total_unique_authors = authors_result[0]["total"] if authors_result else 0
+        # Skip expensive unique authors aggregation - can be added as optional param if needed
+        total_unique_authors = 0
 
         return {
             "summary": {
