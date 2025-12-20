@@ -3113,13 +3113,17 @@ async def dashboard():
                     document.getElementById('costToday').textContent =
                         '$' + data.today.cost_usd.toFixed(2);
                     document.getElementById('reqsToday').textContent =
-                        formatNumber(data.today.actual_http_requests) + ' reqs';
+                        formatNumber(data.today.actual_http_requests) + ' reqs → ' +
+                        formatNumber(data.today.posts_scraped) + ' posts, ' +
+                        formatNumber(data.today.comments_scraped) + ' comments';
 
                     // Last Hour
                     document.getElementById('costHour').textContent =
                         '$' + data.last_hour.cost_usd.toFixed(4);
                     document.getElementById('reqsHour').textContent =
-                        formatNumber(data.last_hour.actual_http_requests) + ' reqs';
+                        formatNumber(data.last_hour.actual_http_requests) + ' reqs → ' +
+                        formatNumber(data.last_hour.posts_scraped) + ' posts, ' +
+                        formatNumber(data.last_hour.comments_scraped) + ' comments';
 
                     // Avg/Hour
                     document.getElementById('costAvgHour').textContent =
@@ -5994,7 +5998,20 @@ async def get_api_cost(subreddit: Optional[str] = None):
         # Calculate hours elapsed today for avg/hour
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        hour_start = now - timedelta(hours=1)
         hours_elapsed = max((now - today_start).total_seconds() / 3600, 1)
+
+        # Count actual posts/comments scraped (output context)
+        scrape_filter_today = {"scraped_at": {"$gte": today_start}}
+        scrape_filter_hour = {"scraped_at": {"$gte": hour_start}}
+        if subreddit:
+            scrape_filter_today["subreddit"] = subreddit
+            scrape_filter_hour["subreddit"] = subreddit
+
+        posts_today = posts_collection.count_documents(scrape_filter_today)
+        comments_today = comments_collection.count_documents(scrape_filter_today)
+        posts_hour = posts_collection.count_documents(scrape_filter_hour)
+        comments_hour = comments_collection.count_documents(scrape_filter_hour)
 
         # Avg per hour (today's total ÷ hours elapsed)
         avg_hourly_requests = actual_requests_today / hours_elapsed
@@ -6047,11 +6064,15 @@ async def get_api_cost(subreddit: Optional[str] = None):
                 "actual_http_requests": actual_requests_today,
                 "tracked_calls": tracked_calls,
                 "cost_usd": round(cost_today, 4),
-                "accuracy_ratio": round(accuracy_ratio, 4)
+                "accuracy_ratio": round(accuracy_ratio, 4),
+                "posts_scraped": posts_today,
+                "comments_scraped": comments_today
             },
             "last_hour": {
                 "actual_http_requests": actual_requests_hour,
-                "cost_usd": round(cost_hour, 4)
+                "cost_usd": round(cost_hour, 4),
+                "posts_scraped": posts_hour,
+                "comments_scraped": comments_hour
             },
             "averages": {
                 "hourly_requests": round(avg_hourly_requests),
