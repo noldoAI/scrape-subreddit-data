@@ -879,6 +879,12 @@ python posts_scraper.py subreddit \
   --sorting-methods "new,top,rising"
 ```
 
+## Reddit API Pricing
+
+**$0.24 per 1,000 API requests** (effective July 2023). Reddit bills per HTTP request to `oauth.reddit.com`, not per PRAW call.
+
+For comprehensive details on billing, rate limits, cost examples, and optimization strategies, see **[docs/REDDIT_API_PRICING.md](docs/REDDIT_API_PRICING.md)**.
+
 ## API Cost Tracking (v1.7+)
 
 Accurate Reddit API cost tracking at **$0.24 per 1,000 requests** with dashboard visualization.
