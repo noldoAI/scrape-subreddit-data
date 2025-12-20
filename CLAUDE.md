@@ -18,8 +18,18 @@ scrape-subreddit-data/
 ├── posts_scraper.py          # Posts scraping engine (runs in Docker containers)
 ├── comments_scraper.py       # Comments scraping engine (runs in Docker containers)
 ├── config.py                 # Centralized configuration
-├── rate_limits.py            # Reddit API rate limiting utility
 ├── embedding_worker.py       # Background embedding worker
+│
+├── core/                     # Core shared utilities
+│   ├── __init__.py           # Exports: check_rate_limit, setup_azure_logging, metrics
+│   ├── rate_limits.py        # Reddit API rate limiting utility
+│   ├── azure_logging.py      # Azure Application Insights logging
+│   └── metrics.py            # Prometheus metrics
+│
+├── tracking/                 # API usage tracking & cost calculation
+│   ├── __init__.py           # Exports: CountingSession, APIUsageTracker, etc.
+│   ├── http_request_counter.py   # HTTP request counting at transport layer
+│   └── api_usage_tracker.py      # MongoDB storage for usage stats + cost
 │
 ├── api/                      # API module helpers (partial extraction)
 │   ├── models.py             # Pydantic models
@@ -37,6 +47,10 @@ scrape-subreddit-data/
 │
 ├── tools/                    # Maintenance utilities
 │   └── repair_ghost_posts.py # Data integrity repair
+│
+├── tests/                    # Test modules
+│   ├── __init__.py
+│   └── test_reddit_auth.py   # Reddit authentication tests
 │
 ├── docs/                     # Documentation
 ├── Dockerfile               # Scraper container image
@@ -134,11 +148,16 @@ docker-compose down
    - Collection names: `reddit_posts`, `reddit_comments`, `subreddit_metadata`, `reddit_scrapers`, `reddit_accounts`
    - Separate configs: `DEFAULT_POSTS_SCRAPER_CONFIG` and `DEFAULT_COMMENTS_SCRAPER_CONFIG`
    - Docker, API, monitoring, and security configurations
+   - API cost tracking settings (`API_USAGE_CONFIG`)
 
-5. **`rate_limits.py`** - Reddit API rate limiting
-   - Monitors Reddit API quota (remaining/used requests)
-   - Automatically pauses when rate limit is low
-   - Waits for rate limit reset when necessary
+5. **`core/`** - Core shared utilities module
+   - **`rate_limits.py`**: Monitors Reddit API quota (remaining/used requests), auto-pauses when low
+   - **`azure_logging.py`**: Azure Application Insights integration (OpenTelemetry)
+   - **`metrics.py`**: Prometheus metrics for monitoring
+
+6. **`tracking/`** - API usage tracking module
+   - **`http_request_counter.py`**: `CountingSession` class that wraps `requests.Session` to count every HTTP request at the transport layer
+   - **`api_usage_tracker.py`**: MongoDB storage for usage statistics, cost calculation, and aggregation
 
 ### Data Flow Architecture
 
@@ -665,6 +684,10 @@ sudo reboot
 - `POST /scrapers/restart-all-failed` - Restart all failed containers
 - `GET /metrics` - Prometheus metrics endpoint
 
+### API Cost Tracking
+- `GET /api/usage/cost` - Cost statistics (today, last hour, averages, projections)
+- `GET /api/usage/cost?subreddit=X` - Cost for specific subreddit
+
 ## Prometheus + Grafana Monitoring
 
 Full observability stack with real-time metrics, dashboards, and alerting.
@@ -753,7 +776,9 @@ export TELEGRAM_CHAT_ID=your_chat_id
 | `monitoring/alertmanager.yml` | Alertmanager config |
 | `monitoring/grafana/dashboards/overview.json` | Main dashboard |
 | `monitoring/grafana/dashboards/infrastructure.json` | Host/container metrics |
-| `metrics.py` | Prometheus metrics module |
+| `core/metrics.py` | Prometheus metrics module |
+| `tracking/http_request_counter.py` | HTTP request counting for cost tracking |
+| `tracking/api_usage_tracker.py` | API usage aggregation and storage |
 
 ## Azure Application Insights Logging
 
@@ -778,7 +803,7 @@ APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx;IngestionEndpoint=h
 
 | File | Description |
 |------|-------------|
-| `azure_logging.py` | Logging helper module (OpenTelemetry) |
+| `core/azure_logging.py` | Logging helper module (OpenTelemetry) |
 | `requirements.txt` | Contains `azure-monitor-opentelemetry` |
 | `requirements-scraper.txt` | Contains `azure-monitor-opentelemetry` for scraper containers |
 
@@ -852,6 +877,168 @@ python posts_scraper.py subreddit \
   --posts-limit 150 \
   --comment-batch 8 \
   --sorting-methods "new,top,rising"
+```
+
+## API Cost Tracking (v1.7+)
+
+Accurate Reddit API cost tracking at **$0.24 per 1,000 requests** with dashboard visualization.
+
+### Overview
+
+The system counts **actual HTTP requests** at the transport layer for accurate cost calculation, not just high-level PRAW calls. This is critical because PRAW makes many more HTTP requests internally than the number of API calls made in code.
+
+**Why Transport Layer Counting?**
+
+| What Code Shows | Actual HTTP Requests |
+|-----------------|---------------------|
+| 1 `subreddit.new(limit=100)` | 2-3 requests (pagination) |
+| 1 `replace_more()` | 0-100+ requests |
+| 1 `submission.comments` | 1-5+ requests |
+| Lazy object attribute access | Hidden requests |
+
+Without transport-layer counting, costs would be underestimated by 2-5x.
+
+### Architecture
+
+```
+PRAW API calls → prawcore.Session → prawcore.Requestor → requests.Session
+                                                              ↑
+                                         CountingSession intercepts here
+```
+
+**Key Components:**
+
+1. **`tracking/http_request_counter.py`**: `CountingSession` class extends `requests.Session` to intercept every HTTP request
+2. **`tracking/api_usage_tracker.py`**: Stores usage data in MongoDB with actual counts and cost
+3. **Dashboard Cost Panel**: Real-time cost visualization
+
+### Dashboard Cost Panel
+
+The web dashboard includes a cost tracking panel showing:
+
+| Metric | Description |
+|--------|-------------|
+| **Today** | Cumulative cost + requests since midnight |
+| **Last Hour** | Cost + requests in the last 60 minutes |
+| **Avg/Hour** | Today's total ÷ hours elapsed |
+| **Avg/Day** | Historical average (last 7 days) |
+| **Monthly** | Projected monthly cost (avg/day × 30) |
+
+Auto-refreshes every 60 seconds.
+
+### API Endpoint
+
+```bash
+GET /api/usage/cost
+```
+
+**Response:**
+```json
+{
+  "period": "today",
+  "today": {
+    "actual_http_requests": 45230,
+    "cost_usd": 10.86
+  },
+  "last_hour": {
+    "actual_http_requests": 1850,
+    "cost_usd": 0.44
+  },
+  "averages": {
+    "hourly_requests": 1900,
+    "hourly_cost_usd": 0.46,
+    "daily_requests": 45600,
+    "daily_cost_usd": 10.94,
+    "days_of_data": 7
+  },
+  "projections": {
+    "monthly_requests": 1368000,
+    "monthly_cost_usd": 328.32
+  }
+}
+```
+
+### MongoDB Schema
+
+**Collection**: `reddit_api_usage`
+
+```javascript
+{
+  "subreddit": "wallstreetbets",
+  "scraper_type": "posts",
+  "timestamp": ISODate("2025-01-20T15:30:00Z"),
+
+  // Actual HTTP request data
+  "actual_http_requests": 156,
+  "estimated_cost_usd": 0.037,
+
+  // Comparison for debugging
+  "tracked_calls": 28,
+  "accuracy_ratio": 0.18  // 28/156 = 5.5x undercounting without HTTP layer
+}
+```
+
+### Configuration
+
+**config.py** settings:
+
+```python
+API_USAGE_CONFIG = {
+    "collection_name": "reddit_api_usage",
+    "flush_interval": 60,              # Flush to DB every 60 seconds
+    "cost_per_1000_requests": 0.24,    # Reddit API pricing
+    "track_request_details": True,
+    "max_request_log_size": 10000
+}
+```
+
+### Cost Calculation
+
+```
+cost_usd = (actual_http_requests / 1000) × $0.24
+
+Examples:
+  1,000,000 requests/month = $240/month
+  10,000,000 requests/month = $2,400/month
+```
+
+**Reddit Free Tier**: <100 queries per minute = $0 (scrapers typically exceed this)
+
+### Scraper Integration
+
+Scrapers inject `CountingSession` into PRAW:
+
+```python
+from tracking.http_request_counter import CountingSession
+from prawcore import Requestor
+
+# Create counting session
+http_session = CountingSession()
+
+# Inject into PRAW
+reddit = praw.Reddit(
+    client_id=os.getenv("R_CLIENT_ID"),
+    client_secret=os.getenv("R_CLIENT_SECRET"),
+    username=os.getenv("R_USERNAME"),
+    password=os.getenv("R_PASSWORD"),
+    user_agent=os.getenv("R_USER_AGENT"),
+    requestor_class=Requestor,
+    requestor_kwargs={'session': http_session}
+)
+```
+
+### Cycle Summary Output
+
+```
+CYCLE SUMMARY
+=============
+Subreddit: wallstreetbets
+Tracked calls (high-level): 28
+Actual HTTP requests: 156
+Accuracy ratio: 18% (we were undercounting 5.5x)
+Estimated cost this cycle: $0.037
+Estimated daily cost: $53.28
+Estimated monthly cost: $1,598.40
 ```
 
 ## Semantic Subreddit Search (v1.3+)

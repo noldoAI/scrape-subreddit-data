@@ -37,7 +37,7 @@ from pymongo import MongoClient
 from config import EMBEDDING_CONFIG, EMBEDDING_WORKER_CONFIG, COLLECTIONS, AZURE_OPENAI_CONFIG
 
 # Import Azure logging helper
-from azure_logging import setup_azure_logging
+from core.azure_logging import setup_azure_logging
 
 # Configure logging with Azure Application Insights support
 logger = setup_azure_logging('embedding-worker', level=logging.INFO)

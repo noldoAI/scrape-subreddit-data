@@ -15,7 +15,9 @@ import time
 import sys
 import argparse
 import threading
-from rate_limits import check_rate_limit
+from core.rate_limits import check_rate_limit
+from tracking.api_usage_tracker import APIUsageTracker, track_api_call
+from tracking.http_request_counter import CountingSession, COST_PER_1000_REQUESTS
 import logging
 
 # Prometheus metrics
@@ -29,7 +31,7 @@ except ImportError:
 from config import DATABASE_NAME, COLLECTIONS, DEFAULT_SCRAPER_CONFIG, LOGGING_CONFIG
 
 # Import Azure logging helper
-from azure_logging import setup_azure_logging
+from core.azure_logging import setup_azure_logging
 
 # Load environment variables
 load_dotenv()
@@ -120,13 +122,15 @@ posts_collection = db[COLLECTIONS["POSTS"]]
 subreddit_collection = db[COLLECTIONS["SUBREDDIT_METADATA"]]
 errors_collection = db[COLLECTIONS["SCRAPE_ERRORS"]]
 
-# Reddit API setup
+# Reddit API setup with HTTP request counting for accurate cost tracking
+http_session = CountingSession()
 reddit = praw.Reddit(
     client_id=os.getenv("R_CLIENT_ID"),
     client_secret=os.getenv("R_CLIENT_SECRET"),
     username=os.getenv("R_USERNAME"),
     password=os.getenv("R_PASSWORD"),
-    user_agent=os.getenv("R_USER_AGENT")
+    user_agent=os.getenv("R_USER_AGENT"),
+    requestor_kwargs={'session': http_session}
 )
 
 
@@ -190,7 +194,14 @@ class RedditPostsScraper:
         self.subreddit_name = subreddit_name
         self.config = {**DEFAULT_SCRAPER_CONFIG, **(config or {})}
         self.cycle_count = 0
-        self.api_calls_this_cycle = 0  # Track API calls per cycle
+        self.api_calls_this_cycle = 0  # Track API calls per cycle (legacy counter)
+
+        # Initialize API usage tracker for detailed tracking
+        self.tracker = APIUsageTracker(
+            subreddit=subreddit_name,
+            scraper_type="posts",
+            db=db
+        )
 
         logger.info(f"🔗 Authenticated as: {reddit.user.me()}")
         logger.info(f"🎯 Target subreddit: r/{self.subreddit_name}")
@@ -212,13 +223,15 @@ class RedditPostsScraper:
         """Scrape posts from the target subreddit using specified sorting method."""
         logger.info(f"\n--- Scraping {limit} {sort_method} posts from r/{self.subreddit_name} ---")
 
-        check_rate_limit(reddit)
-        self.api_calls_this_cycle += 1  # Track API call
+        rate_limit_info = check_rate_limit(reddit)
+        self.api_calls_this_cycle += 1  # Track API call (legacy counter)
+        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
 
         try:
             subreddit = reddit.subreddit(self.subreddit_name)
 
-            # Get posts using the specified sorting method
+            # Get posts using the specified sorting method with timing
+            start_time = time.time()
             if sort_method == "hot":
                 posts = subreddit.hot(limit=limit)
             elif sort_method == "new":
@@ -241,12 +254,21 @@ class RedditPostsScraper:
                 logger.error(f"Unknown sort method: {sort_method}, defaulting to hot")
                 posts = subreddit.hot(limit=limit)
 
+            # Track the posts fetch API call
+            self.tracker.track_call(
+                "posts_fetch",
+                f"subreddit.{sort_method}",
+                True,
+                (time.time() - start_time) * 1000
+            )
+
             posts_list = []
 
             for i, post in enumerate(posts):
                 if i % 100 == 0 and i > 0:
                     check_rate_limit(reddit)
                     self.api_calls_this_cycle += 1
+                    self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
 
                 post_data = {
                     "title": post.title,
@@ -405,10 +427,12 @@ class RedditPostsScraper:
     def scrape_subreddit_metadata(self):
         """Scrape subreddit metadata."""
         logger.info(f"\n--- Scraping metadata for r/{self.subreddit_name} ---")
-        
+
         check_rate_limit(reddit)
-        
+        self.tracker.track_call("rate_limit_check", "reddit.auth.limits", True, 0)
+
         try:
+            start_time = time.time()
             subreddit = reddit.subreddit(self.subreddit_name)
             
             metadata = {
@@ -515,10 +539,19 @@ class RedditPostsScraper:
             active_users = metadata['active_user_count'] or 0
             logger.info(f"Subscribers: {subscribers:,}, Active: {active_users:,}")
             logger.info(f"Enhanced metadata collected: {len(rules)} rules, {len(sample_posts)} posts, guidelines: {bool(metadata['guidelines_text'])}")
+
+            # Track metadata fetch API call (includes subreddit info, rules, guidelines, sample posts)
+            self.tracker.track_call(
+                "metadata_fetch",
+                "subreddit.metadata",
+                True,
+                (time.time() - start_time) * 1000
+            )
             return metadata
-            
+
         except Exception as e:
             logger.error(f"Error scraping subreddit metadata: {e}")
+            self.tracker.track_call("metadata_fetch", "subreddit.metadata", False, 0)
             return None
     
     def save_subreddit_metadata(self, metadata):
@@ -735,6 +768,24 @@ class RedditPostsScraper:
                     cycle_duration=elapsed_time
                 )
 
+                # Flush API usage tracking to MongoDB with actual HTTP request counts
+                rate_limit_info = check_rate_limit(reddit)
+                tracker_stats = self.tracker.get_stats()
+
+                # Get actual HTTP request count from CountingSession
+                http_stats = http_session.get_stats()
+                cycle_stats = http_session.reset_cycle()
+
+                logger.info(f"\n--- COST TRACKING ---")
+                logger.info(f"Tracked calls (high-level): {tracker_stats['total_calls']}")
+                logger.info(f"Actual HTTP requests: {cycle_stats['cycle_requests']}")
+                logger.info(f"Cycle cost: ${cycle_stats['cycle_cost_usd']:.4f}")
+                logger.info(f"Total requests (session): {http_stats['total_requests']}")
+                logger.info(f"Total cost (session): ${http_stats['total_cost_usd']:.4f}")
+
+                # Pass HTTP stats to tracker for storage
+                self.tracker.flush_to_db(rate_limit_info, http_stats=cycle_stats)
+
                 # Wait before next cycle
                 logger.info(f"\nWaiting {self.config['scrape_interval']} seconds before next cycle...")
                 time.sleep(self.config['scrape_interval'])
@@ -828,6 +879,11 @@ def run_multi_subreddit_scraping(subreddit_names, config):
 
                 logger.info(f"r/{subreddit_name}: {len(posts)} posts ({new_posts} new)")
 
+                # Flush API usage tracking to MongoDB with HTTP stats
+                rate_limit_info = check_rate_limit(reddit)
+                sub_http_stats = http_session.reset_cycle()
+                scraper.tracker.flush_to_db(rate_limit_info, http_stats=sub_http_stats)
+
                 # Update Prometheus metrics
                 if PROMETHEUS_ENABLED:
                     sub_duration = time.time() - sub_start
@@ -850,6 +906,9 @@ def run_multi_subreddit_scraping(subreddit_names, config):
 
         cycle_duration = time.time() - cycle_start
 
+        # Get HTTP session stats for cost tracking
+        total_http_stats = http_session.get_stats()
+
         logger.info(f"\n{'='*60}")
         logger.info("ROTATION CYCLE SUMMARY")
         logger.info(f"{'='*60}")
@@ -857,6 +916,8 @@ def run_multi_subreddit_scraping(subreddit_names, config):
         logger.info(f"Total posts: {cycle_stats['total_posts']} ({cycle_stats['total_new']} new)")
         logger.info(f"Errors: {cycle_stats['errors']}")
         logger.info(f"Cycle duration: {cycle_duration:.1f}s")
+        logger.info(f"Total HTTP requests (session): {total_http_stats['total_requests']}")
+        logger.info(f"Total cost (session): ${total_http_stats['total_cost_usd']:.4f}")
 
         logger.info(f"\nRotation complete. Waiting {config['scrape_interval']}s before next cycle...")
         time.sleep(config['scrape_interval'])

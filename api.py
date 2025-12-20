@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config import LOGGING_CONFIG
-from azure_logging import setup_azure_logging
+from core.azure_logging import setup_azure_logging
 logger = setup_azure_logging("reddit-scraper-api", level=getattr(logging, LOGGING_CONFIG["level"]))
 
 # Now import FastAPI and other dependencies
@@ -28,7 +28,7 @@ import threading
 import time
 import os
 import signal
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta, timezone
 import pymongo
 import json
 import base64
@@ -47,11 +47,14 @@ from config import (
 )
 
 # Import Prometheus metrics
-from metrics import (
+from core.metrics import (
     update_metrics_from_db, get_metrics, init_metrics,
     scraper_up, database_connected, docker_available as docker_available_metric,
     CONTENT_TYPE_LATEST
 )
+
+# Import API usage tracking functions
+from tracking.api_usage_tracker import get_usage_stats, get_usage_trends, API_USAGE_CONFIG
 
 app = FastAPI(
     title=API_CONFIG["title"],
@@ -1326,6 +1329,98 @@ async def dashboard():
                 gap: 8px;
             }
 
+            /* Cost Tracker Panel */
+            .cost-panel-content {
+                background: var(--bg-card);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-lg);
+                padding: 24px;
+                margin-top: 16px;
+            }
+
+            .cost-cards {
+                display: grid;
+                grid-template-columns: repeat(5, 1fr);
+                gap: 16px;
+            }
+
+            .cost-card {
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-subtle);
+                border-radius: var(--radius-md);
+                padding: 16px;
+                text-align: center;
+            }
+
+            .cost-card.projection {
+                border-color: var(--accent-amber);
+                background: var(--accent-amber-glow);
+            }
+
+            .cost-label {
+                font-size: 0.8rem;
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 8px;
+            }
+
+            .cost-value {
+                font-family: var(--font-mono);
+                font-size: 1.5rem;
+                font-weight: 600;
+                color: var(--accent-green);
+            }
+
+            .cost-card.projection .cost-value {
+                color: var(--accent-amber);
+            }
+
+            .cost-subtext {
+                font-family: var(--font-mono);
+                font-size: 0.85rem;
+                color: var(--text-secondary);
+                margin-top: 4px;
+            }
+
+            .cost-footer {
+                display: flex;
+                align-items: center;
+                margin-top: 16px;
+                padding-top: 16px;
+                border-top: 1px solid var(--border-subtle);
+            }
+
+            .cost-refresh-btn {
+                margin-left: auto;
+                padding: 8px 16px;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border-default);
+                border-radius: var(--radius-sm);
+                color: var(--text-secondary);
+                cursor: pointer;
+                font-size: 0.9rem;
+                transition: all 0.2s;
+            }
+
+            .cost-refresh-btn:hover {
+                background: var(--bg-hover);
+                color: var(--text-primary);
+                border-color: var(--border-hover);
+            }
+
+            @media (max-width: 1200px) {
+                .cost-cards {
+                    grid-template-columns: repeat(3, 1fr);
+                }
+            }
+
+            @media (max-width: 768px) {
+                .cost-cards {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+            }
+
             /* Scraper Cards */
             .scraper {
                 background: var(--bg-card);
@@ -2181,6 +2276,48 @@ async def dashboard():
             <!-- Reddit Accounts -->
             <section id="accounts" style="margin-top: 32px;"></section>
 
+            <!-- API Cost Tracker -->
+            <section id="cost-tracker" style="margin-top: 32px;">
+                <div class="section-header" style="cursor: pointer;" onclick="toggleCostPanel()">
+                    <h2 class="section-title">💰 API Cost Tracker</h2>
+                    <span id="cost-toggle" style="color: var(--text-muted); font-size: 0.9rem;">▼</span>
+                </div>
+                <div id="cost-content" class="cost-panel-content">
+                    <div class="cost-cards">
+                        <div class="cost-card">
+                            <div class="cost-label">Today</div>
+                            <div class="cost-value" id="costToday">$0.00</div>
+                            <div class="cost-subtext" id="reqsToday">0 requests</div>
+                        </div>
+                        <div class="cost-card">
+                            <div class="cost-label">Last Hour</div>
+                            <div class="cost-value" id="costHour">$0.00</div>
+                            <div class="cost-subtext" id="reqsHour">0 requests</div>
+                        </div>
+                        <div class="cost-card">
+                            <div class="cost-label">Avg/Hour</div>
+                            <div class="cost-value" id="costAvgHour">$0.00</div>
+                            <div class="cost-subtext" id="reqsAvgHour">0 requests</div>
+                        </div>
+                        <div class="cost-card">
+                            <div class="cost-label">Avg/Day</div>
+                            <div class="cost-value" id="costAvgDay">$0.00</div>
+                            <div class="cost-subtext" id="reqsAvgDay">0 requests</div>
+                        </div>
+                        <div class="cost-card projection">
+                            <div class="cost-label">Monthly</div>
+                            <div class="cost-value" id="costMonthly">$0.00</div>
+                            <div class="cost-subtext" id="reqsMonthly">0 requests</div>
+                        </div>
+                    </div>
+                    <div class="cost-footer">
+                        <span style="color: var(--text-muted);">Pricing: $0.24 per 1,000 requests</span>
+                        <span id="cost-updated" style="color: var(--text-muted); margin-left: 20px;"></span>
+                        <button onclick="fetchCostData()" class="cost-refresh-btn">↻ Refresh</button>
+                    </div>
+                </div>
+            </section>
+
             <!-- Start New Scraper -->
             <section style="margin-top: 48px;">
                 <div class="section-header">
@@ -2941,7 +3078,87 @@ async def dashboard():
                 if (textarea) {
                     textarea.addEventListener('input', updateMultiSubredditCount);
                 }
+                // Fetch cost data on page load
+                fetchCostData();
             });
+
+            // Cost Tracker functions
+            let costPanelCollapsed = false;
+
+            function toggleCostPanel() {
+                const content = document.getElementById('cost-content');
+                const toggle = document.getElementById('cost-toggle');
+                costPanelCollapsed = !costPanelCollapsed;
+
+                if (costPanelCollapsed) {
+                    content.style.display = 'none';
+                    toggle.textContent = '▶';
+                } else {
+                    content.style.display = 'block';
+                    toggle.textContent = '▼';
+                }
+            }
+
+            async function fetchCostData() {
+                try {
+                    const response = await fetch('/api/usage/cost');
+                    const data = await response.json();
+
+                    if (data.status !== 'ok') {
+                        console.error('Cost API error:', data);
+                        return;
+                    }
+
+                    // Today
+                    document.getElementById('costToday').textContent =
+                        '$' + data.today.cost_usd.toFixed(2);
+                    document.getElementById('reqsToday').textContent =
+                        formatNumber(data.today.actual_http_requests) + ' reqs';
+
+                    // Last Hour
+                    document.getElementById('costHour').textContent =
+                        '$' + data.last_hour.cost_usd.toFixed(4);
+                    document.getElementById('reqsHour').textContent =
+                        formatNumber(data.last_hour.actual_http_requests) + ' reqs';
+
+                    // Avg/Hour
+                    document.getElementById('costAvgHour').textContent =
+                        '$' + data.averages.hourly_cost_usd.toFixed(4);
+                    document.getElementById('reqsAvgHour').textContent =
+                        formatNumber(data.averages.hourly_requests) + ' reqs';
+
+                    // Avg/Day
+                    document.getElementById('costAvgDay').textContent =
+                        '$' + data.averages.daily_cost_usd.toFixed(2);
+                    document.getElementById('reqsAvgDay').textContent =
+                        formatNumber(data.averages.daily_requests) + ' reqs';
+
+                    // Monthly Projection
+                    document.getElementById('costMonthly').textContent =
+                        '$' + data.projections.monthly_cost_usd.toFixed(2);
+                    document.getElementById('reqsMonthly').textContent =
+                        formatNumber(data.projections.monthly_requests) + ' reqs';
+
+                    // Update timestamp
+                    document.getElementById('cost-updated').textContent =
+                        'Updated: ' + new Date().toLocaleTimeString();
+
+                } catch (error) {
+                    console.error('Failed to fetch cost data:', error);
+                }
+            }
+
+            function formatNumber(num) {
+                if (num >= 1000000) {
+                    return (num / 1000000).toFixed(1) + 'M';
+                } else if (num >= 1000) {
+                    return (num / 1000).toFixed(1) + 'K';
+                }
+                return num.toLocaleString();
+            }
+
+            // Auto-refresh cost data every 60 seconds
+            setInterval(fetchCostData, 60000);
 
             // Account management functions
             function toggleAccountType() {
@@ -5687,6 +5904,198 @@ async def trigger_embedding_processing(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+# =============================================================================
+# API USAGE TRACKING ENDPOINTS
+# =============================================================================
+
+@app.get("/api/usage")
+async def get_api_usage():
+    """
+    Get overall Reddit API usage statistics.
+
+    Returns aggregated API call counts, breakdowns by type and subreddit,
+    average response times, and error rates.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        stats = get_usage_stats(db)
+        return {
+            "status": "ok",
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting API usage stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API usage: {str(e)}")
+
+
+@app.get("/api/usage/trends")
+async def get_api_usage_trends(
+    period: str = "day",
+    granularity: str = "hour",
+    subreddit: Optional[str] = None
+):
+    """
+    Get time-series API usage data for charting.
+
+    Args:
+        period: Time period - "hour", "day", or "week" (default: "day")
+        granularity: Data granularity - "minute", "hour", or "day" (default: "hour")
+        subreddit: Optional subreddit filter
+
+    Returns time-series data with timestamps, call counts, and error counts.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    # Validate parameters
+    if period not in ["hour", "day", "week"]:
+        raise HTTPException(status_code=400, detail="period must be 'hour', 'day', or 'week'")
+    if granularity not in ["minute", "hour", "day"]:
+        raise HTTPException(status_code=400, detail="granularity must be 'minute', 'hour', or 'day'")
+
+    try:
+        trends = get_usage_trends(db, period=period, granularity=granularity, subreddit=subreddit)
+        return {
+            "status": "ok",
+            **trends
+        }
+    except Exception as e:
+        logger.error(f"Error getting API usage trends: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API usage trends: {str(e)}")
+
+
+@app.get("/api/usage/cost")
+async def get_api_cost(subreddit: Optional[str] = None):
+    """
+    Get Reddit API cost analysis with projections and averages.
+
+    Args:
+        subreddit: Optional subreddit filter
+
+    Returns actual HTTP request counts and estimated costs at $0.24 per 1,000 requests.
+    Includes hourly/daily averages and monthly projections.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        stats = get_usage_stats(db, subreddit=subreddit)
+
+        # Extract cost data
+        actual_requests_today = stats.get("actual_http_requests_today", 0)
+        actual_requests_hour = stats.get("actual_http_requests_hour", 0)
+        cost_today = stats.get("cost_usd_today", 0)
+        cost_hour = stats.get("cost_usd_hour", 0)
+
+        # Calculate hours elapsed today for avg/hour
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        hours_elapsed = max((now - today_start).total_seconds() / 3600, 1)
+
+        # Avg per hour (today's total ÷ hours elapsed)
+        avg_hourly_requests = actual_requests_today / hours_elapsed
+        avg_hourly_cost = cost_today / hours_elapsed
+
+        # Get historical average (last 7 days) for avg/day
+        usage_collection = db[COLLECTIONS["API_USAGE"]]
+        week_ago = now - timedelta(days=7)
+
+        # Aggregate daily totals for last 7 days
+        daily_pipeline = [
+            {"$match": {"timestamp": {"$gte": week_ago, "$lt": today_start}}},
+            {
+                "$group": {
+                    "_id": "$day_bucket",
+                    "daily_requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
+                    "daily_cost": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}}
+                }
+            }
+        ]
+        daily_results = list(usage_collection.aggregate(daily_pipeline))
+
+        if daily_results:
+            total_historical_requests = sum(d["daily_requests"] for d in daily_results)
+            total_historical_cost = sum(d["daily_cost"] for d in daily_results)
+            num_days = len(daily_results)
+            avg_daily_requests = total_historical_requests / num_days
+            avg_daily_cost = total_historical_cost / num_days
+        else:
+            # No historical data, use today's extrapolated values
+            avg_daily_requests = avg_hourly_requests * 24
+            avg_daily_cost = avg_hourly_cost * 24
+
+        # Project monthly from avg/day
+        projected_monthly_requests = avg_daily_requests * 30
+        projected_monthly_cost = avg_daily_cost * 30
+
+        # Calculate accuracy ratio (tracked vs actual)
+        tracked_calls = stats.get("total_calls_today", 0)
+        accuracy_ratio = tracked_calls / actual_requests_today if actual_requests_today > 0 else 1.0
+
+        return {
+            "status": "ok",
+            "subreddit": subreddit,
+            "pricing": {
+                "cost_per_1000_requests": 0.24,
+                "currency": "USD"
+            },
+            "today": {
+                "actual_http_requests": actual_requests_today,
+                "tracked_calls": tracked_calls,
+                "cost_usd": round(cost_today, 4),
+                "accuracy_ratio": round(accuracy_ratio, 4)
+            },
+            "last_hour": {
+                "actual_http_requests": actual_requests_hour,
+                "cost_usd": round(cost_hour, 4)
+            },
+            "averages": {
+                "hourly_requests": round(avg_hourly_requests),
+                "hourly_cost_usd": round(avg_hourly_cost, 4),
+                "daily_requests": round(avg_daily_requests),
+                "daily_cost_usd": round(avg_daily_cost, 2),
+                "days_of_data": len(daily_results) if daily_results else 0
+            },
+            "projections": {
+                "monthly_requests": round(projected_monthly_requests),
+                "monthly_cost_usd": round(projected_monthly_cost, 2)
+            },
+            "by_subreddit": stats.get("calls_by_subreddit", {}) if not subreddit else None
+        }
+    except Exception as e:
+        logger.error(f"Error getting API cost analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API cost: {str(e)}")
+
+
+@app.get("/api/usage/{subreddit}")
+async def get_api_usage_by_subreddit(subreddit: str):
+    """
+    Get Reddit API usage statistics for a specific subreddit.
+
+    Args:
+        subreddit: The subreddit name to get stats for
+
+    Returns per-subreddit API call counts, breakdowns by type,
+    average response times, and current rate limit status.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        stats = get_usage_stats(db, subreddit=subreddit)
+        return {
+            "status": "ok",
+            "subreddit": subreddit,
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting API usage stats for r/{subreddit}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting API usage: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
