@@ -78,12 +78,8 @@ if PROMETHEUS_ENABLED:
         ['subreddit']
     )
 
-    # Rate limit gauge
-    RATE_LIMIT_REMAINING = Gauge(
-        'reddit_rate_limit_remaining',
-        'Reddit API remaining requests',
-        ['subreddit']
-    )
+    # Rate limit gauge - imported from core.metrics to avoid duplicate registration
+    # RATE_LIMIT_REMAINING defined in core/metrics.py as rate_limit_remaining
 
     RATE_LIMIT_USED = Gauge(
         'reddit_rate_limit_used',
