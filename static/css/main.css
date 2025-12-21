@@ -325,6 +325,15 @@ body::before {
     color: var(--accent-amber);
 }
 
+.cost-card.all-time {
+    border-color: var(--accent-purple, #a78bfa);
+    background: rgba(167, 139, 250, 0.08);
+}
+
+.cost-card.all-time .cost-value {
+    color: var(--accent-purple, #a78bfa);
+}
+
 .cost-subtext {
     font-family: var(--font-mono);
     font-size: 0.85rem;

@@ -684,6 +684,14 @@ async function fetchCostData() {
         document.getElementById('reqsMonthly').textContent =
             formatNumber(data.projections.monthly_requests) + ' reqs';
 
+        // All Time
+        if (data.all_time) {
+            document.getElementById('costAllTime').textContent =
+                '$' + data.all_time.cost_usd.toFixed(2);
+            document.getElementById('reqsAllTime').textContent =
+                formatNumber(data.all_time.requests) + ' reqs';
+        }
+
         // Update timestamp
         document.getElementById('cost-updated').textContent =
             'Updated: ' + new Date().toLocaleTimeString();

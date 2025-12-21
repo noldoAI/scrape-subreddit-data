@@ -2872,6 +2872,18 @@ async def get_api_cost(
         avg_hourly_requests = actual_requests_today / hours_elapsed
         avg_hourly_cost = cost_today / hours_elapsed
 
+        # Get all-time totals (fast - single aggregation on small collection)
+        all_time_pipeline = [
+            {"$group": {
+                "_id": None,
+                "total_requests": {"$sum": {"$ifNull": ["$actual_http_requests", 0]}},
+                "total_cost": {"$sum": {"$ifNull": ["$estimated_cost_usd", 0]}}
+            }}
+        ]
+        all_time_result = list(usage_collection.aggregate(all_time_pipeline))
+        all_time_requests = all_time_result[0]["total_requests"] if all_time_result else 0
+        all_time_cost = all_time_result[0]["total_cost"] if all_time_result else 0
+
         # Get historical average (last 7 days) for avg/day
         week_ago = now - timedelta(days=7)
 
@@ -2933,6 +2945,10 @@ async def get_api_cost(
             "projections": {
                 "monthly_requests": round(projected_monthly_requests),
                 "monthly_cost_usd": round(projected_monthly_cost, 2)
+            },
+            "all_time": {
+                "requests": all_time_requests,
+                "cost_usd": round(all_time_cost, 2)
             },
             "by_subreddit": stats.get("requests_by_subreddit", {}) if not subreddit else None
         }
