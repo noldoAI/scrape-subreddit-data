@@ -1180,11 +1180,7 @@ async def start_scraper_flexible(request: ScraperStartRequest, background_tasks:
     else:
         raise HTTPException(status_code=400, detail="Must provide 'subreddit' or 'subreddits'")
 
-    # Validate max subreddits (from config)
-    from config import MULTI_SCRAPER_CONFIG
-    max_subreddits = MULTI_SCRAPER_CONFIG["max_subreddits_per_container"]
-    if len(subreddits) > max_subreddits:
-        raise HTTPException(status_code=400, detail=f"Maximum {max_subreddits} subreddits per container")
+    # No limit on subreddits - system self-throttles via rate limit API
 
     # Clean subreddit names (lowercase for consistency)
     subreddits = [s.strip().lower() for s in subreddits if s.strip()]
@@ -1777,12 +1773,12 @@ async def toggle_auto_restart(subreddit: str, auto_restart: bool, scraper_type: 
 async def update_scraper_subreddits(
     subreddit: str,
     request: SubredditUpdateRequest,
-    background_tasks: BackgroundTasks,
     scraper_type: Optional[str] = "posts"
 ):
-    """Update subreddits for a running scraper (triggers container restart).
+    """Update subreddits for a running scraper (NO container restart).
 
-    Replaces the entire subreddit list. Container will restart with ~5-10s downtime.
+    Replaces the entire subreddit list. Scraper picks up changes on next cycle.
+    No downtime - changes are applied dynamically.
 
     Args:
         subreddit: Primary subreddit identifier (first in the list)
@@ -1792,13 +1788,7 @@ async def update_scraper_subreddits(
     Returns:
         Updated configuration with rate limit analysis
     """
-    # Validate max subreddits
-    max_subs = MULTI_SCRAPER_CONFIG["max_subreddits_per_container"]
-    if len(request.subreddits) > max_subs:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum {max_subs} subreddits per container"
-        )
+    # No limit on subreddits - system self-throttles via rate limit API
 
     if len(request.subreddits) == 0:
         raise HTTPException(
@@ -1840,13 +1830,7 @@ async def update_scraper_subreddits(
     }
     rate_info = calculate_rate_limit_info(len(new_subs), config_dict)
 
-    # Stop existing container
-    container_name = scraper_data.get("container_name")
-    if container_name:
-        cleanup_container(container_name)
-        logger.info(f"Stopped container {container_name} for subreddit update")
-
-    # Update database with new subreddits
+    # Update database with new subreddits (NO container restart)
     scrapers_collection.update_one(
         {"subreddit": subreddit, "scraper_type": scraper_type},
         {"$set": {
@@ -1854,34 +1838,17 @@ async def update_scraper_subreddits(
             "last_updated": datetime.now(UTC)
         }}
     )
-
-    # Build updated config using existing config values
-    updated_config = ScraperConfig(
-        name=existing_config.name,
-        subreddit=new_subs[0],
-        subreddits=new_subs,
-        scraper_type=scraper_type,
-        posts_limit=existing_config.posts_limit,
-        interval=existing_config.interval,
-        comment_batch=existing_config.comment_batch,
-        sorting_methods=existing_config.sorting_methods,
-        credentials=existing_config.credentials,
-        auto_restart=existing_config.auto_restart
-    )
-
-    # Restart with updated config
-    background_tasks.add_task(run_scraper, updated_config)
-    logger.info(f"Restarting scraper with updated subreddits: {new_subs}")
+    logger.info(f"Updated subreddit queue for {subreddit}: {new_subs}")
 
     response = {
-        "message": "Subreddits updated, restarting container",
+        "message": "Subreddits updated (changes apply on next scraping cycle)",
         "subreddits": new_subs,
         "previous_subreddits": prev_subs,
         "added": added,
         "removed": removed,
         "subreddit_count": len(new_subs),
         "rate_limit": rate_info,
-        "estimated_restart_time": "5-10 seconds"
+        "note": "No container restart required. Scraper reads queue from database at start of each cycle."
     }
 
     # Add warning if approaching limits
@@ -1889,6 +1856,145 @@ async def update_scraper_subreddits(
         response["rate_limit_warning"] = rate_info["recommendation"]
 
     return response
+
+
+@app.post("/scrapers/{subreddit}/subreddits/add")
+async def add_subreddits_to_queue(
+    subreddit: str,
+    request: SubredditUpdateRequest,
+    scraper_type: Optional[str] = "posts"
+):
+    """Add subreddits to an existing scraper's queue (NO container restart).
+
+    Appends new subreddits to the existing queue. Duplicates are ignored.
+    Scraper picks up changes on next cycle.
+
+    Args:
+        subreddit: Primary subreddit identifier
+        request: Subreddits to add
+        scraper_type: "posts" or "comments" (default: "posts")
+
+    Returns:
+        Updated queue with list of added subreddits
+    """
+    # Clean input
+    new_subs = [s.strip().lower() for s in request.subreddits if s.strip()]
+
+    if not new_subs:
+        raise HTTPException(status_code=400, detail="No valid subreddit names provided")
+
+    # Load existing scraper
+    scraper_data = load_scraper_from_db(subreddit, scraper_type)
+    if not scraper_data:
+        raise HTTPException(status_code=404, detail="Scraper not found")
+
+    # Get existing subreddits
+    existing_config = scraper_data["config"]
+    existing = set(existing_config.subreddits or [subreddit])
+
+    # Find truly new ones (not duplicates)
+    added = [s for s in new_subs if s not in existing]
+
+    if not added:
+        return {
+            "message": "No new subreddits to add (all already in queue)",
+            "added": [],
+            "subreddits": list(existing),
+            "subreddit_count": len(existing)
+        }
+
+    # Merge lists
+    updated_queue = list(existing) + added
+
+    # Update MongoDB
+    scrapers_collection.update_one(
+        {"subreddit": subreddit, "scraper_type": scraper_type},
+        {"$set": {
+            "subreddits": updated_queue,
+            "last_updated": datetime.now(UTC)
+        }}
+    )
+    logger.info(f"Added {len(added)} subreddits to queue for {subreddit}: {added}")
+
+    return {
+        "message": f"Added {len(added)} subreddits to queue",
+        "added": added,
+        "subreddits": updated_queue,
+        "subreddit_count": len(updated_queue),
+        "note": "Changes apply on next scraping cycle"
+    }
+
+
+@app.post("/scrapers/{subreddit}/subreddits/remove")
+async def remove_subreddits_from_queue(
+    subreddit: str,
+    request: SubredditUpdateRequest,
+    scraper_type: Optional[str] = "posts"
+):
+    """Remove subreddits from a scraper's queue (NO container restart).
+
+    Removes specified subreddits from the queue.
+    Cannot remove the primary subreddit (first in list).
+    Scraper picks up changes on next cycle.
+
+    Args:
+        subreddit: Primary subreddit identifier
+        request: Subreddits to remove
+        scraper_type: "posts" or "comments" (default: "posts")
+
+    Returns:
+        Updated queue with list of removed subreddits
+    """
+    to_remove = set(s.strip().lower() for s in request.subreddits if s.strip())
+
+    if not to_remove:
+        raise HTTPException(status_code=400, detail="No subreddits specified for removal")
+
+    # Load existing scraper
+    scraper_data = load_scraper_from_db(subreddit, scraper_type)
+    if not scraper_data:
+        raise HTTPException(status_code=404, detail="Scraper not found")
+
+    existing_config = scraper_data["config"]
+    existing = existing_config.subreddits or [subreddit]
+
+    # Cannot remove primary subreddit
+    if subreddit.lower() in to_remove:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot remove primary subreddit '{subreddit}'"
+        )
+
+    # Filter out removed subreddits
+    updated_queue = [s for s in existing if s not in to_remove]
+    removed = [s for s in to_remove if s in set(existing)]
+
+    if not removed:
+        return {
+            "message": "No matching subreddits found to remove",
+            "removed": [],
+            "subreddits": existing,
+            "subreddit_count": len(existing)
+        }
+
+    # Update MongoDB
+    scrapers_collection.update_one(
+        {"subreddit": subreddit, "scraper_type": scraper_type},
+        {"$set": {
+            "subreddits": updated_queue,
+            "last_updated": datetime.now(UTC)
+        }}
+    )
+    logger.info(f"Removed {len(removed)} subreddits from queue for {subreddit}: {removed}")
+
+    return {
+        "message": f"Removed {len(removed)} subreddits from queue",
+        "removed": removed,
+        "subreddits": updated_queue,
+        "subreddit_count": len(updated_queue),
+        "note": "Changes apply on next scraping cycle"
+    }
+
 
 @app.get("/scrapers/rate-limit-preview")
 async def preview_rate_limit(
@@ -1911,9 +2017,7 @@ async def preview_rate_limit(
     if subreddit_count <= 0:
         raise HTTPException(status_code=400, detail="subreddit_count must be positive")
 
-    max_subs = MULTI_SCRAPER_CONFIG["max_subreddits_per_container"]
-    if subreddit_count > max_subs:
-        raise HTTPException(status_code=400, detail=f"Maximum {max_subs} subreddits per container")
+    # No limit on subreddits - system self-throttles via rate limit API
 
     methods = [s.strip() for s in sorting_methods.split(",") if s.strip()]
     if not methods:

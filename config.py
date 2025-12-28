@@ -57,8 +57,8 @@ DEFAULT_SCRAPER_CONFIG = {
 
 # Multi-Subreddit Scraper Configuration
 MULTI_SCRAPER_CONFIG = {
-    "max_subreddits_per_container": 100,   # Maximum subreddits per container (safe with 10-min interval)
-    "rotation_delay": 2,                    # Seconds between subreddit switches
+    "max_subreddits_per_container": None,  # No limit - system self-throttles via rate limit API
+    "rotation_delay": 2,                    # Seconds between subreddit switches (politeness delay)
     "recommended_posts_limit": 50,          # Recommended posts limit per subreddit in multi-mode
     "recommended_interval": 600,            # Recommended interval (10 min) for 100 subreddits
     # Reddit API rate limit configuration (100 QPM for OAuth-authenticated apps)

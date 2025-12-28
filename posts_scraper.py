@@ -772,6 +772,36 @@ class RedditPostsScraper:
             self.run_continuous_scraping()  # Restart on error
 
 
+def get_subreddit_queue_from_db(scraper_identifier: str, scraper_type: str = "posts") -> list:
+    """
+    Fetch the current subreddit queue from MongoDB.
+
+    This allows dynamic updates to the subreddit list without container restart.
+    The API can update the 'subreddits' array in reddit_scrapers collection,
+    and the scraper will pick up changes at the start of each cycle.
+
+    Args:
+        scraper_identifier: Primary subreddit name (used as scraper ID)
+        scraper_type: "posts" or "comments"
+
+    Returns:
+        List of subreddit names to scrape, or None if not found
+    """
+    try:
+        scraper_doc = db[COLLECTIONS["SCRAPERS"]].find_one({
+            "subreddit": scraper_identifier,
+            "scraper_type": scraper_type
+        })
+
+        if scraper_doc and scraper_doc.get("subreddits"):
+            return scraper_doc["subreddits"]
+        else:
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching subreddit queue from DB: {e}")
+        return None
+
+
 def get_subreddit_post_counts(subreddit_names: list) -> dict:
     """Get post counts for each subreddit from the database."""
     pipeline = [
@@ -798,17 +828,32 @@ def prioritize_new_subreddits(subreddit_names: list) -> list:
     return new_subs + existing_subs
 
 
-def run_multi_subreddit_scraping(subreddit_names, config):
-    """Rotate through multiple subreddits in one container."""
+def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=None):
+    """Rotate through multiple subreddits in one container.
+
+    Supports dynamic queue updates: reads subreddit list from MongoDB at the
+    start of each cycle. API can add/remove subreddits without container restart.
+
+    Args:
+        subreddit_names: Initial list of subreddits (from CLI args)
+        config: Scraper configuration
+        scraper_identifier: Primary subreddit name used to identify this scraper in MongoDB.
+                           If None, uses first subreddit from initial list.
+    """
     from config import MULTI_SCRAPER_CONFIG
 
     cycle_count = 0
     first_cycle = True
     rotation_delay = MULTI_SCRAPER_CONFIG.get("rotation_delay", 2)
 
+    # Use first subreddit as scraper identifier if not provided
+    if not scraper_identifier:
+        scraper_identifier = subreddit_names[0] if subreddit_names else None
+
     logger.info(f"\n{'='*80}")
-    logger.info(f"MULTI-SUBREDDIT MODE INITIALIZED")
-    logger.info(f"Subreddits: {', '.join(subreddit_names)}")
+    logger.info(f"MULTI-SUBREDDIT MODE INITIALIZED (Dynamic Queue)")
+    logger.info(f"Initial subreddits: {', '.join(subreddit_names)}")
+    logger.info(f"Scraper identifier: {scraper_identifier}")
     logger.info(f"Rotation delay: {rotation_delay}s between subreddits")
     logger.info(f"{'='*80}")
 
@@ -816,12 +861,37 @@ def run_multi_subreddit_scraping(subreddit_names, config):
         cycle_count += 1
         cycle_start = time.time()
 
+        # === DYNAMIC QUEUE: Read subreddit list from MongoDB each cycle ===
+        db_queue = get_subreddit_queue_from_db(scraper_identifier, "posts")
+
+        if db_queue:
+            current_subreddits = db_queue
+            if set(current_subreddits) != set(subreddit_names):
+                logger.info(f"Queue updated from MongoDB: {len(current_subreddits)} subreddits")
+                added = set(current_subreddits) - set(subreddit_names)
+                removed = set(subreddit_names) - set(current_subreddits)
+                if added:
+                    logger.info(f"  Added: {', '.join(added)}")
+                if removed:
+                    logger.info(f"  Removed: {', '.join(removed)}")
+        else:
+            # Fallback to initial list if DB read fails or no entry
+            current_subreddits = subreddit_names
+            if cycle_count == 1:
+                logger.info("Using initial subreddit list (no DB queue found)")
+
+        # Handle empty queue
+        if not current_subreddits:
+            logger.warning("Subreddit queue is empty. Waiting 60s before retry...")
+            time.sleep(60)
+            continue
+
         # Prioritize new subreddits (0 posts) on first cycle only
         if first_cycle:
-            ordered_subreddits = prioritize_new_subreddits(subreddit_names)
+            ordered_subreddits = prioritize_new_subreddits(current_subreddits)
             first_cycle = False
         else:
-            ordered_subreddits = subreddit_names
+            ordered_subreddits = current_subreddits
 
         logger.info(f"\n{'='*80}")
         logger.info(f"MULTI-SUBREDDIT ROTATION CYCLE #{cycle_count}")
@@ -835,6 +905,11 @@ def run_multi_subreddit_scraping(subreddit_names, config):
             logger.info(f"\n[{i+1}/{len(ordered_subreddits)}] Processing r/{subreddit_name}")
             logger.info("-" * 40)
             sub_start = time.time()
+
+            # Check rate limit BEFORE each subreddit - pauses if quota low
+            rate_info = check_rate_limit(reddit)
+            if rate_info.get('remaining', 100) < 50:
+                logger.info(f"Rate limit: {rate_info.get('remaining')}/{rate_info.get('used')} remaining")
 
             try:
                 scraper = RedditPostsScraper(subreddit_name, config)
@@ -885,7 +960,7 @@ def run_multi_subreddit_scraping(subreddit_names, config):
         logger.info(f"\n{'='*60}")
         logger.info("ROTATION CYCLE SUMMARY")
         logger.info(f"{'='*60}")
-        logger.info(f"Subreddits processed: {len(subreddit_names) - cycle_stats['errors']}/{len(subreddit_names)}")
+        logger.info(f"Subreddits processed: {len(ordered_subreddits) - cycle_stats['errors']}/{len(ordered_subreddits)}")
         logger.info(f"Total posts: {cycle_stats['total_posts']} ({cycle_stats['total_new']} new)")
         logger.info(f"Errors: {cycle_stats['errors']}")
         logger.info(f"Cycle duration: {cycle_duration:.1f}s")
