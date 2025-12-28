@@ -513,7 +513,7 @@ function toggleSubredditInput() {
         singleInput.style.display = 'none';
         multiInput.style.display = 'block';
         modeIndicator.className = 'mode-badge multi';
-        modeIndicator.textContent = 'up to 100';
+        modeIndicator.textContent = 'unlimited';
     }
     updateMultiSubredditCount();
 }
@@ -1010,11 +1010,7 @@ async function startScraper() {
                 setButtonLoading(button, false);
                 return;
             }
-            if (subreddits.length > 100) {
-                alert('Maximum 100 subreddits per container');
-                setButtonLoading(button, false);
-                return;
-            }
+            // No limit on subreddits - system auto-throttles via rate limit API
             requestData.subreddits = subreddits;
         }
         
@@ -1336,11 +1332,9 @@ function addSubredditFromInput() {
             return;
         }
 
-        // Adding new sub - check effective limit
-        if (getEffectiveCount() < 100) {
-            editedSubreddits.add(sub);
-            addedCount++;
-        }
+        // Adding new sub - no limit
+        editedSubreddits.add(sub);
+        addedCount++;
     });
 
     if (addedCount > 0) {
@@ -1350,8 +1344,6 @@ function addSubredditFromInput() {
     } else if (duplicateCount > 0 && newSubs.length === duplicateCount) {
         // All were duplicates - clear input silently
         input.value = '';
-    } else if (newSubs.length > 0 && getEffectiveCount() >= 100) {
-        alert('Maximum 100 subreddits per container');
     }
 }
 
@@ -1421,10 +1413,7 @@ async function saveSubreddits() {
         return;
     }
 
-    if (finalSubs.length > 100) {
-        alert('Maximum 100 subreddits per container');
-        return;
-    }
+    // No limit on subreddits - system auto-throttles via rate limit API
 
     setButtonLoading(button, true, 'Saving...');
 
@@ -1446,7 +1435,7 @@ async function saveSubreddits() {
     } catch (error) {
         alert('Error updating subreddits: ' + error.message);
     } finally {
-        setButtonLoading(button, false, 'Save & Restart');
+        setButtonLoading(button, false, 'Save Changes');
     }
 }
 

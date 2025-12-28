@@ -136,7 +136,7 @@
                     <label>Mode:</label>
                     <select id="scraper_mode" onchange="toggleSubredditInput()" style="min-width: 260px;">
                         <option value="single">Single Subreddit</option>
-                        <option value="multi">Multi-Subreddit (up to 100)</option>
+                        <option value="multi">Multi-Subreddit (unlimited)</option>
                     </select>
                     <span id="mode-indicator" class="mode-badge single">1 subreddit</span>
                 </div>
@@ -166,7 +166,7 @@
                         <div style="flex: 1; max-width: 550px;">
                             <textarea id="subreddits" placeholder="stocks, investing, wallstreetbets, options, stockmarket, pennystocks, daytrading, thetagang, valueinvesting, dividends"
                                 style="width: 100%; height: 90px; resize: vertical;"></textarea>
-                            <small style="display: block; margin-top: 8px;">Comma-separated list. Max 100 subreddits per container.</small>
+                            <small style="display: block; margin-top: 8px;">Comma-separated list. No limit - system auto-throttles via rate limit API.</small>
                         </div>
                     </div>
                 </div>
@@ -393,7 +393,7 @@
 
                 <!-- Subreddit chips -->
                 <div class="form-group">
-                    <label>Subreddits (<span id="editSubCount">0</span>/100):</label>
+                    <label>Subreddits (<span id="editSubCount">0</span>):</label>
                     <div id="subredditChipsContainer" class="subreddit-chips-interactive"></div>
                 </div>
 
@@ -403,7 +403,7 @@
 
                 <div class="modal-actions">
                     <button onclick="closeSubredditModal()" class="btn-secondary">Cancel</button>
-                    <button onclick="saveSubreddits()" id="saveSubredditsBtn" class="btn-primary">Save & Restart</button>
+                    <button onclick="saveSubreddits()" id="saveSubredditsBtn" class="btn-primary">Save Changes</button>
                 </div>
             </div>
         </div>
