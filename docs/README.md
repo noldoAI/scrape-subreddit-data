@@ -291,8 +291,8 @@ Scrape **unlimited subreddits** with a single Reddit account. System self-thrott
 
 - **Unlimited subreddits**: No artificial limits - system pauses when quota runs low
 - **Dynamic queue**: Add/remove subreddits via API without container restart
+- **ASAP prioritization**: New subreddits scraped within 30-60 seconds (v1.9+)
 - **Self-throttling**: Automatic pause when API quota low, continues after reset
-- **No restart needed**: Queue changes picked up at start of next cycle
 
 ### **Starting Multi-Subreddit Scraper**
 
@@ -327,6 +327,41 @@ PATCH /scrapers/{scraper_id}/subreddits
 {
     "subreddits": ["sub1", "sub2", "sub3"]
 }
+```
+
+### **ASAP Subreddit Prioritization (v1.9+)**
+
+New subreddits added via dashboard/API are scraped **within 30-60 seconds** (not waiting for cycle to finish):
+
+| Feature | Description |
+|---------|-------------|
+| **Immediate pickup** | Scraper re-reads queue between each subreddit |
+| **Priority tracking** | Uses `pending_scrape` array in MongoDB |
+| **Failure tracking** | Uses `scrape_failures` dict to track consecutive failures |
+| **Smart handling** | Invalid subreddits removed from priority after 3 failures |
+| **Fresh start** | Re-adding failed subreddits resets failure counter |
+| **No wasted work** | Already processed subs stay processed |
+
+**Example flow:**
+```
+Add "newsubreddit" via dashboard
+  → Added to subreddits + pending_scrape
+  → scrape_failures.newsubreddit cleared (if existed)
+
+Scraper (within 30-60s):
+  → Finishes current subreddit
+  → Re-reads queue, sees newsubreddit in pending_scrape
+  → Processes it FIRST (⚡PRIORITY)
+  → On success: removes from pending_scrape
+  → On failure: increments scrape_failures (removed after 3 failures)
+```
+
+**Failure handling:**
+```
+r/invalid fails (1/3) - will retry with priority
+r/invalid fails (2/3) - will retry with priority
+r/invalid fails (3/3) - removed from pending_scrape
+⚠️ r/invalid failed 3 times - removed from priority queue
 ```
 
 ### **Self-Throttling Rate Limit Handling**

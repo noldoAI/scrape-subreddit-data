@@ -529,10 +529,11 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "last_updated": datetime.now(UTC),
             "last_error": last_error,
             "restart_count": 0,
-            "subreddits": subreddits if subreddits else [subreddit]  # Store all subreddits for multi-mode
+            "subreddits": subreddits if subreddits else [subreddit],  # Store all subreddits for multi-mode
+            # Note: pending_scrape is in $setOnInsert - NOT overwritten on restart
         }
 
-        # Initialize metrics on first insert only
+        # Initialize metrics and pending_scrape on first insert only
         metrics_init = {
             "total_posts_collected": 0,
             "total_comments_collected": 0,
@@ -547,13 +548,16 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
         }
 
         # Upsert scraper document - unique by subreddit AND scraper_type
+        # pending_scrape only set on INSERT (not overwritten on restart)
         scrapers_collection.update_one(
             {"subreddit": subreddit, "scraper_type": scraper_type},
             {
                 "$set": scraper_doc,
                 "$setOnInsert": {
                     "created_at": datetime.now(UTC),
-                    "metrics": metrics_init
+                    "metrics": metrics_init,
+                    "pending_scrape": subreddits if subreddits else [subreddit],  # Only on first creation
+                    "scrape_failures": {}  # Track consecutive failures per subreddit
                 }
             },
             upsert=True
@@ -1831,14 +1835,40 @@ async def update_scraper_subreddits(
     rate_info = calculate_rate_limit_info(len(new_subs), config_dict)
 
     # Update database with new subreddits (NO container restart)
-    scrapers_collection.update_one(
-        {"subreddit": subreddit, "scraper_type": scraper_type},
-        {"$set": {
+    # Also update pending_scrape: add new subs, remove deleted ones
+    update_ops = {
+        "$set": {
             "subreddits": new_subs,
             "last_updated": datetime.now(UTC)
-        }}
+        }
+    }
+
+    # Add new subreddits to pending_scrape for priority scraping
+    if added:
+        update_ops["$addToSet"] = {"pending_scrape": {"$each": added}}
+
+    scrapers_collection.update_one(
+        {"subreddit": subreddit, "scraper_type": scraper_type},
+        update_ops
     )
-    logger.info(f"Updated subreddit queue for {subreddit}: {new_subs}")
+
+    # Clean up removed subreddits from pending_scrape (separate update to avoid conflict)
+    if removed:
+        scrapers_collection.update_one(
+            {"subreddit": subreddit, "scraper_type": scraper_type},
+            {"$pull": {"pending_scrape": {"$in": removed}}}
+        )
+
+    # Clear any old failure counters for re-added subreddits (gives them a fresh start)
+    if added:
+        unset_failures = {f"scrape_failures.{sub}": "" for sub in added}
+        scrapers_collection.update_one(
+            {"subreddit": subreddit, "scraper_type": scraper_type},
+            {"$unset": unset_failures}
+        )
+
+    logger.info(f"Updated subreddit queue for {subreddit}: {new_subs}" +
+                (f" (added {len(added)} to pending)" if added else ""))
 
     response = {
         "message": "Subreddits updated (changes apply on next scraping cycle)",
@@ -1906,15 +1936,29 @@ async def add_subreddits_to_queue(
     # Merge lists
     updated_queue = list(existing) + added
 
-    # Update MongoDB
+    # Update MongoDB - also add to pending_scrape for prioritization
     scrapers_collection.update_one(
         {"subreddit": subreddit, "scraper_type": scraper_type},
-        {"$set": {
-            "subreddits": updated_queue,
-            "last_updated": datetime.now(UTC)
-        }}
+        {
+            "$set": {
+                "subreddits": updated_queue,
+                "last_updated": datetime.now(UTC)
+            },
+            "$addToSet": {
+                "pending_scrape": {"$each": added}
+            }
+        }
     )
-    logger.info(f"Added {len(added)} subreddits to queue for {subreddit}: {added}")
+
+    # Clear any old failure counters for re-added subreddits (gives them a fresh start)
+    unset_failures = {f"scrape_failures.{sub}": "" for sub in added}
+    if unset_failures:
+        scrapers_collection.update_one(
+            {"subreddit": subreddit, "scraper_type": scraper_type},
+            {"$unset": unset_failures}
+        )
+
+    logger.info(f"Added {len(added)} subreddits to queue for {subreddit}: {added} (pending priority scrape)")
 
     return {
         "message": f"Added {len(added)} subreddits to queue",
@@ -1977,13 +2021,18 @@ async def remove_subreddits_from_queue(
             "subreddit_count": len(existing)
         }
 
-    # Update MongoDB
+    # Update MongoDB - also clean pending_scrape
     scrapers_collection.update_one(
         {"subreddit": subreddit, "scraper_type": scraper_type},
-        {"$set": {
-            "subreddits": updated_queue,
-            "last_updated": datetime.now(UTC)
-        }}
+        {
+            "$set": {
+                "subreddits": updated_queue,
+                "last_updated": datetime.now(UTC)
+            },
+            "$pull": {
+                "pending_scrape": {"$in": list(removed)}
+            }
+        }
     )
     logger.info(f"Removed {len(removed)} subreddits from queue for {subreddit}: {removed}")
 

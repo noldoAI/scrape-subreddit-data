@@ -802,6 +802,102 @@ def get_subreddit_queue_from_db(scraper_identifier: str, scraper_type: str = "po
         return None
 
 
+def get_pending_scrape_subreddits(scraper_identifier: str, scraper_type: str = "posts") -> list:
+    """
+    Get subreddits that haven't been scraped yet (pending initial scrape).
+
+    These subreddits are prioritized for immediate scraping when added via API.
+
+    Args:
+        scraper_identifier: Primary subreddit name (used as scraper ID)
+        scraper_type: "posts" or "comments"
+
+    Returns:
+        List of subreddit names pending first scrape, or empty list
+    """
+    try:
+        scraper_doc = db[COLLECTIONS["SCRAPERS"]].find_one(
+            {"subreddit": scraper_identifier, "scraper_type": scraper_type},
+            {"pending_scrape": 1}
+        )
+        return scraper_doc.get("pending_scrape", []) if scraper_doc else []
+    except Exception as e:
+        logger.error(f"Error fetching pending scrape subreddits: {e}")
+        return []
+
+
+def mark_subreddit_scraped(scraper_identifier: str, subreddit: str, scraper_type: str = "posts"):
+    """
+    Remove subreddit from pending_scrape after successful scrape.
+
+    Called after a subreddit is successfully scraped for the first time.
+    This prevents it from being re-prioritized on subsequent cycles.
+
+    Args:
+        scraper_identifier: Primary subreddit name (used as scraper ID)
+        subreddit: The subreddit that was successfully scraped
+        scraper_type: "posts" or "comments"
+    """
+    try:
+        result = db[COLLECTIONS["SCRAPERS"]].update_one(
+            {"subreddit": scraper_identifier, "scraper_type": scraper_type},
+            {
+                "$pull": {"pending_scrape": subreddit},
+                "$unset": {f"scrape_failures.{subreddit}": ""}  # Clear failure counter on success
+            }
+        )
+        if result.modified_count > 0:
+            logger.info(f"Marked r/{subreddit} as scraped (removed from pending)")
+    except Exception as e:
+        logger.error(f"Error marking subreddit as scraped: {e}")
+
+
+def record_scrape_failure(scraper_identifier: str, subreddit: str, scraper_type: str = "posts", max_failures: int = 3):
+    """
+    Record a scrape failure for a subreddit. After max_failures consecutive failures,
+    remove from pending_scrape to prevent infinite priority retries.
+
+    Args:
+        scraper_identifier: Primary subreddit name (used as scraper ID)
+        subreddit: The subreddit that failed to scrape
+        scraper_type: "posts" or "comments"
+        max_failures: Number of consecutive failures before removing from pending (default: 3)
+
+    Returns:
+        bool: True if subreddit was removed from pending (hit max failures)
+    """
+    try:
+        # Increment failure counter
+        result = db[COLLECTIONS["SCRAPERS"]].find_one_and_update(
+            {"subreddit": scraper_identifier, "scraper_type": scraper_type},
+            {"$inc": {f"scrape_failures.{subreddit}": 1}},
+            return_document=True,
+            projection={"scrape_failures": 1, "pending_scrape": 1}
+        )
+
+        if not result:
+            return False
+
+        failures = result.get("scrape_failures", {}).get(subreddit, 0)
+        is_pending = subreddit in result.get("pending_scrape", [])
+
+        if failures >= max_failures and is_pending:
+            # Hit max failures - remove from pending to stop prioritization
+            db[COLLECTIONS["SCRAPERS"]].update_one(
+                {"subreddit": scraper_identifier, "scraper_type": scraper_type},
+                {"$pull": {"pending_scrape": subreddit}}
+            )
+            logger.warning(f"⚠️ r/{subreddit} failed {failures} times - removed from priority queue (may be invalid/private/banned)")
+            return True
+        elif is_pending:
+            logger.info(f"r/{subreddit} failed ({failures}/{max_failures}) - will retry with priority")
+
+        return False
+    except Exception as e:
+        logger.error(f"Error recording scrape failure: {e}")
+        return False
+
+
 def get_subreddit_post_counts(subreddit_names: list) -> dict:
     """Get post counts for each subreddit from the database."""
     pipeline = [
@@ -843,7 +939,6 @@ def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=Non
     from config import MULTI_SCRAPER_CONFIG
 
     cycle_count = 0
-    first_cycle = True
     rotation_delay = MULTI_SCRAPER_CONFIG.get("rotation_delay", 2)
 
     # Use first subreddit as scraper identifier if not provided
@@ -861,48 +956,63 @@ def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=Non
         cycle_count += 1
         cycle_start = time.time()
 
-        # === DYNAMIC QUEUE: Read subreddit list from MongoDB each cycle ===
-        db_queue = get_subreddit_queue_from_db(scraper_identifier, "posts")
-
-        if db_queue:
-            current_subreddits = db_queue
-            if set(current_subreddits) != set(subreddit_names):
-                logger.info(f"Queue updated from MongoDB: {len(current_subreddits)} subreddits")
-                added = set(current_subreddits) - set(subreddit_names)
-                removed = set(subreddit_names) - set(current_subreddits)
-                if added:
-                    logger.info(f"  Added: {', '.join(added)}")
-                if removed:
-                    logger.info(f"  Removed: {', '.join(removed)}")
-        else:
-            # Fallback to initial list if DB read fails or no entry
-            current_subreddits = subreddit_names
-            if cycle_count == 1:
-                logger.info("Using initial subreddit list (no DB queue found)")
-
-        # Handle empty queue
-        if not current_subreddits:
-            logger.warning("Subreddit queue is empty. Waiting 60s before retry...")
-            time.sleep(60)
-            continue
-
-        # Prioritize new subreddits (0 posts) on first cycle only
-        if first_cycle:
-            ordered_subreddits = prioritize_new_subreddits(current_subreddits)
-            first_cycle = False
-        else:
-            ordered_subreddits = current_subreddits
+        # === DYNAMIC QUEUE WITH ASAP PRIORITIZATION ===
+        # Re-reads queue between each subreddit for immediate pickup of new additions
+        processed_this_cycle = set()
+        sub_count = 0
+        cycle_stats = {"total_posts": 0, "total_new": 0, "errors": 0}
+        last_known_queue = set()
 
         logger.info(f"\n{'='*80}")
         logger.info(f"MULTI-SUBREDDIT ROTATION CYCLE #{cycle_count}")
         logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"Subreddits: {', '.join(ordered_subreddits)}")
         logger.info(f"{'='*80}")
 
-        cycle_stats = {"total_posts": 0, "total_new": 0, "errors": 0}
+        while True:
+            # Re-read queue each iteration (picks up adds/removes immediately)
+            current_queue = get_subreddit_queue_from_db(scraper_identifier, "posts")
+            if not current_queue:
+                current_queue = subreddit_names  # Fallback to CLI args
 
-        for i, subreddit_name in enumerate(ordered_subreddits):
-            logger.info(f"\n[{i+1}/{len(ordered_subreddits)}] Processing r/{subreddit_name}")
+            # Handle empty queue
+            if not current_queue:
+                logger.warning("Subreddit queue is empty. Waiting 60s before retry...")
+                time.sleep(60)
+                break
+
+            # Log queue changes
+            current_queue_set = set(current_queue)
+            if last_known_queue and current_queue_set != last_known_queue:
+                added = current_queue_set - last_known_queue
+                removed = last_known_queue - current_queue_set
+                if added:
+                    logger.info(f"🆕 Queue updated - Added: {', '.join(added)}")
+                if removed:
+                    logger.info(f"➖ Queue updated - Removed: {', '.join(removed)}")
+            last_known_queue = current_queue_set
+
+            # Get pending (never scraped) subreddits for prioritization
+            pending = set(get_pending_scrape_subreddits(scraper_identifier, "posts"))
+
+            # Get unprocessed subreddits for this cycle
+            unprocessed = [s for s in current_queue if s not in processed_this_cycle]
+
+            if not unprocessed:
+                break  # Cycle complete
+
+            # Prioritize: pending (never scraped) first, then rest
+            pending_unprocessed = [s for s in unprocessed if s in pending]
+            other_unprocessed = [s for s in unprocessed if s not in pending]
+            ordered = pending_unprocessed + other_unprocessed
+
+            if pending_unprocessed and sub_count == 0:
+                logger.info(f"⚡ Priority scraping {len(pending_unprocessed)} pending subreddits: {', '.join(pending_unprocessed)}")
+
+            subreddit_name = ordered[0]
+            sub_count += 1
+
+            logger.info(f"\n[{sub_count}/{len(current_queue)}] Processing r/{subreddit_name}" +
+                       (" ⚡PRIORITY" if subreddit_name in pending else ""))
             logger.info("-" * 40)
             sub_start = time.time()
 
@@ -911,6 +1021,7 @@ def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=Non
             if rate_info.get('remaining', 100) < 50:
                 logger.info(f"Rate limit: {rate_info.get('remaining')}/{rate_info.get('used')} remaining")
 
+            scrape_success = False
             try:
                 scraper = RedditPostsScraper(subreddit_name, config)
 
@@ -940,17 +1051,26 @@ def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=Non
                     POSTS_NEW.labels(subreddit=subreddit_name).inc(new_posts)
                     LAST_SUCCESS.labels(subreddit=subreddit_name).set(time.time())
 
+                scrape_success = True
+
             except Exception as e:
                 logger.error(f"Error scraping r/{subreddit_name}: {e}")
                 cycle_stats["errors"] += 1
                 # Track errors in Prometheus
                 if PROMETHEUS_ENABLED:
                     SCRAPER_ERRORS.labels(subreddit=subreddit_name, error_type="scrape_failed").inc()
-                continue
+                # Record failure for pending subreddits (removes after 3 consecutive failures)
+                if subreddit_name in pending:
+                    record_scrape_failure(scraper_identifier, subreddit_name, "posts")
+
+            # Mark as scraped after successful scrape (removes from pending)
+            if scrape_success and subreddit_name in pending:
+                mark_subreddit_scraped(scraper_identifier, subreddit_name, "posts")
+
+            processed_this_cycle.add(subreddit_name)
 
             # Brief pause between subreddits
-            if i < len(ordered_subreddits) - 1:
-                time.sleep(rotation_delay)
+            time.sleep(rotation_delay)
 
         cycle_duration = time.time() - cycle_start
 
@@ -960,7 +1080,7 @@ def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=Non
         logger.info(f"\n{'='*60}")
         logger.info("ROTATION CYCLE SUMMARY")
         logger.info(f"{'='*60}")
-        logger.info(f"Subreddits processed: {len(ordered_subreddits) - cycle_stats['errors']}/{len(ordered_subreddits)}")
+        logger.info(f"Subreddits processed: {sub_count - cycle_stats['errors']}/{sub_count}")
         logger.info(f"Total posts: {cycle_stats['total_posts']} ({cycle_stats['total_new']} new)")
         logger.info(f"Errors: {cycle_stats['errors']}")
         logger.info(f"Cycle duration: {cycle_duration:.1f}s")
