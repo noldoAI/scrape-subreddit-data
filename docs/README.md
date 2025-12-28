@@ -291,8 +291,8 @@ Scrape **unlimited subreddits** with a single Reddit account. System self-thrott
 
 - **Unlimited subreddits**: No artificial limits - system pauses when quota runs low
 - **Dynamic queue**: Add/remove subreddits via API without container restart
+- **ASAP prioritization**: New subreddits scraped within 30-60 seconds (v1.9+)
 - **Self-throttling**: Automatic pause when API quota low, continues after reset
-- **No restart needed**: Queue changes picked up at start of next cycle
 
 ### **Starting Multi-Subreddit Scraper**
 
@@ -327,6 +327,29 @@ PATCH /scrapers/{scraper_id}/subreddits
 {
     "subreddits": ["sub1", "sub2", "sub3"]
 }
+```
+
+### **ASAP Subreddit Prioritization (v1.9+)**
+
+New subreddits added via dashboard/API are scraped **within 30-60 seconds** (not waiting for cycle to finish):
+
+| Feature | Description |
+|---------|-------------|
+| **Immediate pickup** | Scraper re-reads queue between each subreddit |
+| **Priority tracking** | Uses `pending_scrape` array in MongoDB |
+| **Smart handling** | Invalid subreddits tried once, then treated as normal |
+| **No wasted work** | Already processed subs stay processed |
+
+**Example flow:**
+```
+Add "newsubreddit" via dashboard
+  → Added to subreddits + pending_scrape
+
+Scraper (within 30-60s):
+  → Finishes current subreddit
+  → Re-reads queue, sees newsubreddit in pending_scrape
+  → Processes it FIRST (⚡PRIORITY)
+  → Removes from pending_scrape after success
 ```
 
 ### **Self-Throttling Rate Limit Handling**

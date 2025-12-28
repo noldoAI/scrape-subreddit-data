@@ -343,13 +343,15 @@ The system uses Reddit's rate limit API to automatically manage request pacing:
 This approach eliminates complex delay calculations and allows unlimited subreddits.
 
 **How Rotation Works:**
-1. Read subreddit queue from MongoDB (at start of each cycle)
-2. For each subreddit:
+1. For each subreddit in cycle:
+   - Re-read queue from MongoDB (picks up adds/removes immediately)
+   - Check `pending_scrape` for priority subreddits
    - Check rate limit (pause if quota low)
    - Scrape posts, save to DB, update metadata
+   - Mark as scraped if was pending (remove from `pending_scrape`)
    - Brief pause (2 seconds)
-3. Wait for interval (e.g., 300 seconds)
-4. Start next cycle (re-read queue from DB)
+2. Wait for interval (e.g., 300 seconds)
+3. Start next cycle
 
 **Error Handling:**
 - If one subreddit fails, continues with next (try/catch per subreddit)
@@ -367,26 +369,43 @@ MULTI_SCRAPER_CONFIG = {
 }
 ```
 
-**New Subreddit Prioritization (v1.6+):**
+**ASAP Subreddit Prioritization (v1.9+):**
 
-When adding new subreddits to an existing scraper, the system automatically prioritizes them on the first cycle after restart:
+When adding new subreddits via dashboard/API, they get scraped **within 30-60 seconds** (not waiting for cycle to finish):
 
-- Queries DB to find subreddits with 0 posts
-- Scrapes new subreddits **first** before existing ones
-- Existing subreddits maintain their relative order after
-- Only applies to first cycle (subsequent cycles use normal order)
+- Uses `pending_scrape` array in MongoDB to track subreddits awaiting first scrape
+- Scraper re-reads queue between each subreddit (picks up additions immediately)
+- Pending subreddits are processed FIRST (before existing ones)
+- After successful scrape, subreddit is removed from `pending_scrape`
+- Invalid/failed subreddits are tried once, then treated as normal (no infinite priority)
+
+**How it works:**
+```
+Add "newsubreddit" via dashboard
+  → subreddits: [..., "newsubreddit"]
+  → pending_scrape: ["newsubreddit"]
+
+Scraper (within 30-60s):
+  → Re-reads queue after current sub finishes
+  → Sees newsubreddit in pending_scrape
+  → Processes it FIRST (⚡PRIORITY)
+  → Removes from pending_scrape after success
+```
 
 **Example logs:**
 ```
-Prioritizing 2 new subreddits: newsubreddit1, newsubreddit2
-[1/10] Processing r/newsubreddit1
-[2/10] Processing r/newsubreddit2
-[3/10] Processing r/existingsubreddit...
+🆕 Queue updated - Added: newsubreddit1, newsubreddit2
+⚡ Priority scraping 2 pending subreddits: newsubreddit1, newsubreddit2
+[1/12] Processing r/newsubreddit1 ⚡PRIORITY
+Marked r/newsubreddit1 as scraped (removed from pending)
+[2/12] Processing r/newsubreddit2 ⚡PRIORITY
+Marked r/newsubreddit2 as scraped (removed from pending)
+[3/12] Processing r/existingsubreddit
 ```
 
 ### Dynamic Subreddit Queue (v1.8+)
 
-Add or remove subreddits from a running scraper **without container restart**. Changes are picked up at the start of the next scraping cycle.
+Add or remove subreddits from a running scraper **without container restart**. Changes are picked up **immediately** (within 30-60 seconds).
 
 **How It Works:**
 
