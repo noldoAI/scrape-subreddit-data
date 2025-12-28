@@ -210,6 +210,28 @@ GET /scrapers/{subreddit}/stats
 GET /scrapers/{subreddit}/logs?lines=100
 ```
 
+### **Dynamic Queue Management (v1.8+)**
+
+```bash
+# Add subreddits to queue (no restart)
+POST /scrapers/{subreddit}/subreddits/add
+{
+    "subreddits": ["newsubreddit1", "newsubreddit2"]
+}
+
+# Remove subreddits from queue (no restart)
+POST /scrapers/{subreddit}/subreddits/remove
+{
+    "subreddits": ["oldsubreddit"]
+}
+
+# Replace entire subreddit list (no restart)
+PATCH /scrapers/{subreddit}/subreddits
+{
+    "subreddits": ["sub1", "sub2", "sub3"]
+}
+```
+
 ### **System Monitoring**
 
 ```bash
@@ -261,9 +283,73 @@ GET /api/usage/cost?subreddit=wallstreetbets
 }
 ```
 
+## 🔄 Multi-Subreddit Mode with Dynamic Queue (v1.8+)
+
+Scrape **unlimited subreddits** with a single Reddit account. System self-throttles via Reddit's rate limit API.
+
+### **Key Features**
+
+- **Unlimited subreddits**: No artificial limits - system pauses when quota runs low
+- **Dynamic queue**: Add/remove subreddits via API without container restart
+- **Self-throttling**: Automatic pause when API quota low, continues after reset
+- **No restart needed**: Queue changes picked up at start of next cycle
+
+### **Starting Multi-Subreddit Scraper**
+
+```bash
+POST /scrapers/start-flexible
+{
+    "subreddits": ["stocks", "investing", "wallstreetbets", "options"],
+    "scraper_type": "posts",
+    "posts_limit": 50,
+    "interval": 300,
+    "saved_account_name": "my_account"
+}
+```
+
+### **Dynamic Queue Management (No Restart)**
+
+```bash
+# Add subreddits to running scraper
+POST /scrapers/{scraper_id}/subreddits/add
+{
+    "subreddits": ["newsubreddit1", "newsubreddit2"]
+}
+
+# Remove subreddits from running scraper
+POST /scrapers/{scraper_id}/subreddits/remove
+{
+    "subreddits": ["oldsubreddit"]
+}
+
+# Replace entire queue
+PATCH /scrapers/{scraper_id}/subreddits
+{
+    "subreddits": ["sub1", "sub2", "sub3"]
+}
+```
+
+### **Self-Throttling Rate Limit Handling**
+
+```python
+# How it works internally
+for subreddit in subreddits:
+    check_rate_limit(reddit)  # Pauses if remaining < 50
+    scrape(subreddit)
+    time.sleep(2)  # Minimal politeness delay
+```
+
+**Example Scenarios:**
+
+| Subreddits | HTTP Calls/Cycle | Time at 100 QPM | Auto-Pause? |
+|------------|------------------|-----------------|-------------|
+| 10 | ~150 calls | ~1.5 min | No |
+| 50 | ~750 calls | ~7.5 min | Yes (~1 pause) |
+| 200 | ~3000 calls | ~30 min | Yes (~5 pauses) |
+
 ## ⚙️ Configuration Presets
 
-**Optimized for 5 scrapers per Reddit account** (v1.2+ with depth limiting)
+**Optimized for multi-subreddit scraping** (v1.8+ with self-throttling)
 
 ### **High Activity Subreddits** (wallstreetbets, stocks)
 
@@ -316,7 +402,7 @@ GET /api/usage/cost?subreddit=wallstreetbets
 ```
 *Conservative settings (~18 API calls/min)*
 
-**📊 API Usage**: 5 scrapers = ~105 calls/min (within 600/10min Reddit limit)
+**📊 API Usage**: System self-throttles via rate limit API - no artificial limits needed
 
 ## 🗃️ Database Schema
 
@@ -839,7 +925,9 @@ r/wallstreetbets Statistics:
 
 ### **🚀 Scalable Scraping**
 
-- Multiple subreddits simultaneously
+- **Unlimited subreddits** per container (v1.8+)
+- **Dynamic queue**: Add/remove subreddits without restart
+- **Self-throttling**: Automatic rate limit management
 - Unique credentials per scraper
 - Automatic container orchestration
 - Smart resource allocation

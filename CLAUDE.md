@@ -290,12 +290,14 @@ First cycle:  "Using 'month' time filter for historical data" → 1000+ posts
 Second cycle: "Using 'day' time filter" → ~25 new daily posts
 ```
 
-### Multi-Subreddit Mode (v1.5+)
+### Multi-Subreddit Mode (v1.5+) with Dynamic Queue (v1.8+)
 
-Scrape up to **30 subreddits with 1 Reddit account** in a single container using rotation.
+Scrape **unlimited subreddits with 1 Reddit account** in a single container using rotation. System self-throttles via Reddit's rate limit API.
 
 **Key Features:**
-- 1 container handles multiple subreddits in rotation
+- 1 container handles unlimited subreddits in rotation
+- **Dynamic queue**: Add/remove subreddits via API without container restart
+- Self-throttling: Pauses when API quota runs low, continues after reset
 - First run: fetches maximum historical posts (month of top posts)
 - Subsequent runs: only new posts (upsert deduplication)
 - Dashboard support with mode selector
@@ -305,7 +307,7 @@ Scrape up to **30 subreddits with 1 Reddit account** in a single container using
 # Single subreddit (backwards compatible)
 python posts_scraper.py wallstreetbets --posts-limit 100 --interval 60
 
-# Multi-subreddit rotation (NEW)
+# Multi-subreddit rotation
 python posts_scraper.py stocks,investing,wallstreetbets --posts-limit 50 --interval 300
 
 # Show stats for multiple subreddits
@@ -325,40 +327,41 @@ POST /scrapers/start-flexible
 ```
 
 **Dashboard:**
-- Select "Multi-Subreddit (up to 30)" from Mode dropdown
+- Select "Multi-Subreddit (unlimited)" from Mode dropdown
 - Enter comma-separated subreddit names
 - Container named: `reddit-posts-scraper-multi-5subs-stocks`
 
-**Recommended Config for 30 Subreddits:**
-- `posts_limit`: 50 per subreddit
-- `interval`: 300 seconds (5 min between full rotations)
-- `sorting_methods`: ["new", "top"] (reduce from 3 to 2)
+**Self-Throttling Rate Limit Handling:**
 
-**Rate Limit Analysis:**
+The system uses Reddit's rate limit API to automatically manage request pacing:
 
-| Mode | Subreddits | API Calls/Cycle | Safe? |
-|------|------------|-----------------|-------|
-| Single | 1 | ~12 calls | Yes |
-| Multi | 30 | ~210-300 calls | Yes (under 600/10min) |
+1. **Scrape fast**: Process subreddits with minimal delay (2 seconds between subs)
+2. **Monitor quota**: `check_rate_limit(reddit)` reads `reddit.auth.limits`
+3. **Pause when low**: If remaining < 50 requests, sleep until quota resets (~10 min max)
+4. **Continue automatically**: Resume scraping after reset
+
+This approach eliminates complex delay calculations and allows unlimited subreddits.
 
 **How Rotation Works:**
-1. Process subreddit 1: scrape posts, save to DB, update metadata
-2. Brief pause (2 seconds)
-3. Process subreddit 2: scrape posts, save to DB, update metadata
-4. ... repeat for all subreddits
-5. Wait for interval (e.g., 300 seconds)
-6. Start next rotation cycle
+1. Read subreddit queue from MongoDB (at start of each cycle)
+2. For each subreddit:
+   - Check rate limit (pause if quota low)
+   - Scrape posts, save to DB, update metadata
+   - Brief pause (2 seconds)
+3. Wait for interval (e.g., 300 seconds)
+4. Start next cycle (re-read queue from DB)
 
 **Error Handling:**
 - If one subreddit fails, continues with next (try/catch per subreddit)
 - Errors logged but don't stop the rotation
 - Cycle summary shows processed/total and error count
+- Empty queue: logs warning, sleeps 60s, retries
 
 **Configuration** (config.py):
 ```python
 MULTI_SCRAPER_CONFIG = {
-    "max_subreddits_per_container": 30,
-    "rotation_delay": 2,              # Seconds between subreddits
+    "max_subreddits_per_container": None,  # No limit - system self-throttles
+    "rotation_delay": 2,                    # Seconds between subreddits (politeness)
     "recommended_posts_limit": 50,
     "recommended_interval": 300,
 }
@@ -380,6 +383,75 @@ Prioritizing 2 new subreddits: newsubreddit1, newsubreddit2
 [2/10] Processing r/newsubreddit2
 [3/10] Processing r/existingsubreddit...
 ```
+
+### Dynamic Subreddit Queue (v1.8+)
+
+Add or remove subreddits from a running scraper **without container restart**. Changes are picked up at the start of the next scraping cycle.
+
+**How It Works:**
+
+```
+┌─────────────────┐     ┌───────────────────┐     ┌──────────────────┐
+│   API Request   │────>│  MongoDB Update   │────>│ Scraper Reads DB │
+│ POST /add       │     │ reddit_scrapers   │     │ at cycle start   │
+└─────────────────┘     └───────────────────┘     └──────────────────┘
+                                                           │
+                                                           v
+                                                  ┌──────────────────┐
+                                                  │ Process updated  │
+                                                  │ subreddit list   │
+                                                  └──────────────────┘
+```
+
+**API Endpoints:**
+
+```bash
+# Add subreddits to queue (deduplicated)
+POST /scrapers/{scraper_id}/subreddits/add
+{
+    "subreddits": ["newsubreddit1", "newsubreddit2"]
+}
+
+# Remove subreddits from queue (protects primary)
+POST /scrapers/{scraper_id}/subreddits/remove
+{
+    "subreddits": ["oldsubreddit"]
+}
+
+# Replace entire queue (no restart)
+PATCH /scrapers/{scraper_id}/subreddits
+{
+    "subreddits": ["sub1", "sub2", "sub3"]
+}
+```
+
+**Response Example:**
+```json
+{
+    "status": "updated",
+    "message": "Subreddits updated. Changes apply on next scraping cycle.",
+    "subreddits": ["stocks", "investing", "wallstreetbets", "newsubreddit1"],
+    "count": 4
+}
+```
+
+**Key Behaviors:**
+
+| Action | Behavior |
+|--------|----------|
+| Add existing subreddit | Silently ignored (deduplicated) |
+| Remove primary subreddit | Rejected with 400 error |
+| Empty queue after removal | Allowed (scraper sleeps until queue populated) |
+| DB read failure | Falls back to CLI args |
+
+**CLI Alternative:**
+
+The scraper also supports specifying subreddits via CLI args (used as fallback):
+```bash
+python posts_scraper.py stocks,investing,wallstreetbets --posts-limit 50
+```
+
+If MongoDB queue is available, it takes precedence over CLI args.
 
 ### Smart Comment Update Prioritization
 
@@ -489,9 +561,11 @@ MONGODB_URI=mongodb+srv://...
 
 ### Rate Limiting Best Practices
 
-- Always call `check_rate_limit(reddit)` before making Reddit API calls
-- Current threshold: pauses when <50 requests remaining
-- Add `time.sleep(2)` between comment scraping to be respectful
+- Always call `check_rate_limit(reddit)` before each subreddit in multi-subreddit mode
+- Current threshold: pauses when <50 requests remaining, sleeps until quota reset
+- Add `time.sleep(2)` between subreddits/comment scraping for politeness
+- System self-throttles: no artificial subreddit limits needed
+- Large queues (200+ subreddits) work fine - system pauses automatically when quota runs low
 
 ### Docker Container Lifecycle
 
@@ -654,12 +728,18 @@ sudo reboot
 
 ### Scraper Management
 - `POST /scrapers/start` - Start new scraper container
+- `POST /scrapers/start-flexible` - Start multi-subreddit scraper
 - `GET /scrapers` - List all scrapers (includes database totals + scraper metrics)
 - `GET /scrapers/{subreddit}/status` - Container status
 - `POST /scrapers/{subreddit}/stop` - Stop container
 - `POST /scrapers/{subreddit}/restart` - Restart container
 - `DELETE /scrapers/{subreddit}` - Remove scraper and config
 - `GET /scrapers/{subreddit}/logs?lines=100` - Container logs
+
+### Dynamic Queue Management (v1.8+)
+- `POST /scrapers/{subreddit}/subreddits/add` - Add subreddits to queue (no restart)
+- `POST /scrapers/{subreddit}/subreddits/remove` - Remove subreddits from queue (no restart)
+- `PATCH /scrapers/{subreddit}/subreddits` - Replace entire subreddit list (no restart)
 
 ### Statistics & Analytics
 - `GET /scrapers/{subreddit}/stats` - Comprehensive subreddit statistics
@@ -848,21 +928,42 @@ These are defined in api.py and accessible via `GET /presets` endpoint.
 
 ## Rate Limit Optimization Strategy
 
-**Reddit API Limits**: ~600 requests per 10 minutes per OAuth app (~60 requests/minute)
+**Reddit API Limits**: ~100 queries per minute (600 per 10 minutes) per OAuth app
 
-**Design Philosophy**: System is optimized to allow **5 subreddit scrapers per Reddit account**, maximizing efficiency while staying within Reddit's rate limits.
+**Design Philosophy (v1.8+)**: System self-throttles via Reddit's rate limit API. No artificial limits on subreddit count - the system monitors remaining quota and pauses automatically when low.
+
+**Self-Throttling Approach:**
+```python
+for subreddit in subreddits:
+    check_rate_limit(reddit)  # Pauses if remaining < 50
+    scrape(subreddit)
+    time.sleep(2)  # Minimal politeness delay
+```
+
+**How `check_rate_limit()` Works** (core/rate_limits.py):
+1. Reads `reddit.auth.limits` → {remaining, used, reset_timestamp}
+2. If `remaining < 50`, calculates time until reset
+3. Sleeps until reset + 5s buffer
+4. Returns and scraping continues
+
+**API Usage per Subreddit** (with default config):
+- Post scraping: ~9-12 HTTP calls (3 sorting methods × 3-4 calls each)
+- Metadata: ~2-3 HTTP calls
+- **Total: ~12-15 HTTP calls per subreddit**
+
+**Example Scenarios:**
+
+| Subreddits | HTTP Calls/Cycle | Time at 100 QPM | Auto-Pause? |
+|------------|------------------|-----------------|-------------|
+| 10 | ~150 calls | ~1.5 min | No |
+| 50 | ~750 calls | ~7.5 min | Yes (~1 pause) |
+| 200 | ~3000 calls | ~30 min | Yes (~5 pauses) |
 
 **Sorting Focus**:
 - **"new"**: Captures ALL posts chronologically (100% coverage)
 - **"top" (day)**: Captures proven quality content from the last 24 hours
 - **"rising"**: Catches early trending posts before they peak
 - This combination ensures complete coverage with quality indicators
-
-**API Usage per Scraper** (with default config):
-- Post scraping: ~9 API calls (3 sorting methods × 3 calls each)
-- Comment scraping: ~12 API calls (6 posts × 2 calls)
-- **Total: ~21 API calls per minute**
-- **5 scrapers = ~105 calls/min** (stays within 600/10min limit with buffer)
 
 **Key Configuration Options**:
 - `sorting_methods`: `["new", "top", "rising"]` - Complete coverage + quality indicators
