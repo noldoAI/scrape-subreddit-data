@@ -529,7 +529,8 @@ def save_scraper_to_db(subreddit: str, config: ScraperConfig, status: str = "sta
             "last_updated": datetime.now(UTC),
             "last_error": last_error,
             "restart_count": 0,
-            "subreddits": subreddits if subreddits else [subreddit]  # Store all subreddits for multi-mode
+            "subreddits": subreddits if subreddits else [subreddit],  # Store all subreddits for multi-mode
+            "pending_scrape": subreddits if subreddits else [subreddit]  # Track subreddits awaiting first scrape
         }
 
         # Initialize metrics on first insert only
@@ -1906,15 +1907,20 @@ async def add_subreddits_to_queue(
     # Merge lists
     updated_queue = list(existing) + added
 
-    # Update MongoDB
+    # Update MongoDB - also add to pending_scrape for prioritization
     scrapers_collection.update_one(
         {"subreddit": subreddit, "scraper_type": scraper_type},
-        {"$set": {
-            "subreddits": updated_queue,
-            "last_updated": datetime.now(UTC)
-        }}
+        {
+            "$set": {
+                "subreddits": updated_queue,
+                "last_updated": datetime.now(UTC)
+            },
+            "$addToSet": {
+                "pending_scrape": {"$each": added}
+            }
+        }
     )
-    logger.info(f"Added {len(added)} subreddits to queue for {subreddit}: {added}")
+    logger.info(f"Added {len(added)} subreddits to queue for {subreddit}: {added} (pending priority scrape)")
 
     return {
         "message": f"Added {len(added)} subreddits to queue",
