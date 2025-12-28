@@ -841,12 +841,61 @@ def mark_subreddit_scraped(scraper_identifier: str, subreddit: str, scraper_type
     try:
         result = db[COLLECTIONS["SCRAPERS"]].update_one(
             {"subreddit": scraper_identifier, "scraper_type": scraper_type},
-            {"$pull": {"pending_scrape": subreddit}}
+            {
+                "$pull": {"pending_scrape": subreddit},
+                "$unset": {f"scrape_failures.{subreddit}": ""}  # Clear failure counter on success
+            }
         )
         if result.modified_count > 0:
             logger.info(f"Marked r/{subreddit} as scraped (removed from pending)")
     except Exception as e:
         logger.error(f"Error marking subreddit as scraped: {e}")
+
+
+def record_scrape_failure(scraper_identifier: str, subreddit: str, scraper_type: str = "posts", max_failures: int = 3):
+    """
+    Record a scrape failure for a subreddit. After max_failures consecutive failures,
+    remove from pending_scrape to prevent infinite priority retries.
+
+    Args:
+        scraper_identifier: Primary subreddit name (used as scraper ID)
+        subreddit: The subreddit that failed to scrape
+        scraper_type: "posts" or "comments"
+        max_failures: Number of consecutive failures before removing from pending (default: 3)
+
+    Returns:
+        bool: True if subreddit was removed from pending (hit max failures)
+    """
+    try:
+        # Increment failure counter
+        result = db[COLLECTIONS["SCRAPERS"]].find_one_and_update(
+            {"subreddit": scraper_identifier, "scraper_type": scraper_type},
+            {"$inc": {f"scrape_failures.{subreddit}": 1}},
+            return_document=True,
+            projection={"scrape_failures": 1, "pending_scrape": 1}
+        )
+
+        if not result:
+            return False
+
+        failures = result.get("scrape_failures", {}).get(subreddit, 0)
+        is_pending = subreddit in result.get("pending_scrape", [])
+
+        if failures >= max_failures and is_pending:
+            # Hit max failures - remove from pending to stop prioritization
+            db[COLLECTIONS["SCRAPERS"]].update_one(
+                {"subreddit": scraper_identifier, "scraper_type": scraper_type},
+                {"$pull": {"pending_scrape": subreddit}}
+            )
+            logger.warning(f"⚠️ r/{subreddit} failed {failures} times - removed from priority queue (may be invalid/private/banned)")
+            return True
+        elif is_pending:
+            logger.info(f"r/{subreddit} failed ({failures}/{max_failures}) - will retry with priority")
+
+        return False
+    except Exception as e:
+        logger.error(f"Error recording scrape failure: {e}")
+        return False
 
 
 def get_subreddit_post_counts(subreddit_names: list) -> dict:
@@ -1010,6 +1059,9 @@ def run_multi_subreddit_scraping(subreddit_names, config, scraper_identifier=Non
                 # Track errors in Prometheus
                 if PROMETHEUS_ENABLED:
                     SCRAPER_ERRORS.labels(subreddit=subreddit_name, error_type="scrape_failed").inc()
+                # Record failure for pending subreddits (removes after 3 consecutive failures)
+                if subreddit_name in pending:
+                    record_scrape_failure(scraper_identifier, subreddit_name, "posts")
 
             # Mark as scraped after successful scrape (removes from pending)
             if scrape_success and subreddit_name in pending:

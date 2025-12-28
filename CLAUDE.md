@@ -374,22 +374,35 @@ MULTI_SCRAPER_CONFIG = {
 When adding new subreddits via dashboard/API, they get scraped **within 30-60 seconds** (not waiting for cycle to finish):
 
 - Uses `pending_scrape` array in MongoDB to track subreddits awaiting first scrape
+- Uses `scrape_failures` dict in MongoDB to track consecutive failures per subreddit
 - Scraper re-reads queue between each subreddit (picks up additions immediately)
 - Pending subreddits are processed FIRST (before existing ones)
 - After successful scrape, subreddit is removed from `pending_scrape`
-- Invalid/failed subreddits are tried once, then treated as normal (no infinite priority)
+- After 3 consecutive failures, subreddit is removed from `pending_scrape` (may be invalid/private/banned)
+- Re-adding a previously failed subreddit resets its failure counter (fresh start)
 
 **How it works:**
 ```
 Add "newsubreddit" via dashboard
   → subreddits: [..., "newsubreddit"]
   → pending_scrape: ["newsubreddit"]
+  → scrape_failures.newsubreddit cleared (if existed)
 
 Scraper (within 30-60s):
   → Re-reads queue after current sub finishes
   → Sees newsubreddit in pending_scrape
   → Processes it FIRST (⚡PRIORITY)
-  → Removes from pending_scrape after success
+  → On success: removes from pending_scrape
+  → On failure: increments scrape_failures.newsubreddit
+  → After 3 failures: removes from pending_scrape (stops prioritization)
+```
+
+**Failure tracking:**
+```
+r/invalid fails: scrape_failures.invalid = 1 (will retry with priority)
+r/invalid fails: scrape_failures.invalid = 2 (will retry with priority)
+r/invalid fails: scrape_failures.invalid = 3 → removed from pending_scrape
+⚠️ r/invalid failed 3 times - removed from priority queue (may be invalid/private/banned)
 ```
 
 **Example logs:**
