@@ -41,13 +41,30 @@ jobs:
 
       - name: Deploy to Azure VM
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_EMBEDDING_DEPLOYMENT: ${{ secrets.AZURE_EMBEDDING_DEPLOYMENT }}
+          AZURE_DEPLOYMENT_NAME: ${{ secrets.AZURE_DEPLOYMENT_NAME }}
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}
         with:
           host: ${{ secrets.AZURE_HOST }}
           username: ${{ secrets.AZURE_USER }}
           key: ${{ secrets.AZURE_SSH_KEY }}
+          envs: MONGODB_URI,AZURE_OPENAI_ENDPOINT,AZURE_OPENAI_API_KEY,AZURE_EMBEDDING_DEPLOYMENT,AZURE_DEPLOYMENT_NAME,APPLICATIONINSIGHTS_CONNECTION_STRING
           script: |
             cd ~/scrape-subreddit-data
             git pull origin main
+
+            # Generate .env from GitHub secrets
+            echo "Generating .env from secrets..."
+            echo "MONGODB_URI=${MONGODB_URI}" > .env
+            echo "AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}" >> .env
+            echo "AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}" >> .env
+            echo "AZURE_EMBEDDING_DEPLOYMENT=${AZURE_EMBEDDING_DEPLOYMENT}" >> .env
+            echo "AZURE_DEPLOYMENT_NAME=${AZURE_DEPLOYMENT_NAME}" >> .env
+            echo "APPLICATIONINSIGHTS_CONNECTION_STRING=${APPLICATIONINSIGHTS_CONNECTION_STRING}" >> .env
 
             # Rebuild both images
             echo "Building Docker images..."
