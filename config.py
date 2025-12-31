@@ -4,6 +4,9 @@ Configuration file for Reddit Scraper system.
 Centralizes all database names, collection names, and other constants.
 """
 
+# Version
+VERSION = "1.9.1"
+
 # Database Configuration
 DATABASE_NAME = "noldo"
 
