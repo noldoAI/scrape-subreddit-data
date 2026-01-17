@@ -910,6 +910,19 @@ if mongo_connected and EMBEDDING_WORKER_CONFIG.get("enabled", True):
     except Exception as e:
         logger.error(f"Failed to start embedding worker: {e}")
 
+# Initialize and start suggestions sync worker
+suggestions_worker = None
+if mongo_connected:
+    try:
+        from suggestions_worker import SuggestionsWorker
+        suggestions_worker = SuggestionsWorker(db)
+        suggestions_worker.start_background()
+        logger.info("Suggestions sync worker started")
+    except ImportError:
+        logger.warning("suggestions_worker module not found, suggestions sync disabled")
+    except Exception as e:
+        logger.error(f"Failed to start suggestions worker: {e}")
+
 # Load existing scrapers on startup
 if mongo_connected:
     load_all_scrapers_from_db()
@@ -2886,6 +2899,110 @@ async def trigger_embedding_processing(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+# =============================================================================
+# SUGGESTIONS SYNC WORKER ENDPOINTS
+# =============================================================================
+
+@app.get("/suggestions/worker/status")
+async def get_suggestions_worker_status():
+    """
+    Get the status of the background suggestions sync worker.
+
+    Returns worker stats including sync counts, pending suggestions, and last run time.
+    """
+    try:
+        if suggestions_worker is None:
+            return {
+                "running": False,
+                "reason": "Worker not initialized (check suggestions_worker module import)"
+            }
+
+        stats = suggestions_worker.get_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get worker status: {str(e)}")
+
+
+@app.post("/suggestions/sync")
+async def trigger_suggestions_sync():
+    """
+    Manually trigger a sync of pending subreddit suggestions.
+
+    This syncs all pending suggestions from subreddit_suggestions collection
+    to the active scraper's queue. New subreddits are added to pending_scrape
+    for priority scraping.
+
+    Returns:
+        Sync result with added subreddits, skipped duplicates, and queue size.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    if suggestions_worker is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Suggestions worker not available"
+        )
+
+    try:
+        result = suggestions_worker.sync_suggestions()
+        return result
+    except Exception as e:
+        logger.error(f"Manual suggestions sync failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+
+
+@app.get("/suggestions/pending")
+async def get_pending_suggestions():
+    """
+    Get list of pending (unsynced) subreddit suggestions.
+
+    Returns unique subreddits from pending suggestions and comparison
+    with currently scraped subreddits.
+    """
+    if not mongo_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    try:
+        # Get pending suggestions
+        pending = list(db.subreddit_suggestions.find({"synced_at": {"$exists": False}}))
+
+        # Extract unique subreddit names and sources
+        all_suggested = set()
+        sources = set()
+        for doc in pending:
+            for sub in doc.get("subreddits", []):
+                name = sub.get("name", "").strip()
+                if name:
+                    all_suggested.add(name.lower())
+                    sources.add(sub.get("source", "unknown"))
+
+        # Get currently scraped subreddits from active scraper
+        scraped = set()
+        active_scraper = db[COLLECTIONS["SCRAPERS"]].find_one({
+            "scraper_type": "posts",
+            "status": "running"
+        })
+        if active_scraper:
+            scraped = set(s.lower() for s in active_scraper.get("subreddits", []))
+
+        new_subs = [s for s in all_suggested if s not in scraped]
+        already = [s for s in all_suggested if s in scraped]
+
+        return {
+            "total_suggestions": len(all_suggested),
+            "new_subreddits": new_subs,
+            "new_count": len(new_subs),
+            "already_scraped": already,
+            "already_scraped_count": len(already),
+            "sources": list(sources),
+            "documents_count": len(pending),
+            "active_scraper": active_scraper.get("subreddit") if active_scraper else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get pending suggestions: {str(e)}")
 
 
 # =============================================================================
