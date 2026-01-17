@@ -173,6 +173,15 @@ PERSONA_SEARCH_CONFIG = {
     ]
 }
 
+# Subreddit Suggestions Sync Configuration
+# Automatically syncs subreddits from external LLM suggestions to scraper queue
+SUGGESTIONS_SYNC_CONFIG = {
+    "collection_name": "subreddit_suggestions",     # MongoDB collection for suggestions
+    "check_interval": 60,                           # Seconds between sync checks
+    "mark_synced": True,                            # Add synced_at timestamp after sync
+    "target_scraper_type": "posts",                 # Which scraper type to add subreddits to
+}
+
 # Reddit API Usage Tracking Configuration
 API_USAGE_CONFIG = {
     "collection_name": "reddit_api_usage",          # MongoDB collection for API usage data
