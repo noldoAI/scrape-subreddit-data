@@ -1,25 +1,27 @@
 name: Deploy to Azure
 
+# DISABLED: Azure services shut down 2026-03-19
+# Uncomment triggers below to re-enable deployment
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'api.py'
-      - 'config.py'
-      - 'posts_scraper.py'
-      - 'comments_scraper.py'
-      - 'embedding_worker.py'
-      - 'requirements.txt'
-      - 'requirements-scraper.txt'
-      - 'Dockerfile'
-      - 'Dockerfile.api'
-      - 'core/**'
-      - 'tracking/**'
-      - 'discovery/**'
-      - 'api/**'
-      - 'static/**'
-      - 'templates/**'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:  # Manual trigger only — auto-deploy disabled
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'api.py'
+  #     - 'config.py'
+  #     - 'posts_scraper.py'
+  #     - 'comments_scraper.py'
+  #     - 'embedding_worker.py'
+  #     - 'requirements.txt'
+  #     - 'requirements-scraper.txt'
+  #     - 'Dockerfile'
+  #     - 'Dockerfile.api'
+  #     - 'core/**'
+  #     - 'tracking/**'
+  #     - 'discovery/**'
+  #     - 'api/**'
+  #     - 'static/**'
+  #     - 'templates/**'
 
 jobs:
   deploy:
